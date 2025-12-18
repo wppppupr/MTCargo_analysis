@@ -1,0 +1,58 @@
+#
+# Matplotlib Style Sheet
+#
+
+### FONT PROPERTIES ###
+# フォントファミリーをsans-serifに設定し、優先順位をHelvetica、Arialの順にする
+font.family         : sans-serif
+font.sans-serif     : Helvetica, Arial
+
+# 基本となるフォントサイズを設定
+font.size           : 20.0
+
+### AXES PROPERTIES ###
+# グラフタイトルのフォントサイズ
+axes.titlesize      : 20.0
+# 軸ラベルのフォントサイズ
+axes.labelsize      : 20.0
+
+### TICKS PROPERTIES ###
+# X軸目盛りのフォントサイズ
+xtick.labelsize     : 20.0
+# Y軸目盛りのフォントサイズ
+ytick.labelsize     : 20.0
+
+### LEGEND PROPERTIES ###
+# 凡例のフォントサイズ
+legend.fontsize     : 18.0  # 少し小さめにするとバランスが良いことが多い
+
+### COLOR CYCLE ###
+# カラーブラインドに配慮したカラーマップ(tol_muted)を使用
+# 1行で書く（mplstyleは行単位で評価されるため、複数行にまたぐ '+' 演算はエラーになります）
+axes.prop_cycle : cycler('color', ['CC6677', '332288', 'DDCC77', '117733', '88CCEE', '882255', '44AA99', '999933', 'AA4499']) 
+
+### OTHER PROPERTIES ###
+# 図の背景色を白に設定
+figure.facecolor   : white
+axes.facecolor     : white
+
+### LINE PROPERTIES ###
+# 線の太さを設定
+lines.linewidth    : 2.0
+
+### MARKER PROPERTIES ###
+# マーカーのサイズを設定
+lines.markersize   : 12.0
+grid.alpha        : 0.8
+
+
+### SAVEFIG PROPERTIES ###
+# 保存する図の解像度を設定
+figure.dpi         : 300
+figure.autolayout : True
+figure.figsize    : 8, 6
+# 保存する図のフォーマットをPNGに設定
+savefig.format    : png
+savefig.dpi       : 300
+savefig.bbox      : tight
+

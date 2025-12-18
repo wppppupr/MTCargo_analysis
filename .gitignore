@@ -1,0 +1,15 @@
+# --- Mac OS ---
+.DS_Store
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+.env
+
+# --- Data & Config ---
+data/
+.ipynb_checkpoints/
