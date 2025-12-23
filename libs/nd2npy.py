@@ -40,9 +40,21 @@ def process_single_frame(mt_frame_raw, beads_frame_raw, equalize, mt_sigma_2d, b
     
     return mt_out, beads_out
 
+
+def _save_array_big(path: str, arr: np.ndarray) -> None:
+    """
+    Save large numpy array to .npy safely using memmap to avoid large single-write errors.
+    """
+    # remove existing file if present
+    if os.path.exists(path):
+        os.remove(path)
+    # write using memmap (writes directly to disk in chunks)
+    mm = np.lib.format.open_memmap(path, mode='w+', dtype=arr.dtype, shape=arr.shape)
+    mm[:] = arr
+    del mm
+
+
 def process_nd2_file(file_path: str,
-                     diameter: float,
-                     scale: float = 0.11,
                      equalize: bool = True,
                      mt_sigma=(0, 1, 1),
                      beads_sigma=(0, 2, 2),
@@ -96,29 +108,38 @@ def process_nd2_file(file_path: str,
     if out_dir is None:
         save_dir = os.path.dirname(file_path)
     else:
-        save_dir = os.path.join("experiment", out_dir)
+        out_dir_expanded = os.path.abspath(os.path.expanduser(out_dir))
+        # 絶対パスが渡されたらそのまま使用（NAS を /Volumes/... にマウントしておく）
+        if os.path.isabs(out_dir_expanded):
+            save_dir = out_dir_expanded
+        else:
+            # 以前の挙動を保持したい場合は experiment/ 配下に配置
+            save_dir = os.path.abspath(os.path.join("experiment", out_dir))
 
     if save:
         os.makedirs(save_dir, exist_ok=True)
-        mt_save_path = os.path.join(save_dir, f"{base_name}_MT_smoothed.npy")
-        beads_save_path = os.path.join(save_dir, f"{base_name}_beads_smoothed.npy")
+        if not os.access(save_dir, os.W_OK):
+            raise PermissionError(f"No write permission to save_dir: {save_dir}")
+        mt_save_path = os.path.join(save_dir, f"MTs.npy")
+        beads_save_path = os.path.join(save_dir, f"beads.npy")
         
         print(f"Saving uint8 arrays to: {save_dir}")
-        np.save(mt_save_path, MTs_result)
-        np.save(beads_save_path, beads_result)
+        # Use a memmap-based safe saver to avoid 2GB write failures on some platforms
+        _save_array_big(mt_save_path, MTs_result)
+        _save_array_big(beads_save_path, beads_result)
 
     output_base_path = os.path.join(save_dir, base_name)
     return MTs_result, beads_result, output_base_path
 
 if __name__ == "__main__":
     file_path = r'/Volumes/data/Sasaki/MTsingleBeads/20251210/MC03_4uM.nd2'
+    nas = "/Volumes/data/Sasaki/backup_git/MTCargo_analysis/experiment"
     # テスト実行
     if os.path.exists(file_path):
         process_nd2_file(
             file_path, 
-            diameter=1.18, 
             equalize=True, 
             save=True, 
-            out_dir="20251210",
+            out_dir=f"{nas}/20251210/MC03MT4uM",
             n_jobs=-1
         )
