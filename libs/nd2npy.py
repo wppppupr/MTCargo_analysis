@@ -89,8 +89,8 @@ def process_nd2_file(file_path: str,
 
     if save:
         os.makedirs(save_dir, exist_ok=True)
-        mt_save_path = os.path.join(save_dir, f"{base_name}_MT_smoothed.npy")
-        beads_save_path = os.path.join(save_dir, f"{base_name}_beads_smoothed.npy")
+        mt_save_path = os.path.join(save_dir, f"MTs.npy")
+        beads_save_path = os.path.join(save_dir, f"beads.npy")
         
         print(f"Saving to: {save_dir}")
         np.save(mt_save_path, MTs_smoothed)
@@ -109,7 +109,7 @@ if __name__ == "__main__":
             diameter, 
             equalize=True, 
             save=True, 
-            out_dir="20251210",
+            out_dir="20251210/MC03MT4uM",
             n_jobs=-1
         )
     else:
