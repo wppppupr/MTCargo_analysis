@@ -1,5 +1,20 @@
 NAS_DIR  ?= /Volumes/data/Sasaki/backup_git/MTCargo_analysis
 
+.PHONY: sync
+sync:
+	@echo "🚚 NAS へデータファイル(.npy .npz .mov)を同期します -> $(NAS_DIR)"
+	@if [ -z "$(NAS_DIR)" ]; then echo "⚠️ NAS_DIR が設定されていません。"; exit 1; fi
+	@mkdir -p "$(NAS_DIR)"
+	@rsync -av --prune-empty-dirs \
+		--include='*/' \
+		--include='*.npy' \
+		--include='*.npz' \
+		--include='*.mov' \
+		--exclude='*' \
+		. "$(NAS_DIR)/"
+	@echo "✅ 同期完了: $(NAS_DIR)"
+
+
 .PHONY: save
 save:
 	@echo "🚀 プロジェクト全体の完全バックアップを開始します..."
