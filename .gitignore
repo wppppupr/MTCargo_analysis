@@ -9,7 +9,7 @@ __pycache__/
 venv/
 env/
 .env
-.npy
+*.npy
 
 # --- Data & Config ---
 data/
