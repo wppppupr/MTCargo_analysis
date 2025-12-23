@@ -2,7 +2,9 @@ import nd2
 import numpy as np
 from scipy.ndimage import gaussian_filter
 from skimage import exposure
+from tqdm import tqdm
 import os
+
 
 
 def process_nd2_file(file_path: str,
@@ -12,7 +14,8 @@ def process_nd2_file(file_path: str,
                      mt_sigma=(0, 1, 1),
                      beads_sigma=(0, 2, 2),
                      save: bool = True,
-                     out_dir: str | None = None):
+                     out_dir: str | None = None,
+                     progress: bool = False):
     """
     nd2ファイルを読み込み、ヒストグラム平坦化・平滑化を行い、結果を保存して返します。
 
@@ -25,6 +28,7 @@ def process_nd2_file(file_path: str,
         beads_sigma: ビーズチャンネルへのgaussian_filterのsigma
         save: 結果をnp.saveで保存するか
         out_dir: 保存先ディレクトリ（Noneなら入力ファイルと同じ場所）
+        progress: 各フレーム処理に対して進捗バーを表示するか
 
     Returns:
         tuple: (MTs_smoothed, beads_smoothed, output_name)
@@ -42,7 +46,8 @@ def process_nd2_file(file_path: str,
         pxdiameter += 1
 
     if equalize:
-        MTs_eq_list = [exposure.equalize_hist(mt) for mt in MTs]
+        iterator = tqdm(MTs, desc="equalize_hist", unit="frame") if progress else MTs
+        MTs_eq_list = [exposure.equalize_hist(mt) for mt in iterator]
         MTs_eq = np.array(MTs_eq_list)
     else:
         MTs_eq = MTs.copy()
