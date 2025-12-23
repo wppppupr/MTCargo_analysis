@@ -22,17 +22,38 @@ save:
 	@echo "----------------------------------------"
 	@echo "1. Git: ソースコードと履歴の保存"
 	@echo "----------------------------------------"
-	# 変更を全てステージング
-	git add .
-	# 日付入りで自動コミット (変更がない場合はエラーにせず通過させる '|| true')
-	git commit -m "Auto-save: $$(date '+%Y-%m-%d %H:%M:%S')" || echo "⚠️ コミットする変更はありませんでした。"
-	# GitHub (またはNASのGitリポジトリ) へ送信
-	git push origin main
+	@echo "変更を全てステージング..."
+	@git add .
+	@echo "変更の有無を確認します..."
+	@if git diff --cached --quiet; then \
+		echo "⚠️ 変更は検出されませんでした。コミットと push をスキップします。"; \
+	else \
+		echo "📝 変更をコミットします..."; \
+		git commit -m "Auto-save: $$(date '+%Y-%m-%d %H:%M:%S')" || { echo "⚠️ コミットに失敗しました"; exit 1; }; \
+		BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
+		if [ "$(INTERACTIVE)" = "1" ]; then \
+			if [ "$$BRANCH" = "main" ]; then \
+				read -p "Push to origin $$BRANCH? [y/N] " RESP; \
+				if [ "$$RESP" = "y" ] || [ "$$RESP" = "Y" ]; then git push origin $$BRANCH || echo "⚠️ git push でエラー"; else echo "⚠️ push をスキップしました"; fi; \
+			else \
+				echo "⚠️ 現在ブランチ: $$BRANCH (自動 push は行いません)"; \
+			fi; \
+		else \
+			if [ "$(PUSH)" = "1" ]; then \
+				if [ "$$BRANCH" = "main" ]; then git push origin $$BRANCH || echo "⚠️ git push でエラー"; else echo "⚠️ 現在ブランチ: $$BRANCH - push は main ブランチのみ行います。"; fi; \
+			else \
+				echo "⚠️ push はデフォルトで無効です。push するには 'make save PUSH=1' を使ってください。"; \
+			fi; \
+		fi; \
+	fi
 	
 	@echo "----------------------------------------"
 	@echo "2. NAS: データファイル(npy/mov)の同期"
 	@echo "----------------------------------------"
-	# 既存の sync タスクを呼び出す
-	$(MAKE) sync
+	@if [ "$(SKIP_SYNC)" = "1" ]; then \
+		echo "⚠️ sync をスキップしました (SKIP_SYNC=1)"; \
+	else \
+		$(MAKE) sync; \
+	fi
 	
 	@echo "✅ 全てのバックアップが完了しました！"
