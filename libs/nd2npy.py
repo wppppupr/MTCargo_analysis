@@ -132,7 +132,7 @@ def process_nd2_file(file_path: str,
     return MTs_result, beads_result, output_base_path
 
 if __name__ == "__main__":
-    file_path = r'/Volumes/data/Sasaki/MTsingleBeads/20251210/MC03_4uM.nd2'
+    file_path = r'/Volumes/data/Sasaki/MTsingleBeads/20241114/T2_4uM_mc00_beads.nd2'
     nas = "/Volumes/data/Sasaki/backup_git/MTCargo_analysis/experiment"
     # テスト実行
     if os.path.exists(file_path):
@@ -140,6 +140,6 @@ if __name__ == "__main__":
             file_path, 
             equalize=True, 
             save=True, 
-            out_dir=f"{nas}/20251210/MC03MT4uM",
+            out_dir=f"{nas}/20241114/MC00MT4uM",
             n_jobs=-1
         )
