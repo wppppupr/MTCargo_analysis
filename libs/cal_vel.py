@@ -107,13 +107,15 @@ def low_area(df, v_column='v', threshold=1.0, min_low_duration=1, time_interval 
         # 低速領域の開始・終了のペアをプロット
         for start, end in zip(low_starts, low_ends):
             if end - start >= min_low_duration:  # 持続時間のフィルタリング
-                plt.plot(time_interval * frames[start:end+1], v[start:end+1], label=f'Particle {particle_id}')
                 lowarea.append({
                     'particle': particle_id,
                     'start_frame': frames[start],
                     'end_frame': frames[end],
                     'interval': (frames[end] - frames[start]) * time_interval
                 })
+                if display ==True:
+                    plt.plot(time_interval * frames[start:end+1], v[start:end+1], label=f'Particle {particle_id}')
+                
     
     # プロットの設定
     if display ==True:
@@ -169,7 +171,6 @@ def pulses(df, v_column='v', threshold=1.0, min_pulse_duration=1, time_interval 
         # パルスの開始・終了のペアをプロット
         for start, end in zip(pulse_starts, pulse_ends):
             if end - start >= min_pulse_duration:  # 持続時間のフィルタリング
-                plt.plot(time_interval*frames[start:end+1], v[start:end+1], label=f'Particle {particle_id}')
                 pulses.append({
                     'particle': particle_id,
                     'start_frame': frames[start],
@@ -177,6 +178,9 @@ def pulses(df, v_column='v', threshold=1.0, min_pulse_duration=1, time_interval 
                     'interval': (frames[end] - frames[start]) * time_interval
                 })
     
+                if display == True:
+                    plt.plot(time_interval*frames[start:end+1], v[start:end+1], label=f'Particle {particle_id}')
+              
     # プロットの設定
     if display == True:
         plt.xlim((0, time_interval* df['frame'].max()))
