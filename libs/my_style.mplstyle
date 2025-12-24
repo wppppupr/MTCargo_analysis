@@ -42,7 +42,7 @@ lines.linewidth    : 2.0
 
 ### MARKER PROPERTIES ###
 # マーカーのサイズを設定
-lines.markersize   : 12.0
+lines.markersize   : 8.0
 grid.alpha        : 0.8
 
 
