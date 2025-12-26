@@ -16,7 +16,7 @@ def cal(tracking_df, scale=1, frame_interval=1):
     - tracking_df: 速さと単位ベクトルが追加されたデータフレーム
     """
     # 各パーティクルごとに速度と単位ベクトルを計算
-    def calculate_v_and_theta(df):
+    def calculate_v_and_theta(df, frame_interval=frame_interval):
         # 前のフレームとの座標差を計算
         df['x_diff'] = df['x'] - df['x'].shift(1)
         df['y_diff'] = df['y'] - df['y'].shift(1)
@@ -32,11 +32,13 @@ def cal(tracking_df, scale=1, frame_interval=1):
             lambda row: np.array([row['x_diff'] / row['distance'], row['y_diff'] / row['distance']])
             if row['distance'] != 0 else np.array([np.nan, np.nan]), axis=1
         )
+
+        df['t'] = df['frame'] * frame_interval
         
-        return df[['v', 'theta']]
+        return df[['v', 'theta', 't']]
     
     # パーティクルごとに速度と単位ベクトルを一度に計算してデータフレームに追加
-    tracking_df[['v', 'theta']] = tracking_df.groupby('particle').apply(
+    tracking_df[['v', 'theta', 't']] = tracking_df.groupby('particle').apply(
         calculate_v_and_theta
     ).reset_index(level=0, drop=True)
 
