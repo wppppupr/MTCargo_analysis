@@ -35,6 +35,13 @@ def process_single_frame(mt_frame_raw, beads_frame_raw, equalize, mt_sigma_2d, b
     # 2. Beadsチャンネルの処理
     # ---------------------------------------------------------
     beads_float = beads_frame_raw * scale_factor
+    if equalize:
+        # equalize_histは入力を正規化し、戻り値は float64 の [0, 1] になります
+        # そのため、処理後に 255 を掛けてスケールを戻します
+        beads_eq = exposure.equalize_hist(beads_float)
+        mt_proc = beads_eq * 255.0
+    else:
+        mt_proc = mt_float
     beads_smoothed = gaussian_filter(beads_float, sigma=beads_sigma_2d)
     beads_out = np.clip(beads_smoothed, 0, 255).astype(np.uint8)
     
