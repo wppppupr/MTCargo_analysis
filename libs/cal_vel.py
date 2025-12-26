@@ -3,23 +3,36 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
-def cal(tracking_df, scale=1, frame_interval=1):
+def cal(tracking_df, scale=1, frame_interval=1, pos_window=None, pos_center=False, pos_min_periods=1):
     """
-    データフレーム内の各particleごとに速さ（スカラー値）と単位ベクトルを計算し、
-    新しいカラムとして追加する関数。
+    データフレーム内の各particleごとに位置を（オプションで）平滑化してから，
+    速さ（スカラー値）と角度（ラジアン），角度変化などを計算して新しいカラムとして追加する関数。
 
     Parameters:
     - tracking_df: トラッキング結果のデータフレーム（'x', 'y', 'particle', 'frame'を含む）
-    - frame_interval: フレーム間の時間間隔（デフォルトは1）
+    - frame_interval: フレーム間の時間間隔（デフォルトは1)
+    - pos_window: 位置に対する移動平均ウィンドウ（int）。None の場合は平滑化しない。
+    - pos_center: rolling の center 引数
+    - pos_min_periods: rolling の min_periods
 
     Returns:
-    - tracking_df: 速さと単位ベクトルが追加されたデータフレーム
+    - tracking_df: 速さ・角度等のカラムが追加されたデータフレーム
     """
-    # 各パーティクルごとに速度と単位ベクトルを計算
+    # 各パーティクルごとに速度と角度を計算
     def calculate_v_and_theta(df, frame_interval=frame_interval):
+        # Optional: smooth positions per-particle using rolling mean
+        if pos_window is not None and pos_window > 1:
+            df['x_s'] = df['x'].rolling(window=pos_window, center=pos_center, min_periods=pos_min_periods).mean()
+            df['y_s'] = df['y'].rolling(window=pos_window, center=pos_center, min_periods=pos_min_periods).mean()
+            x_ref = df['x_s']
+            y_ref = df['y_s']
+        else:
+            x_ref = df['x']
+            y_ref = df['y']
+
         # 前のフレームとの座標差を計算
-        df['x_diff'] = df['x'] - df['x'].shift(1)
-        df['y_diff'] = df['y'] - df['y'].shift(1)
+        df['x_diff'] = x_ref - x_ref.shift(1)
+        df['y_diff'] = y_ref - y_ref.shift(1)
         
         # 座標差から距離（速さ）を計算
         df['distance'] = np.sqrt(df['x_diff']**2 + df['y_diff']**2)
@@ -31,31 +44,39 @@ def cal(tracking_df, scale=1, frame_interval=1):
         df['theta'] = np.arctan2(df['y_diff'], df['x_diff'])
         df.loc[df['distance'] == 0, 'theta'] = np.nan
 
-        # 角度方向の変化を計算
-        # unit vectors
+        # 角度方向の変化（符号付き回転量）
         df['dx'] = df['x_diff'] / df['distance']
         df['dy'] = df['y_diff'] / df['distance']
         df.loc[df['distance'] == 0, ['dx','dy']] = np.nan
 
-        # previous unit vector
         dx_prev = df['dx'].shift(1)
         dy_prev = df['dy'].shift(1)
-
-        # cross and dot
         cross = dx_prev * df['dy'] - dy_prev * df['dx']
         dot   = dx_prev * df['dx'] + dy_prev * df['dy']
 
-        # signed angle difference
         df['dtheta'] = np.arctan2(cross, dot)
         df.loc[df['distance'] == 0, 'dtheta'] = np.nan
-        df['omega'] = df['dtheta']
+        df['omega'] = df['dtheta'] / frame_interval
+
+        # Additional alpha: direction of change vector
+        df['ddx'] = df['dx'] - df['dx'].shift(1)
+        df['ddy'] = df['dy'] - df['dy'].shift(1)
+        df['alpha'] = np.arctan2(df['ddy'], df['ddx'])
+        df.loc[df['distance'] == 0, 'alpha'] = np.nan
 
         df['t'] = df['frame'] * frame_interval
         
-        return df[['v', 'theta', 'omega', 't']]
+        cols = ['v', 'theta', 'alpha', 't', 'dtheta', 'omega']
+        if 'x_s' in df.columns:
+            cols += ['x_s', 'y_s']
+        return df[cols]
     
-    # パーティクルごとに速度と単位ベクトルを一度に計算してデータフレームに追加
-    tracking_df[['v', 'theta', 'omega', 't']] = tracking_df.groupby('particle').apply(
+    # パーティクルごとに速度と角度を一度に計算してデータフレームに追加
+    cols_to_assign = ['v', 'theta', 'alpha', 't', 'dtheta', 'omega']
+    if pos_window is not None and pos_window > 1:
+        cols_to_assign += ['x_s', 'y_s']
+
+    tracking_df[cols_to_assign] = tracking_df.groupby('particle').apply(
         calculate_v_and_theta
     ).reset_index(level=0, drop=True)
 
@@ -275,6 +296,65 @@ def itaac(df, max_lag, dimension_2=False):
     ac_df = pd.DataFrame(ac_list)
 
     return ac_df
+
+# ---------------------- Moving average helpers ----------------------
+def rolling_mean_series(s, window, center=False, min_periods=1):
+    """Simple linear rolling mean using pandas."""
+    return s.rolling(window=window, center=center, min_periods=min_periods).mean()
+
+
+def rolling_circular_mean(s, window, center=False, min_periods=1):
+    """Rolling circular mean for angles in radians.
+    Uses atan2(mean(sin), mean(cos)) on the window while ignoring NaNs.
+    """
+    def circ_mean(arr):
+        arr = np.asarray(arr)
+        arr = arr[~np.isnan(arr)]
+        if arr.size == 0:
+            return np.nan
+        sin_mean = np.mean(np.sin(arr))
+        cos_mean = np.mean(np.cos(arr))
+        return np.arctan2(sin_mean, cos_mean)
+
+    return s.rolling(window=window, center=center, min_periods=min_periods).apply(lambda x: circ_mean(np.array(x)), raw=False)
+
+
+def moving_average(df, column, window, method='auto', new_column=None, center=False, min_periods=1):
+    """Add a moving average column to a dataframe per-column.
+
+    Parameters
+    - df: pandas DataFrame
+    - column: column name to smooth
+    - window: window size (int)
+    - method: 'linear', 'circular', or 'auto'
+      - 'circular' is recommended for angle columns (radians)
+      - 'auto' selects 'circular' for columns named 'theta'/'dtheta'/'alpha'
+    - new_column: name of the output column. If None, defaults to f"{column}_ma{window}"
+    - center: passed to pandas rolling
+    - min_periods: minimum periods for rolling
+
+    Returns: the new Series (and also attaches it to df)
+    """
+    if new_column is None:
+        new_column = f"{column}_ma{window}"
+    s = df[column]
+
+    if method == 'auto':
+        if column in ['theta', 'dtheta', 'alpha']:
+            method = 'circular'
+        else:
+            method = 'linear'
+
+    if method == 'linear':
+        df[new_column] = rolling_mean_series(s, window, center=center, min_periods=min_periods)
+    elif method == 'circular':
+        df[new_column] = rolling_circular_mean(s, window, center=center, min_periods=min_periods)
+    else:
+        raise ValueError("method must be 'linear' or 'circular' or 'auto'")
+
+    return df[new_column]
+
+# ---------------------- End moving average helpers ----------------------
 
 def calc_eac(iac,interval = 1, display=True, xscale_log=True):
     eac=iac.groupby('lag time').mean()['auto correlation']
