@@ -27,18 +27,35 @@ def cal(tracking_df, scale=1, frame_interval=1):
         # 速さを計算
         df['v'] = scale * df['distance'] / frame_interval
         
-        # 距離が0でない場合のみ単位ベクトルを計算
-        df['theta'] = df.apply(
-            lambda row: np.array([row['x_diff'] / row['distance'], row['y_diff'] / row['distance']])
-            if row['distance'] != 0 else np.array([np.nan, np.nan]), axis=1
-        )
+        # 角度（ラジアン）を計算（np.arctan2）。距離が0の点はNaNにする
+        df['theta'] = np.arctan2(df['y_diff'], df['x_diff'])
+        df.loc[df['distance'] == 0, 'theta'] = np.nan
+
+        # 角度方向の変化を計算
+        # unit vectors
+        df['dx'] = df['x_diff'] / df['distance']
+        df['dy'] = df['y_diff'] / df['distance']
+        df.loc[df['distance'] == 0, ['dx','dy']] = np.nan
+
+        # previous unit vector
+        dx_prev = df['dx'].shift(1)
+        dy_prev = df['dy'].shift(1)
+
+        # cross and dot
+        cross = dx_prev * df['dy'] - dy_prev * df['dx']
+        dot   = dx_prev * df['dx'] + dy_prev * df['dy']
+
+        # signed angle difference
+        df['dtheta'] = np.arctan2(cross, dot)
+        df.loc[df['distance'] == 0, 'dtheta'] = np.nan
+        df['omega'] = df['dtheta']
 
         df['t'] = df['frame'] * frame_interval
         
-        return df[['v', 'theta', 't']]
+        return df[['v', 'theta', 'omega', 't']]
     
     # パーティクルごとに速度と単位ベクトルを一度に計算してデータフレームに追加
-    tracking_df[['v', 'theta', 't']] = tracking_df.groupby('particle').apply(
+    tracking_df[['v', 'theta', 'omega', 't']] = tracking_df.groupby('particle').apply(
         calculate_v_and_theta
     ).reset_index(level=0, drop=True)
 
@@ -200,35 +217,60 @@ def pulses(df, v_column='v', threshold=1.0, min_pulse_duration=1, time_interval 
 
 
 def taac(x, tau):
-    As = 0
+    """
+    Time-averaged autocorrelation for sequence x at lag tau.
+    - If elements of x are scalar angles (radians), compute autocorrelation of unit direction vectors: cos(theta(t+tau)-theta(t)).
+    - If elements of x are vectors/arrays, compute dot product.
+    """
     T = len(x)
-    if T == 0:
+    if T == 0 or tau >= T:
         return float('nan')
-    for t in range(T-tau):
-        A = np.dot(x[t+tau], x[t])
+    As = 0.0
+    count = 0
+    for t in range(T - tau):
+        xt = x[t]
+        xtau = x[t + tau]
+        # skip nan entries
+        try:
+            if (np.isscalar(xt) and np.isnan(xt)) or (np.isscalar(xtau) and np.isnan(xtau)):
+                continue
+        except Exception:
+            pass
+        if np.isscalar(xt):
+            # xt and xtau are angles in radians
+            A = np.cos(xtau - xt)
+        else:
+            A = np.dot(xtau, xt)
         As += A
+        count += 1
+    return As / count if count > 0 else float('nan')
 
-    return As/T
-
-def itaac(df, max_lag, dimension_2 = bool):
+def itaac(df, max_lag, dimension_2=False):
+    """
+    Compute per-particle time-averaged auto-correlation.
+    If dimension_2 is True, uses velocity vectors (v * unit vector from theta).
+    If theta is scalar (radians), unit vector is [cos(theta), sin(theta)].
+    """
     ac_list = []
-    for tau in range(max_lag):
-        for particle_id, group in df.groupby('particle'):
-            group = group.sort_values(by='frame')  # フレーム順に並べ替え
-            v = group['v']
-            v = np.array(v[1:len(v)].tolist()).reshape(-1,1)
-            if dimension_2 == True:
-                theta = group['theta']
-                theta = np.array(theta[1:len(theta)].tolist())
-                theta = group['theta']
-                theta = np.array(theta[1:len(theta)].tolist())
-                v = v * theta
-            ac = taac(theta, tau)
-            ac_list.append({
-                'particle':particle_id,
-                'lag time':tau,
-                'auto correlation':ac
-            })
+    for particle_id, group in df.groupby('particle'):
+        group = group.sort_values(by='frame').dropna(subset=['v', 'theta'])
+        v = group['v'].values
+        theta = group['theta'].values
+
+        if dimension_2:
+            vectors = []
+            for vi, th in zip(v, theta):
+                if np.isscalar(th):
+                    vectors.append(np.array([np.cos(th), np.sin(th)]) * vi)
+                else:
+                    vectors.append(np.array(th) * vi)
+            x = np.array(vectors)
+        else:
+            x = v
+
+        for tau in range(max_lag):
+            ac = taac(x, tau)
+            ac_list.append({'particle': particle_id, 'lag time': tau, 'auto correlation': ac})
 
     ac_df = pd.DataFrame(ac_list)
 
