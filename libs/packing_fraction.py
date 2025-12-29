@@ -11,6 +11,24 @@ def get_fraction(images):
     pf_array = images.reshape(images.shape[0], -1).sum(axis=1) / box
     return pf_array
 
+def threshold_image(image, block_size):
+    """
+    画像を局所的に二値化する
+    """
+    threshold = threshold_local(image, block_size=block_size, method='gaussian', param=1)
+    binary_image = image > threshold
+    return binary_image
+
+def threshold_images(images, block_size):
+    """
+    3D画像スタックを局所的に二値化する
+    """
+    binary_images = np.empty_like(images, dtype=bool)
+    for i in tqdm(range(images.shape[0])):
+        binary_images[i] = threshold_image(images[i], block_size)
+    return binary_images
+
+
 if __name__ == "__main__":
 
     scale = 0.11
@@ -23,10 +41,7 @@ if __name__ == "__main__":
 
     images = np.load(path)
 
-    images_bin = np.empty_like(images, dtype=bool)
-    for i in tqdm(range(images.shape[0])):
-        threshold = threshold_local(images[i], block_size=block_size, method='gaussian', param=1)
-        images_bin[i] = images[i] > threshold
+    images_bin = threshold_images(images, block_size)
 
     fraction = get_fraction(images_bin)
 
