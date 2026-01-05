@@ -33,9 +33,9 @@ if __name__ == "__main__":
 
     scale = 0.11
 
-    path = r'/Volumes/My Passport/Sasaki/MTsingleBeads/20241114/T2_4uM_mc03_beads_MT_smoothed.npy'
+    path = r'/Volumes/data/Sasaki/backup_git/MTCargo_analysis/experiment/20251226/MC00MT001/MTs.npy'
     output = path[:-4]
-    out_name = f"{output}_pf.txt"
+    #out_name = f"{output}_pf.txt"
 
     block_size = 10 / scale
 
@@ -45,9 +45,4 @@ if __name__ == "__main__":
 
     fraction = get_fraction(images_bin)
 
-    pf_mean = np.mean(fraction)
-    pf_var = np.std(fraction) ** 2
-
-    # pf_meanをtxtに保存
-    with open(out_name, "w") as f:
-        f.write(f"{pf_mean}, {pf_var}")
+    np.save(f"{output}_pf.npy", fraction)
