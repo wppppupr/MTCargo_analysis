@@ -22,11 +22,13 @@ dask==2025.12.0
 debugpy==1.8.19
 decorator==5.2.1
 defusedxml==0.7.1
+donfig==0.8.1.post1
 executing==2.2.1
 fastjsonschema==2.21.2
 fonttools==4.61.1
 fqdn==1.5.1
 fsspec==2025.12.0
+google-crc32c==1.8.0
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
@@ -68,6 +70,7 @@ nd2==0.10.4
 nest-asyncio==1.6.0
 networkx==3.6.1
 notebook_shim==0.2.4
+numcodecs==0.16.5
 numpy==2.2.6
 ome-types==0.6.3
 opencv-python==4.12.0.88
@@ -127,3 +130,4 @@ webcolors==25.10.0
 webencodings==0.5.1
 websocket-client==1.9.0
 xsdata==25.7
+zarr==3.1.5
