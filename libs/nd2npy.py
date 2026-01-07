@@ -154,13 +154,17 @@ def process_nd2_to_zarr(file_path: str,
 
 if __name__ == "__main__":
     # 入力ファイルパス
-    file_path = r'/Volumes/data/Sasaki/MTsingleBeads/20251226/MC00MT001.nd2'
+    file_path = '/Volumes/data/Sasaki/MTsingleBeads/20260106/MT4uM_MC03001.nd2'
     nas_dir = "/Volumes/data/Sasaki/backup_git/MTCargo_analysis/experiment"
+
+    print('checking file...')
     
     if os.path.exists(file_path):
+        print('start processing nd2 to zarr...')
         # 処理実行
         process_nd2_to_zarr(
             file_path, 
             equalize=True, 
-            out_dir=f"{nas_dir}/20251226/MC00MT001"
+            out_dir=f"{nas_dir}/20260106/MT4uM_MC03001"
         )
+        print('done.')
