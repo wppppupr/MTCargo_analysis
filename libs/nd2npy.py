@@ -168,3 +168,6 @@ if __name__ == "__main__":
             out_dir=f"{nas_dir}/20260106/MT4uM_MC03001"
         )
         print('done.')
+
+    else:
+        print('file not found.')
