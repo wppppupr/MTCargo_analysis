@@ -151,11 +151,100 @@ def process_nd2_to_zarr(file_path: str,
     else:
         # 保存しない場合は計算せずにDask配列自体を返す（後で計算可能）
         return dask_mt_processed, dask_beads_processed
+    
+
+def process_nd2_to_zarrMT(file_path: str,
+                        equalize: bool = True,
+                        mt_sigma=(0, 1, 1),
+                        save: bool = True,
+                        out_dir: str | None = None):
+    """
+    nd2ファイルを読み込み、処理してZarr形式で保存します。
+    """
+    
+    print(f"Loading (Lazy): {os.path.basename(file_path)} ...")
+    
+    # dask=Trueで遅延読み込みオブジェクトを取得
+    vol = nd2.imread(file_path, dask=True)
+    
+    # nd2のdimsを確認 (例: {'T': 100, 'C': 2, 'Y': 1024, 'X': 1024})
+    # 配列形状は (T, C, Y, X) であると仮定
+    
+    # チャンネルごとに分離 (まだデータは読み込まれません)
+    # 0: MT, 1: Beads
+    dask_mt_raw = vol[:, 0, :, :]
+    
+    # スケーリング係数 (12bit -> 8bit)
+    scale_factor = 255.0 / 4095.0
+    
+    # 2Dシグマの抽出 (T軸を除外)
+    mt_sigma_2d = mt_sigma[1:]
+
+
+    # チャンクサイズの調整
+    # メモリ効率と処理速度のバランスが良いサイズに再分割します
+    # 例: (時間方向10フレーム, Y全画素, X全画素) 単位で処理
+    preferred_chunks = (10, -1, -1)
+    dask_mt_raw = dask_mt_raw.rechunk(preferred_chunks)
+
+    # ---------------------------------------------------------
+    # 計算グラフの構築 (map_blocks)
+    # ---------------------------------------------------------
+    
+    # MTチャンネルの処理定義
+    dask_mt_processed = dask_mt_raw.map_blocks(
+        process_chunk_wrapper,
+        equalize=equalize,
+        sigma=mt_sigma_2d,
+        scale_factor=scale_factor,
+        dtype=np.uint8
+    )
+    # ---------------------------------------------------------
+    # 保存処理 (Compute & Save)
+    # ---------------------------------------------------------
+    if save:
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        
+        # 保存先ディレクトリの決定
+        if out_dir is None:
+            save_dir = os.path.dirname(file_path)
+        else:
+            save_dir = os.path.abspath(os.path.expanduser(out_dir))
+            if not os.path.isabs(save_dir):
+                save_dir = os.path.abspath(os.path.join("experiment", out_dir))
+        
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Zarrの圧縮設定 (zstdは圧縮率と速度のバランスが良い)
+        compressor = Blosc(cname='zstd', clevel=5, shuffle=Blosc.SHUFFLE)
+        
+        print(f"Processing and saving to Zarr: {save_dir}")
+        
+        # プログレスバーを表示するための設定（Dask標準）
+        from dask.diagnostics import ProgressBar
+        
+        # MTの保存
+        mt_zarr_path = os.path.join(save_dir, "MTs.zarr")
+        print(f"  - Saving MTs -> {mt_zarr_path}")
+        with ProgressBar():
+            dask_mt_processed.to_zarr(
+                mt_zarr_path, 
+                compressor=compressor, 
+                overwrite=True
+            )
+
+        return mt_zarr_path
+
+    else:
+        # 保存しない場合は計算せずにDask配列自体を返す（後で計算可能）
+        return dask_mt_processed
+    
+
 
 if __name__ == "__main__":
     # 入力ファイルパス
-    file_path = '/Volumes/My Passport/Sasaki/MTsingleBeads/20241114/T2_4uM_mc03_beads.nd2'
-    nas_dir = '/Volumes/My Passport/Sasaki/MTsingleBeads/20241114/T2_4uM_mc03_beads_zarr'
+    file_path = "/Volumes/My Passport/Sasaki/MTsingleBeads/20241114/T2_4uM_mc03_.nd2"
+    nas_dir = '/Volumes/My Passport/Sasaki/MTsingleBeads/20241114/T2_4uM_mc03_zarr'
 
     print('checking file...')
     
