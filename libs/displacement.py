@@ -4,6 +4,11 @@ import matplotlib.pyplot as plt
 from itertools import chain
 from scipy.optimize import curve_fit
 
+import os
+import sys
+
+from libs import cal_vel as cv
+
 def _calculate_displacements(pos):
     return np.vstack([pos[tau:] - pos[:-tau] for tau in range(1, len(pos))])
 
@@ -264,3 +269,31 @@ def engp(ingp_list, display=True, figsize=(10,8), title = 'Ensemble NGP'):
         ax.grid('True')
 
     return engp, engp_err
+
+def get_msd(path, scale=0.11, interval=10, threshold = 0):
+    track = cv.cal(pd.read_csv(path), scale=scale ,frame_interval=interval)
+    track = track[track['v'] >= threshold]
+    IMSD = imsd(track, scale, interval, display=bool)
+    EMSD, _ = emsd(IMSD, display=bool)
+
+    return IMSD, EMSD
+
+def get_emsd_err(IMSD):
+    emsd = IMSD.groupby("lag time").mean()
+    emsd_err = IMSD.groupby("lag time").sem()['MSD'].to_numpy()
+
+    return emsd, emsd_err
+
+def get_msd_df(path_list, scale=0.11, interval=10, threshold = 0):
+    MSDs = []
+
+    i = 0
+    for path in path_list:
+        imsd, _ = get_msd(path, scale, interval, threshold)
+        imsd['particle'] += i*10000
+        MSDs.append(imsd)
+        i += 1
+
+    MSDs = pd.concat(MSDs)
+
+    return MSDs
