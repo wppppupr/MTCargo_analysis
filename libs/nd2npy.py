@@ -154,8 +154,8 @@ def process_nd2_to_zarr(file_path: str,
 
 if __name__ == "__main__":
     # 入力ファイルパス
-    file_path = '/Volumes/My Passport/Sasaki/MTsingleBeads/20251226/MC00MT.nd2'
-    nas_dir = '/Volumes/My Passport/Sasaki/MTsingleBeads/20251226'
+    file_path = '/Volumes/My Passport/Sasaki/MTsingleBeads/20241114/T2_4uM_mc03_beads.nd2'
+    nas_dir = '/Volumes/My Passport/Sasaki/MTsingleBeads/20241114/T2_4uM_mc03_beads_zarr'
 
     print('checking file...')
     
