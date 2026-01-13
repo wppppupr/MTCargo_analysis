@@ -10,9 +10,17 @@ font.sans-serif     : Arial
 # 基本となるフォントサイズを設定
 font.size           : 20.0
 
+# text color
+text.color: '212529'
+
+# 
+xtick.color : '212529'
+ytick.color : '212529'
+
 ### AXES PROPERTIES ###
 # グラフタイトルのフォントサイズ
 axes.titlesize      : 20.0
+axes.titlecolor: '212529'
 # 軸ラベルのフォントサイズ
 axes.labelsize      : 20.0
 
@@ -33,12 +41,22 @@ axes.prop_cycle : cycler('color', ['CC6677', '332288', 'DDCC77', '117733', '88CC
 
 ### OTHER PROPERTIES ###
 # 図の背景色を白に設定
-figure.facecolor   : 'F8F9FA'
-axes.facecolor     : 'F8F9FA'
+figure.facecolor   : '#F8F9FA'
+axes.facecolor     : '#F8F9FA'
+
+figure.edgecolor:   '#F8F9FA'
+axes.edgecolor:   '#F8F9FA'
+
+### label color ###
+axes.labelcolor: '#212529'
 
 ### LINE PROPERTIES ###
 # 線の太さを設定
 lines.linewidth    : 2.0
+lines.color: '#212529'
+
+# gridカラー
+grid.color: "#6C757D"
 
 ### MARKER PROPERTIES ###
 # マーカーのサイズを設定
