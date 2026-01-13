@@ -27,6 +27,12 @@ xtick.color         : 212529
 xtick.labelsize     : 20.0
 ytick.color         : 212529
 ytick.labelsize     : 20.0
+xtick.major.size   : 8
+xtick.major.width  : 1.5
+ytick.major.size   : 8
+ytick.major.width  : 1.5
+xtick.direction    : out
+ytick.direction    : out
 
 ### LEGEND PROPERTIES ###
 legend.fontsize     : 18.0
@@ -47,6 +53,7 @@ axes.grid           : True
 grid.color          : DEE2E6
 grid.alpha          : 0.8
 grid.linestyle      : --
+axes.axisbelow     : True # gridをデータの下に描く
 
 ### FIGURE PROPERTIES ###
 # 図全体の背景色（オフホワイト）
