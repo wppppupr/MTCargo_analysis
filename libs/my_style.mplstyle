@@ -37,7 +37,7 @@ legend.fontsize     : 18.0  # 少し小さめにするとバランスが良い�
 ### COLOR CYCLE ###
 # カラーブラインドに配慮したカラーマップ(tol_muted)を使用
 # 1行で書く（mplstyleは行単位で評価されるため、複数行にまたぐ '+' 演算はエラーになります）
-axes.prop_cycle : cycler('color', ['CC6677', '332288', 'DDCC77', '117733', '88CCEE', '882255', '44AA99', '999933', 'AA4499']) 
+axes.prop_cycle : cycler('color', ['#CC6677', '#332288', '#DDCC77', '#117733', '#88CCEE', '#882255', '#44AA99', '#999933', '#AA4499']) 
 
 ### OTHER PROPERTIES ###
 # 図の背景色を白に設定
