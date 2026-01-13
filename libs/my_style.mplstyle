@@ -37,8 +37,8 @@ legend.frameon      : True  # 背景に馴染ませるため枠線なしを推�
 axes.prop_cycle : cycler('color', ['CC6677', '332288', 'DDCC77', '117733', '88CCEE', '882255', '44AA99', '999933', 'AA4499'])
 
 ### LINE & MARKER PROPERTIES ###
-lines.linewidth     : 2.0
-lines.markersize    : 8.0
+lines.linewidth     : 3.0
+lines.markersize    : 10.0
 # lines.color はカラーサイクルが優先されるため、基本は指定しなくてOKです
 
 ### GRID PROPERTIES ###
