@@ -3,9 +3,9 @@
 #
 
 ### FONT PROPERTIES ###
-# フォントファミリーをsans-serifに設定し、優先順位をHelvetica、Arialの順にする
+# フォントファミリーをsans-serifに設定し、優先順位をArialの順にする
 font.family         : sans-serif
-font.sans-serif     : Helvetica, Arial
+font.sans-serif     : Arial
 
 # 基本となるフォントサイズを設定
 font.size           : 20.0
