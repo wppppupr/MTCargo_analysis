@@ -1,76 +1,63 @@
 #
-# Matplotlib Style Sheet
+# Matplotlib Style Sheet (Monochrome + Paul Tol's Muted)
 #
 
 ### FONT PROPERTIES ###
-# フォントファミリーをsans-serifに設定し、優先順位をArialの順にする
 font.family         : sans-serif
 font.sans-serif     : Arial
-
-# 基本となるフォントサイズを設定
 font.size           : 20.0
 
-# text color
-text.color: '212529'
-
-# 
-xtick.color : '212529'
-ytick.color : '212529'
+# テキスト全般の色（チャコールブラック）
+text.color          : 212529
 
 ### AXES PROPERTIES ###
-# グラフタイトルのフォントサイズ
 axes.titlesize      : 20.0
-axes.titlecolor: '212529'
-# 軸ラベルのフォントサイズ
+axes.titlecolor     : 212529
 axes.labelsize      : 20.0
+axes.labelcolor     : 212529
+
+# グラフエリアの背景と枠線の設定（オフホワイト）
+axes.facecolor      : F8F9FA
+axes.edgecolor      : DEE2E6
+axes.linewidth      : 0.8
 
 ### TICKS PROPERTIES ###
-# X軸目盛りのフォントサイズ
+# 目盛りとラベルの色
+xtick.color         : 212529
 xtick.labelsize     : 20.0
-# Y軸目盛りのフォントサイズ
+ytick.color         : 212529
 ytick.labelsize     : 20.0
 
 ### LEGEND PROPERTIES ###
-# 凡例のフォントサイズ
-legend.fontsize     : 18.0  # 少し小さめにするとバランスが良いことが多い
+legend.fontsize     : 18.0
+legend.frameon      : True  # 背景に馴染ませるため枠線なしを推奨
 
-### COLOR CYCLE ###
-# カラーブラインドに配慮したカラーマップ(tol_muted)を使用
-# 1行で書く（mplstyleは行単位で評価されるため、複数行にまたぐ '+' 演算はエラーになります）
-axes.prop_cycle : cycler('color', ['#CC6677', '#332288', '#DDCC77', '#117733', '#88CCEE', '#882255', '#44AA99', '#999933', '#AA4499']) 
+### COLOR CYCLE (Paul Tol's Muted) ###
+# 各色に # を追加し、引用符を削除しました
+axes.prop_cycle : cycler('color', ['CC6677', '332288', 'DDCC77', '117733', '88CCEE', '882255', '44AA99', '999933', 'AA4499'])
 
-### OTHER PROPERTIES ###
-# 図の背景色を白に設定
-figure.facecolor   : '#F8F9FA'
-axes.facecolor     : '#F8F9FA'
+### LINE & MARKER PROPERTIES ###
+lines.linewidth     : 2.0
+lines.markersize    : 8.0
+# lines.color はカラーサイクルが優先されるため、基本は指定しなくてOKです
 
-figure.edgecolor:   '#F8F9FA'
-axes.edgecolor:   '#F8F9FA'
+### GRID PROPERTIES ###
+# グリッドの色を薄いグレーに設定
+axes.grid           : True
+grid.color          : DEE2E6
+grid.alpha          : 0.8
+grid.linestyle      : --
 
-### label color ###
-axes.labelcolor: '#212529'
-
-### LINE PROPERTIES ###
-# 線の太さを設定
-lines.linewidth    : 2.0
-lines.color: '#212529'
-
-# gridカラー
-grid.color: "#6C757D"
-
-### MARKER PROPERTIES ###
-# マーカーのサイズを設定
-lines.markersize   : 8.0
-grid.alpha        : 0.8
-
+### FIGURE PROPERTIES ###
+# 図全体の背景色（オフホワイト）
+figure.facecolor    : F8F9FA
+figure.edgecolor    : F8F9FA
+figure.dpi          : 300
+figure.autolayout   : True
+figure.figsize      : 8, 6
 
 ### SAVEFIG PROPERTIES ###
-# 保存する図の解像度を設定
-figure.dpi         : 300
-figure.autolayout : True
-figure.figsize    : 8, 6
-# 保存する図のフォーマットをPNGに設定
-savefig.format    : png
-savefig.dpi       : 300
-savefig.bbox      : tight
-
+savefig.format      : png
+savefig.dpi         : 300
+savefig.bbox        : tight
+savefig.facecolor   : F8F9FA
