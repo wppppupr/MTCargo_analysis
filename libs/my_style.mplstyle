@@ -33,8 +33,8 @@ axes.prop_cycle : cycler('color', ['CC6677', '332288', 'DDCC77', '117733', '88CC
 
 ### OTHER PROPERTIES ###
 # 図の背景色を白に設定
-figure.facecolor   : white
-axes.facecolor     : white
+figure.facecolor   : 'F8F9FA'
+axes.facecolor     : 'F8F9FA'
 
 ### LINE PROPERTIES ###
 # 線の太さを設定
