@@ -41,7 +41,7 @@ def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
             prvs,
             next_img,
             None,
-            0.5, 3, 15, 3, 5, 1.2, 0
+            pyr_scale=0.5, levels=3, winsize=10, iterations=3, poly_n=5, poly_sigma=1.1, flags=0
         )
 
         # 結果をZarrに書き込み
@@ -166,7 +166,7 @@ def create_flow_movie(image_path, flow_path, output_video_name, scale=5, step=10
 
 if __name__ == "__main__":
     # 使用例
-    file_path = '/Volumes/My Passport/Sasaki/MTsingleBeads/20241114/T2_4uM_mc03_zarr/MTs.zarr'
+    file_path = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260107/MTs.zarr'
     
     # 1. まず高速に計算だけ行う
     flow_zarr_path = calculate_optical_flow_zarr(file_path, chunk_size=50)
