@@ -57,7 +57,9 @@ def calculate_optical_flow_zarr(file_path, output_path=None, chunk_size=100):
     Zarrファイルを入力とし、オプティカルフローを計算してZarrに保存します。
     Daskを用いて並列処理を行います。
     """
-    input_zarr = zarr.open_array(file_path, mode='r')
+    # 読み込みもパスを直接指定でOKです
+    input_zarr = zarr.open(file_path, mode='r')
+    
     n_frames = input_zarr.shape[0]
     height, width = input_zarr.shape[1], input_zarr.shape[2]
 
@@ -65,26 +67,23 @@ def calculate_optical_flow_zarr(file_path, output_path=None, chunk_size=100):
     if output_path is None:
         output_path = os.path.splitext(file_path)[0] + '_flow.zarr'
 
-    # 出力用Zarr配列の準備（ディスク上に空箱を作る）
-    # Flowは (Frame, Y, X, 2) の形状、float32
-    # 最後のフレームは次のフレームがないため計算できないので、n_frames-1 でも良いが、
-    # 扱いやすさのため同じ長さにしておく（最後は0埋めなど）
-    store = zarr.storage.DirectoryStore(output_path)
-    output_zarr = zarr.open_array(store, mode='w', 
-                                  shape=(n_frames, height, width, 2), 
-                                  chunks=(10, height, width, 2), # チャンクサイズは適宜調整
-                                  dtype=np.float32)
-
     print(f"Input: {file_path}")
     print(f"Output: {output_path}")
     print(f"Frames: {n_frames}, Resolution: {width}x{height}")
     print("Start parallel processing...")
 
+    # 【修正点】DirectoryStoreを使わず、zarr.open に直接パスと設定を渡します
+    # これで自動的にフォルダとして保存されます
+    output_zarr = zarr.open(
+        output_path, 
+        mode='w', 
+        shape=(n_frames, height, width, 2), 
+        chunks=(10, height, width, 2), 
+        dtype=np.float32
+    )
+
     # タスクの分割
     tasks = []
-    # チャンクごとにタスクを作成
-    # 例: 0~100, 100~200... 
-    # 境界部分(frame 99->100)の計算も _calc_flow_chunk 内で正しく処理されるように設計
     for i in range(0, n_frames - 1, chunk_size):
         end = min(i + chunk_size, n_frames - 1)
         if i >= end: break
@@ -94,14 +93,13 @@ def calculate_optical_flow_zarr(file_path, output_path=None, chunk_size=100):
         tasks.append(task)
 
     # 並列実行 (プログレスバー付き)
-    # n_workersはCPUコア数に合わせて調整してください (-1ですべて使用はできない場合があるため注意)
     with tqdm(total=len(tasks)) as pbar:
-        # compute(*tasks) で一気に実行
         results = compute(*tasks)
         pbar.update(len(tasks))
         
     print("Calculation completed.")
     return output_path
+
 
 def create_flow_movie(image_path, flow_path, output_video_name, scale=5, step=10):
     """
