@@ -166,7 +166,7 @@ def create_flow_movie(image_path, flow_path, output_video_name, scale=5, step=10
 
 if __name__ == "__main__":
     # 使用例
-    file_path = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260107/MTs.zarr'
+    file_path = '/Volumes/My Passport/Sasaki/MTsingleBeads/20241114/T2_4uM_mc03_zarr/MTs.zarr'
     
     # 1. まず高速に計算だけ行う
     flow_zarr_path = calculate_optical_flow_zarr(file_path, chunk_size=50)
