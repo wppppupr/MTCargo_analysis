@@ -16,6 +16,7 @@ folder = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260107'
 output_name = os.path.join(folder, "tracking.mov")
 track_path = os.path.join(folder, "beads_tracks.csv")
 MTs_path = os.path.join(folder, "MTs.zarr")
+MTs_red_path = os.path.join(folder, "MTs_red_path")
 beads_path = os.path.join(folder, "beads.zarr")
 
 scale = 0.11
@@ -23,6 +24,7 @@ scale = 0.11
 # --- データ読み込み ---
 # メモリ節約のため Lazy Loading
 MTs = zarr.open_array(MTs_path, mode='r')
+MTs_red = zarr.open_array(MTs_red_path, mode='r')
 beads = zarr.open_array(beads_path, mode='r')
 
 # トラッキングデータ
@@ -41,7 +43,8 @@ total_frames = MTs.shape[0]
 # --- カラーマップ作成 ---
 colormap_data = {
     "MTs": [(0, 0, 0), (119/255, 217/255, 168/255)],
-    "beads": [(0, 0, 0, 0.0), (255/255, 75/255, 0, 1.0)]
+    "MTs_red": [(0, 0, 0, 0.0), (255/255, 75/255, 0, 1.0)],
+    "beads": [(0, 0, 0), (136, 204, 238)]
 }
 colormaps = {}
 for name, colors in colormap_data.items():
@@ -59,7 +62,9 @@ fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
 extent = [0, MTs.shape[2], 0, MTs.shape[1]]
 im1 = ax.imshow(MTs[0], cmap=colormaps['MTs'], interpolation='none', 
                 aspect='auto', origin='lower', extent=extent)
-im2 = ax.imshow(beads[0], cmap=colormaps['beads'], interpolation='none', 
+im2 = ax.imshow(MTs_red[0], cmap=colormaps['MTs_red'], interpolation='none', 
+                aspect='auto', alpha=0.6, origin='lower', extent=extent)
+im3 = ax.imshow(beads[0], cmap=colormaps['beads'], interpolation='none', 
                 aspect='auto', alpha=0.6, origin='lower', extent=extent)
 
 # Normalize設定
@@ -99,15 +104,17 @@ ax.add_artist(size_bar)
 # --- アニメーション更新関数 ---
 def init():
     im1.set_data(MTs[0])
-    im2.set_data(beads[0])
-    return [im1, im2] + list(line_collections.values()) + list(points.values())
+    im2.set_data(MTs_red[0])
+    im3.set_data(beads[0])
+    return [im1, im2, im3] + list(line_collections.values()) + list(points.values())
 
 def update(frame):
     # 画像更新 (Lazy Loading)
     im1.set_data(MTs[frame])
-    im2.set_data(beads[frame])
+    im2.set_data(MTs_red[frame])
+    im3.set_data(beads[frame])
 
-    artists = [im1, im2]
+    artists = [im1, im2, im3]
 
     # 粒子ごとの更新
     for p, data in particle_tracks.items():

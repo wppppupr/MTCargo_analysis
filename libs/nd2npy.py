@@ -62,9 +62,10 @@ def process_nd2_to_zarr(file_path: str,
     # 配列形状は (T, C, Y, X) であると仮定
     
     # チャンネルごとに分離 (まだデータは読み込まれません)
-    # 0: MT, 1: Beads
-    dask_mt_raw = vol[:, 0, :, :]
-    dask_beads_raw = vol[:, 1, :, :]
+    # 0: MT red, 1: MT, 2: Beads
+    dask_mt_red_raw = vol[:, 0, :, :]
+    dask_mt_raw = vol[:, 1, :, :]
+    dask_beads_raw = vol[:, 2, :, :]
     
     # スケーリング係数 (12bit -> 8bit)
     scale_factor = 255.0 / 4095.0
@@ -77,6 +78,7 @@ def process_nd2_to_zarr(file_path: str,
     # メモリ効率と処理速度のバランスが良いサイズに再分割します
     # 例: (時間方向10フレーム, Y全画素, X全画素) 単位で処理
     preferred_chunks = (10, -1, -1)
+    dask_mt_red_raw = dask_mt_red_raw.rechunk(preferred_chunks)
     dask_mt_raw = dask_mt_raw.rechunk(preferred_chunks)
     dask_beads_raw = dask_beads_raw.rechunk(preferred_chunks)
 
@@ -84,6 +86,15 @@ def process_nd2_to_zarr(file_path: str,
     # 計算グラフの構築 (map_blocks)
     # ---------------------------------------------------------
     
+    # redMTチャンネルの処理定義
+    dask_mt_red_processed = dask_mt_red_raw.map_blocks(
+        process_chunk_wrapper,
+        equalize=equalize,
+        sigma=mt_sigma_2d,
+        scale_factor=scale_factor,
+        dtype=np.uint8
+    )
+
     # MTチャンネルの処理定義
     dask_mt_processed = dask_mt_raw.map_blocks(
         process_chunk_wrapper,
@@ -127,6 +138,16 @@ def process_nd2_to_zarr(file_path: str,
         from dask.diagnostics import ProgressBar
         
         # MTの保存
+        mt_red_zarr_path = os.path.join(save_dir, "MTs_red.zarr")
+        print(f"  - Saving MTs red -> {mt_red_zarr_path}")
+        with ProgressBar():
+            dask_mt_red_processed.to_zarr(
+                mt_red_zarr_path, 
+                compressor=compressor, 
+                overwrite=True
+            )
+
+        # MTの保存
         mt_zarr_path = os.path.join(save_dir, "MTs.zarr")
         print(f"  - Saving MTs -> {mt_zarr_path}")
         with ProgressBar():
@@ -146,11 +167,11 @@ def process_nd2_to_zarr(file_path: str,
                 overwrite=True
             )
 
-        return mt_zarr_path, beads_zarr_path
+        return mt_red_zarr_path, mt_zarr_path, beads_zarr_path
 
     else:
         # 保存しない場合は計算せずにDask配列自体を返す（後で計算可能）
-        return dask_mt_processed, dask_beads_processed
+        return dask_mt_red_processed, dask_mt_processed, dask_beads_processed
     
 
 def process_nd2_to_zarrMT(file_path: str,
@@ -243,8 +264,8 @@ def process_nd2_to_zarrMT(file_path: str,
 
 if __name__ == "__main__":
     # 入力ファイルパス
-    file_path = "/Volumes/My Passport/Sasaki/MTsingleBeads/20241114/T2_4uM_mc03_.nd2"
-    nas_dir = '/Volumes/My Passport/Sasaki/MTsingleBeads/20241114/T2_4uM_mc03_zarr'
+    file_path = "/Volumes/data/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop/beads_trans_crop_crop.nd2"
+    nas_dir = "/Volumes/data/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop"
 
     print('checking file...')
     
