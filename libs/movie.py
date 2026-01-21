@@ -43,8 +43,8 @@ total_frames = MTs.shape[0]
 # --- カラーマップ作成 ---
 colormap_data = {
     "MTs": [(0, 0, 0), (119/255, 217/255, 168/255)],
-    "MTs_red": [(0, 0, 0, 0.0), (255/255, 75/255, 0, 1.0)],
-    "beads": [(0, 0, 0), (136, 204, 238)]
+    "MTs_red": [(0, 0, 0, 0.0), (255/255, 75/255, 0)],
+    "beads": [(0, 0, 0), (136/255, 204/255, 238/255)]
 }
 colormaps = {}
 for name, colors in colormap_data.items():
@@ -63,7 +63,7 @@ extent = [0, MTs.shape[2], 0, MTs.shape[1]]
 im1 = ax.imshow(MTs[0], cmap=colormaps['MTs'], interpolation='none', 
                 aspect='auto', origin='lower', extent=extent)
 im2 = ax.imshow(MTs_red[0], cmap=colormaps['MTs_red'], interpolation='none', 
-                aspect='auto', alpha=0.6, origin='lower', extent=extent)
+                aspect='auto', alpha=0.9, origin='lower', extent=extent)
 im3 = ax.imshow(beads[0], cmap=colormaps['beads'], interpolation='none', 
                 aspect='auto', alpha=0.6, origin='lower', extent=extent)
 
