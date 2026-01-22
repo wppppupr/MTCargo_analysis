@@ -12,11 +12,11 @@ import matplotlib.font_manager as fm
 from tqdm import tqdm  # 進捗バー用ライブラリ
 
 # --- 設定 ---
-folder = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260107'
+folder = "/Volumes/data/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop"
 output_name = os.path.join(folder, "tracking.mov")
 track_path = os.path.join(folder, "beads_tracks.csv")
 MTs_path = os.path.join(folder, "MTs.zarr")
-MTs_red_path = os.path.join(folder, "MTs_red_path")
+MTs_red_path = os.path.join(folder, "MTs_red.zarr")
 beads_path = os.path.join(folder, "beads.zarr")
 
 scale = 0.11

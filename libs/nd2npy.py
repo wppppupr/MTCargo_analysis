@@ -264,8 +264,8 @@ def process_nd2_to_zarrMT(file_path: str,
 
 if __name__ == "__main__":
     # 入力ファイルパス
-    file_path = "/Volumes/data/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop/beads_trans_crop_crop.nd2"
-    nas_dir = "/Volumes/data/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop"
+    file_path = "/Volumes/data/Sasaki/MTsingleBeads/20260121/exp_crop1/exp_crop1.nd2"
+    nas_dir = "/Volumes/data/Sasaki/MTsingleBeads/20260121/exp_crop1"
 
     print('checking file...')
     
