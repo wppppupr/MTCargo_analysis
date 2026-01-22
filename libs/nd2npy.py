@@ -10,8 +10,8 @@ import os
 ####################################################
 # fileの入力
 
-file_path = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp/exp.nd2"
-nas_dir = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp"
+FILE_PATH = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp/exp.nd2"
+NAS_DIR = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp"
 
 #####################################################
 
@@ -275,13 +275,13 @@ if __name__ == "__main__":
 
     print('checking file...')
     
-    if os.path.exists(file_path):
+    if os.path.exists(FILE_PATH):
         print('start processing nd2 to zarr...')
         # 処理実行
         process_nd2_to_zarr(
-            file_path, 
+            FILE_PATH, 
             equalize=True, 
-            out_dir=f"{nas_dir}"
+            out_dir=f"{NAS_DIR}"
         )
         print('done.')
 
