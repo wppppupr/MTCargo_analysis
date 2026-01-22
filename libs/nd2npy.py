@@ -10,8 +10,8 @@ import os
 ####################################################
 # fileの入力
 
-FILE_PATH = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp/exp.nd2"
-NAS_DIR = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp"
+FILE_PATH = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp001/exp001.nd2"
+NAS_DIR = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp001"
 
 #####################################################
 

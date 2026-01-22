@@ -5,7 +5,7 @@ import pandas as pd
 # =============================================================================
 # 設定
 # =============================================================================
-TARGET_PATH = r"/Volumes/data/Sasaki/MTsingleBeads/20260121/exp_crop1"
+TARGET_PATH = r"/Volumes/data/Sasaki/MTsingleBeads/20260122/exp"
 
 # RDFの計算設定
 MAX_RC = 50  # 粒子系の何倍まで計算するか
