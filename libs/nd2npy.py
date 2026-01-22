@@ -7,6 +7,14 @@ from skimage import exposure
 from scipy.ndimage import gaussian_filter
 import os
 
+####################################################
+# fileの入力
+
+file_path = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp/exp.nd2"
+nas_dir = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp"
+
+#####################################################
+
 def process_chunk_wrapper(chunk, equalize, sigma, scale_factor):
     """
     Daskのブロック（チャンク）ごとに呼ばれる処理関数。
@@ -264,8 +272,6 @@ def process_nd2_to_zarrMT(file_path: str,
 
 if __name__ == "__main__":
     # 入力ファイルパス
-    file_path = "/Volumes/data/Sasaki/MTsingleBeads/20260121/exp_crop1/exp_crop1.nd2"
-    nas_dir = "/Volumes/data/Sasaki/MTsingleBeads/20260121/exp_crop1"
 
     print('checking file...')
     
