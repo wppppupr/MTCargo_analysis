@@ -6,6 +6,11 @@ from dask import delayed, compute
 import os
 from tqdm import tqdm
 
+####################################################
+
+FILE_PATH = '/Volumes/data/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop/MTs_red.zarr'
+####################################################
+
 def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
     """
     指定された範囲のフレームについてオプティカルフローを計算し、
@@ -165,12 +170,10 @@ def create_flow_movie(image_path, flow_path, output_video_name, scale=5, step=10
     print(f"Video saved to {output_video_name}")
 
 if __name__ == "__main__":
-    # 使用例
-    file_path = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260107/MTs.zarr'
     
     # 1. まず高速に計算だけ行う
-    flow_zarr_path = calculate_optical_flow_zarr(file_path, chunk_size=50)
+    flow_zarr_path = calculate_optical_flow_zarr(FILE_PATH, chunk_size=50)
     
     # 2. 必要なら動画にする (計算結果のZarrを使う)
-    video_name = file_path.replace('.zarr', '_opticalflow.mp4')
-    create_flow_movie(file_path, flow_zarr_path, video_name, scale=5, step=10)
+    video_name = FILE_PATH.replace('.zarr', '_opticalflow.mp4')
+    create_flow_movie(FILE_PATH, flow_zarr_path, video_name, scale=5, step=10)
