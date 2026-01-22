@@ -6,12 +6,12 @@ from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 import matplotlib.font_manager as fm
 import MT_order as order
 
-path_MT = "/Volumes/data/Sasaki/backup_git/MTCargo_analysis/experiment/20251210/MC03MT4uM/MTs.npy"
-path_track = "/Users/sasakinozomu/code/MTCargo_analysis/experiment/20251210/MC03MT4uM/beads_tracks.csv"
-output_name = "/Users/sasakinozomu/code/MTCargo_analysis/experiment/20251210/MC03MT4uM"
+path_MT = "/Volumes/data/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop/MTs.zarr"
+path_track = "/Users/sasakinozomu/code/MTCargo_analysis/experiment/20260121/beads_trans_crop_crop/beads_tracks.csv"
+output_name = "/Volumes/data/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop"
 
 scale = 0.11
-interval = 10
+interval = 4
 
 MTs = np.load(path_MT)
 # trajectory_beads
