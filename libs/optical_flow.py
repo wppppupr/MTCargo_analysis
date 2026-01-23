@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 ####################################################
 
-FILE_PATH = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp002/MTs_red.zarr"
+FILE_PATH = "/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp/MTs_red.zarr"
 ####################################################
 
 def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
@@ -63,7 +63,7 @@ def calculate_optical_flow_zarr(file_path, output_path=None, chunk_size=100):
     Daskを用いて並列処理を行います。
     """
     # 読み込みもパスを直接指定でOKです
-    input_zarr = zarr.open(file_path, mode='r')
+    input_zarr = zarr.open_array(file_path, mode='r')
     
     n_frames = input_zarr.shape[0]
     height, width = input_zarr.shape[1], input_zarr.shape[2]
@@ -172,7 +172,7 @@ def create_flow_movie(image_path, flow_path, output_video_name, scale=5, step=10
 if __name__ == "__main__":
     
     # 1. まず高速に計算だけ行う
-    flow_zarr_path = calculate_optical_flow_zarr(FILE_PATH, chunk_size=50)
+    flow_zarr_path = calculate_optical_flow_zarr(FILE_PATH, chunk_size=10)
     
     # 2. 必要なら動画にする (計算結果のZarrを使う)
     video_name = FILE_PATH.replace('.zarr', '_opticalflow.mp4')
