@@ -10,8 +10,8 @@ import os
 ####################################################
 # fileの入力
 
-FILE_PATH = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp001/exp001.nd2"
-NAS_DIR = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp001"
+FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp002/exp002.nd2'
+NAS_DIR = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp002'
 
 #####################################################
 
@@ -253,7 +253,7 @@ def process_nd2_to_zarrMT(file_path: str,
         from dask.diagnostics import ProgressBar
         
         # MTの保存
-        mt_zarr_path = os.path.join(save_dir, "MTs.zarr")
+        mt_zarr_path = os.path.join(save_dir, "MTs_red.zarr")
         print(f"  - Saving MTs -> {mt_zarr_path}")
         with ProgressBar():
             dask_mt_processed.to_zarr(
@@ -278,7 +278,7 @@ if __name__ == "__main__":
     if os.path.exists(FILE_PATH):
         print('start processing nd2 to zarr...')
         # 処理実行
-        process_nd2_to_zarr(
+        process_nd2_to_zarrMT(
             FILE_PATH, 
             equalize=True, 
             out_dir=f"{NAS_DIR}"
