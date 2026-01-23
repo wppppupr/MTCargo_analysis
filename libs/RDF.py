@@ -5,7 +5,7 @@ import pandas as pd
 # =============================================================================
 # 設定
 # =============================================================================
-TARGET_PATH = r"/Volumes/data/Sasaki/MTsingleBeads/20260122/exp"
+TARGET_PATH = r"/Volumes/data/Sasaki/MTsingleBeads/20260122/exp002"
 
 # RDFの計算設定
 MAX_RC = 50  # 粒子系の何倍まで計算するか
@@ -117,11 +117,15 @@ def get_RDFs(image_seq, tracks, max_r):
 if __name__ == "__main__":
 
     g_r_path = os.path.join(TARGET_PATH, 'RDF.zarr')
+    g_r_red_path = os.path.join(TARGET_PATH, 'RDF_red.zarr')
 
     scale = 0.11 # um/px
     cargo_radius = 0.59 # um
 
     r_c = cargo_radius/scale
+
+    MTs_red_path = os.path.join(TARGET_PATH, "MTs_red.zarr")
+    MTs_red_zarr = zarr.open_array(MTs_red_path, mode = 'r')
 
     MTs_path = os.path.join(TARGET_PATH, "MTs.zarr")
     MTszarr = zarr.open_array(MTs_path, mode = 'r')
@@ -129,9 +133,13 @@ if __name__ == "__main__":
     track_path = os.path.join(TARGET_PATH, "beads_tracks.csv")
     tracks = pd.read_csv(track_path)
 
-    print('start calculate')
-    g_r = get_RDFs(MTszarr[:], tracks, max_r=r_c*MAX_RC)
+    """print('Red')
+    red = get_RDFs(MTs_red_zarr[:], tracks, max_r=r_c*MAX_RC)
+    red_zarr = zarr.open(g_r_red_path, mode='w', shape=red.shape, dtype=red.dtype)
+    red_zarr[:] = red"""
 
-    print(f"save in {g_r_path}")
+    print("Green")
+
+    g_r = get_RDFs(MTszarr[:], tracks, max_r=r_c*MAX_RC)
     g_r_zarr = zarr.open(g_r_path, mode='w', shape=g_r.shape, dtype=g_r.dtype)
     g_r_zarr[:] = g_r
