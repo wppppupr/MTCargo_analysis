@@ -133,13 +133,14 @@ if __name__ == "__main__":
     track_path = os.path.join(TARGET_PATH, "beads_tracks.csv")
     tracks = pd.read_csv(track_path)
 
-    """print('Red')
+    print('Red')
     red = get_RDFs(MTs_red_zarr[:], tracks, max_r=r_c*MAX_RC)
     red_zarr = zarr.open(g_r_red_path, mode='w', shape=red.shape, dtype=red.dtype)
-    red_zarr[:] = red"""
+    red_zarr[:] = red
 
     print("Green")
 
     g_r = get_RDFs(MTszarr[:], tracks, max_r=r_c*MAX_RC)
     g_r_zarr = zarr.open(g_r_path, mode='w', shape=g_r.shape, dtype=g_r.dtype)
     g_r_zarr[:] = g_r
+    
