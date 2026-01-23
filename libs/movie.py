@@ -47,7 +47,7 @@ def create_movie(folder, output_name=None):
     colormap_data = {
         "MTs": [(0, 0, 0), (0, 1, 0)],
         "MTs_red": [(0, 0, 0, 0.0), (1, 0, 1)],
-        "beads": [(0, 0, 0), (0, 1, 1)]
+        "beads": [(0, 0, 0, 0.0), (0, 1, 1)]
     }
     colormaps = {}
     for name, colors in colormap_data.items():
