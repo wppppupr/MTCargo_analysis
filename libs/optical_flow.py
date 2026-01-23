@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 ####################################################
 
-FILE_PATH = '/Volumes/data/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop/MTs_red.zarr'
+FILE_PATH = "/Volumes/data/Sasaki/MTsingleBeads/20260122/exp002/MTs_red.zarr"
 ####################################################
 
 def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
