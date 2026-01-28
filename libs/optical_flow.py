@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 ####################################################
 
-FILE_PATH = "/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp002/MTs_red.zarr"
+FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop/MTs_red.zarr'
 ####################################################
 
 def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
@@ -206,7 +206,6 @@ if __name__ == "__main__":
     # 2. 必要なら動画にする (計算結果のZarrを使う)
     video_name = FILE_PATH.replace('.zarr', '_opticalflow.mp4')
     create_flow_movie(FILE_PATH, flow_zarr_path, video_name, scale=5, step=10)
-
 
     # 3. Polar度の計算
     _ = getP(FILE_PATH)

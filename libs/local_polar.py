@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 ####################################################
 
-FILE_PATH = "/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp001"
+FILE_PATH = "/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop"
 
 scale = 0.11
 
@@ -106,6 +106,8 @@ def local_polar(flow_array, tracks, height, weight):
     return Ps
 
 if __name__ == "__main__":
+
+    print(f"Loading data from {FILE_PATH}...")
 
     flow_path = os.path.join(FILE_PATH, "MTs_red_flow.zarr")
     flow_array = zarr.open_array(flow_path, mode='r')
