@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 ####################################################
 
-FILE_PATH = "/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop"
+FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1'
 
 scale = 0.11
 

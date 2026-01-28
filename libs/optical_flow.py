@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 ####################################################
 
-FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop/MTs_red.zarr'
+FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1/MTs_red.zarr'
 ####################################################
 
 def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
@@ -130,11 +130,11 @@ def create_flow_movie(image_path, flow_path, output_video_name, scale=5, step=10
         
         # 左: 元画像（緑チャンネル）
         mt_img = np.zeros((height, width, 3), dtype=np.uint8)
-        mt_img[..., 1] = frame 
+        mt_img[..., 2] = frame 
 
         # 右: オプティカルフロー矢印
         flow_img = np.zeros((height, width, 3), dtype=np.uint8)
-        flow_img[..., 1] = frame 
+        flow_img[..., 2] = frame 
 
         # 矢印描画 (重い処理なので間引く)
         # ベクトル化して高速化も可能だが、cv2.arrowedLineは見やすいのでループで描画
@@ -158,7 +158,7 @@ def create_flow_movie(image_path, flow_path, output_video_name, scale=5, step=10
                         flow_img,
                         (x, y),
                         end_point,
-                        color=(0, 0, 255), 
+                        color=(0, 255, 0), 
                         thickness=1,
                         tipLength=0.3
                     )
@@ -201,11 +201,11 @@ def getP(path):
 if __name__ == "__main__":
     
     # 1. まず高速に計算だけ行う
-    flow_zarr_path = calculate_optical_flow_zarr(FILE_PATH, chunk_size=1)
+    #flow_zarr_path = calculate_optical_flow_zarr(FILE_PATH, chunk_size=1)
     
     # 2. 必要なら動画にする (計算結果のZarrを使う)
     video_name = FILE_PATH.replace('.zarr', '_opticalflow.mp4')
-    create_flow_movie(FILE_PATH, flow_zarr_path, video_name, scale=5, step=10)
+    create_flow_movie(FILE_PATH, '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1/MTs_red_flow.zarr', video_name, scale=5, step=10)
 
     # 3. Polar度の計算
     _ = getP(FILE_PATH)
