@@ -10,8 +10,10 @@ FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1'
 
 scale = 0.11
 
-height = 10/scale
-weight = 10/scale
+rectangle = 2
+
+height = rectangle/scale
+weight = rectangle/scale
 
 
 ####################################################
@@ -118,6 +120,6 @@ if __name__ == "__main__":
     Ps = local_polar(flow_array, tracks, height, weight)
 
     tracks['local_P'] = Ps
-    output_path = os.path.join(FILE_PATH, "beads_tracks_with_local_P.csv")
+    output_path = os.path.join(FILE_PATH, f"beads_tracks_with_local_P_rec{rectangle}.csv")
     tracks.to_csv(output_path, index=False)
     print(f"Saved tracks with local P to {output_path}")
