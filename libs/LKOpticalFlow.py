@@ -113,7 +113,7 @@ def lk_opt_flow(images, xy_sig1, t_sig, w_sig):
 
 if __name__ == "__main__":
     nd2_file = nd2.imread(FILE_PATH, dask=True)
-    images = nd2_file[:,0,:,:]  # チャネル0を選択してメモリに読み込み
+    images = nd2_file[:,0,:,:]  # チャネル0(MTs Red)を選択してメモリに読み込み
     print(f"Loaded images : {FILE_PATH}")
     vx, vy, rel = lk_opt_flow(images, xy_sig1=XY_SIGMA, t_sig=T_SIGMA, w_sig=W_SIGMA)
     opt_flow = np.array([vx, vy, rel])
