@@ -111,7 +111,7 @@ if __name__ == "__main__":
 
     print(f"Loading data from {FILE_PATH}...")
 
-    flow_path = os.path.join(FILE_PATH, "MTs_red_flow.zarr")
+    flow_path = os.path.join(FILE_PATH, "MTs_red_flow_LK.zarr")
     flow_array = zarr.open_array(flow_path, mode='r')
 
     tracks_path = os.path.join(FILE_PATH, "beads_tracks.csv")
@@ -120,6 +120,6 @@ if __name__ == "__main__":
     Ps = local_polar(flow_array, tracks, height, weight)
 
     tracks['local_P'] = Ps
-    output_path = os.path.join(FILE_PATH, f"beads_tracks_with_local_P_rec{rectangle}.csv")
+    output_path = os.path.join(FILE_PATH, f"beads_tracks_with_local_P_rec{rectangle}_LK.csv")
     tracks.to_csv(output_path, index=False)
     print(f"Saved tracks with local P to {output_path}")

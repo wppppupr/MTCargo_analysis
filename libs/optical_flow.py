@@ -220,7 +220,7 @@ def getP(path):
     n_nanind = np.where(~np.isnan(P))
     PNan = P[n_nanind[0]]
 
-    polar_path = os.path.join(path, "MTs_red_polar.zarr")
+    polar_path = os.path.join(path, "MTs_red_polar_LK.zarr")
     Polar_parameter = zarr.open(polar_path, mode = 'w', shape = P.shape, dtype = P.dtype)
     Polar_parameter[:] = PNan
 

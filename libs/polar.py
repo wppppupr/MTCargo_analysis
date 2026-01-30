@@ -10,7 +10,7 @@ FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1'
 
 
 def getP(path):
-    flow_path = os.path.join(path, "MTs_red_flow.zarr")
+    flow_path = os.path.join(path, "MTs_red_flow_LK.zarr")
     flow_array = zarr.open_array(flow_path, mode='r')
     
     x = flow_array[:, :, :, 0]  # x成分
@@ -32,15 +32,15 @@ def getP(path):
     n_nanind = np.where(~np.isnan(P))
     PNan = P[n_nanind[0]]
 
-    polar_path = os.path.join(path, "MTs_red_polar.zarr")
+    polar_path = os.path.join(path, "MTs_red_polar_LK.zarr")
     Polar_parameter = zarr.open(polar_path, mode = 'w', shape = P.shape, dtype = P.dtype)
     Polar_parameter[:] = PNan
 
     return PNan
 
 def getP_dask(path):
-    flow_path = os.path.join(path, "MTs_red_flow.zarr")
-    polar_path = os.path.join(path, "MTs_red_polar.zarr")
+    flow_path = os.path.join(path, "MTs_red_flow_LK.zarr")
+    polar_path = os.path.join(path, "MTs_red_polar_LK.zarr")
     
     # 1. zarrをdask arrayとして開く（ここではデータはまだ読み込まれません）
     # chunks='auto' で最適なサイズに自動調整
