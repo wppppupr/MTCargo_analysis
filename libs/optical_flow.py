@@ -11,7 +11,7 @@ from tqdm import tqdm
 FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1/MTs_red.zarr'
 ####################################################
 
-def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
+def _calc_flow_chunk(start_idx, end_idx, input_path, output_path, WinSize=(15, 15), maxLevel=2):
     """
     指定された範囲のフレームについてオプティカルフローを計算し、
     結果を出力先Zarrに直接書き込む関数（ワーカープロセスで実行されます）
@@ -35,8 +35,8 @@ def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
     prev_pts_grid = np.stack([x, y], axis=1)
 
     # LK parameters
-    lk_params = dict(winSize=(15, 15),
-                     maxLevel=2,
+    lk_params = dict(winSize=WinSize,
+                     maxLevel=maxLevel,
                      criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
 
     # 指定範囲をループ処理
