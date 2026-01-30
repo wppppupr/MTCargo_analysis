@@ -98,7 +98,7 @@ def calculate_optical_flow_zarr(file_path, output_path=None, chunk_size=100, Win
 
     # 出力パスの設定
     if output_path is None:
-        output_path = os.path.splitext(file_path)[0] + '_flow.zarr'
+        output_path = os.path.splitext(file_path)[0] + '_flow_LK.zarr'
 
     print(f"Input: {file_path}")
     print(f"Output: {output_path}")
@@ -198,7 +198,7 @@ def create_flow_movie(image_path, flow_path, output_video_name, scale=5, step=10
     print(f"Video saved to {output_video_name}")
 
 def getP(path):
-    flow_path = os.path.join(path, "MTs_red_flow.zarr")
+    flow_path = os.path.join(path, "MTs_red_flow_LK.zarr")
     flow_array = zarr.open_array(flow_path, mode='r')
     
     x = flow_array[:, :, :, 0]  # x成分
