@@ -14,7 +14,8 @@ velocity = 0.5  # μm/sec
 time_interval = 4  # sec/frame
 scale = 0.11  # μm/pixel
 
-PIXEL_PER_FLOW_UNIT = velocity * time_interval / scale  # ピクセル単位でのフローのスケールファクター
+PIXEL_PER_FLOW_UNIT = int(velocity * time_interval / scale)  # ピクセル単位でのフローのスケールファクター
+MAXLEVEL = 2
 
 ####################################################
 
@@ -84,7 +85,7 @@ def _calc_flow_chunk(start_idx, end_idx, input_path, output_path, WinSize=(15, 1
 
     return True
 
-def calculate_optical_flow_zarr(file_path, output_path=None, chunk_size=100):
+def calculate_optical_flow_zarr(file_path, output_path=None, chunk_size=100, WinSize=(15, 15), maxLevel=2):
     """
     Zarrファイルを入力とし、オプティカルフローを計算してZarrに保存します。
     Daskを用いて並列処理を行います。
@@ -121,7 +122,7 @@ def calculate_optical_flow_zarr(file_path, output_path=None, chunk_size=100):
         if i >= end: break
         
         # delayedを使って関数を遅延評価オブジェクトにする
-        task = delayed(_calc_flow_chunk)(i, end, file_path, output_path)
+        task = delayed(_calc_flow_chunk)(i, end, file_path, output_path, WinSize=WinSize, maxLevel=maxLevel)
         tasks.append(task)
 
     # 並列実行 (プログレスバー付き)
@@ -227,12 +228,14 @@ def getP(path):
 
 if __name__ == "__main__":
     
+    WinSize = (PIXEL_PER_FLOW_UNIT, PIXEL_PER_FLOW_UNIT)
+
     # 1. まず高速に計算だけ行う
-    #flow_zarr_path = calculate_optical_flow_zarr(FILE_PATH, chunk_size=1)
+    flow_zarr_path = calculate_optical_flow_zarr(FILE_PATH, chunk_size=1, WinSize=WinSize, maxLevel=MAXLEVEL)
     
     # 2. 必要なら動画にする (計算結果のZarrを使う)
     video_name = FILE_PATH.replace('.zarr', '_opticalflow.mp4')
-    create_flow_movie(FILE_PATH, '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1/MTs_red_flow.zarr', video_name, scale=5, step=10)
+    create_flow_movie(FILE_PATH, flow_zarr_path, video_name, scale=5, step=10)
 
     # 3. Polar度の計算
     _ = getP(FILE_PATH)
