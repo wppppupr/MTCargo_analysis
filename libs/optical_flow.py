@@ -29,6 +29,16 @@ def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
     if prvs.dtype != np.uint8:
         prvs = (prvs / 256).astype(np.uint8) if prvs.max() > 255 else prvs.astype(np.uint8)
 
+    # Dense Lucas-Kanadeのためのグリッド点を作成
+    h, w = prvs.shape
+    y, x = np.mgrid[0:h, 0:w].reshape(2, -1).astype(np.float32)
+    prev_pts_grid = np.stack([x, y], axis=1)
+
+    # LK parameters
+    lk_params = dict(winSize=(15, 15),
+                     maxLevel=2,
+                     criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
+
     # 指定範囲をループ処理
     # flow[i] は frame[i] と frame[i+1] の間の動きを表すとする
     for i in range(start_idx, end_idx):
@@ -41,13 +51,23 @@ def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
         if next_img.dtype != np.uint8:
             next_img = (next_img / 256).astype(np.uint8) if next_img.max() > 255 else next_img.astype(np.uint8)
 
-        # オプティカルフロー計算
-        flow = cv2.calcOpticalFlowFarneback(
+        # オプティカルフロー計算 (Lucas-Kanade)
+        next_pts, status, _ = cv2.calcOpticalFlowPyrLK(
             prvs,
             next_img,
+            prev_pts_grid,
             None,
-            pyr_scale=0.5, levels=3, winsize=10, iterations=3, poly_n=5, poly_sigma=1.1, flags=0
+            **lk_params
         )
+
+        # フローベクトルの計算
+        flow_vectors = next_pts - prev_pts_grid
+
+        # トラッキング失敗した点は0にする
+        flow_vectors[status.flatten() == 0] = 0
+
+        # 形状を戻す (h, w, 2)
+        flow = flow_vectors.reshape(h, w, 2)
 
         # 結果をZarrに書き込み
         out_zarr[i] = flow
