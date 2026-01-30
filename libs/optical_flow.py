@@ -5,13 +5,61 @@ import dask.array as da
 from dask import delayed, compute
 import os
 from tqdm import tqdm
+from scipy.ndimage import gaussian_filter, convolve
 
 ####################################################
 
 FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1/MTs_red.zarr'
 ####################################################
 
-def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
+class OpticalFlowAnalyzer:
+    def __init__(self, sigma=4.5, window_size=27):
+        """
+        論文のMCF10A細胞のパラメータをデフォルト値として設定
+        sigma: ガウス重みの標準偏差 (0.63 µm相当) [cite: 615]
+        window_size: 重み行列のサイズ [cite: 615]
+        """
+        self.sigma = sigma
+        self.window_size = window_size
+
+    def calculate_reliability(self, I1, I2):
+        """
+        論文式(6)に基づき、ATwA行列の最小固有値を計算する [cite: 612, 613]
+        """
+        # Ensure inputs are float for gradient calculation
+        I1 = I1.astype(np.float32)
+        I2 = I2.astype(np.float32)
+
+        # 1. 空間勾配(Ix, Iy)と時間勾配(It)の計算
+        Ix = convolve(I1, np.array([[-0.5, 0, 0.5]]))
+        Iy = convolve(I1, np.array([[-0.5], [0], [0.5]]))
+        It = I2 - I1
+
+        # 2. ATwA行列の要素を計算 (A^T * w * A)
+        # 論文ではガウス重み行列 w を使用
+        Ixx = gaussian_filter(Ix**2, self.sigma)
+        Iyy = gaussian_filter(Iy**2, self.sigma)
+        Ixy = gaussian_filter(Ix * Iy, self.sigma)
+
+        # 3. 各ピクセルにおける2x2行列の最小固有値を計算
+        # 行列 M = [[Ixx, Ixy], [Ixy, Iyy]]
+        # 固有値 λ = ((Ixx + Iyy) ± sqrt((Ixx - Iyy)^2 + 4*Ixy^2)) / 2
+
+        common_term = np.sqrt((Ixx - Iyy)**2 + 4 * Ixy**2)
+        lambda_min = (Ixx + Iyy - common_term) / 2
+
+        return lambda_min, Ix, Iy, It
+
+    def apply_threshold(self, vectors, reliability, threshold):
+        """
+        信頼性閾値に基づいてベクトルをフィルタリングする [cite: 614]
+        """
+        mask = reliability > threshold
+        filtered_vectors = vectors.copy()
+        filtered_vectors[~mask] = 0
+        return filtered_vectors, mask
+
+def _calc_flow_chunk(start_idx, end_idx, input_path, output_path, reliability_threshold=None):
     """
     指定された範囲のフレームについてオプティカルフローを計算し、
     結果を出力先Zarrに直接書き込む関数（ワーカープロセスで実行されます）
@@ -38,6 +86,9 @@ def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
     lk_params = dict(winSize=(15, 15),
                      maxLevel=2,
                      criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
+
+    # 信頼性解析クラスの初期化
+    analyzer = OpticalFlowAnalyzer()
 
     # 指定範囲をループ処理
     # flow[i] は frame[i] と frame[i+1] の間の動きを表すとする
@@ -69,6 +120,11 @@ def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
         # 形状を戻す (h, w, 2)
         flow = flow_vectors.reshape(h, w, 2)
 
+        # 信頼性閾値が設定されている場合は適用
+        if reliability_threshold is not None:
+            reliability, _, _, _ = analyzer.calculate_reliability(prvs, next_img)
+            flow, _ = analyzer.apply_threshold(flow, reliability, reliability_threshold)
+
         # 結果をZarrに書き込み
         out_zarr[i] = flow
         
@@ -77,7 +133,7 @@ def _calc_flow_chunk(start_idx, end_idx, input_path, output_path):
 
     return True
 
-def calculate_optical_flow_zarr(file_path, output_path=None, chunk_size=100):
+def calculate_optical_flow_zarr(file_path, output_path=None, chunk_size=100, reliability_threshold=None):
     """
     Zarrファイルを入力とし、オプティカルフローを計算してZarrに保存します。
     Daskを用いて並列処理を行います。
@@ -114,7 +170,7 @@ def calculate_optical_flow_zarr(file_path, output_path=None, chunk_size=100):
         if i >= end: break
         
         # delayedを使って関数を遅延評価オブジェクトにする
-        task = delayed(_calc_flow_chunk)(i, end, file_path, output_path)
+        task = delayed(_calc_flow_chunk)(i, end, file_path, output_path, reliability_threshold)
         tasks.append(task)
 
     # 並列実行 (プログレスバー付き)
