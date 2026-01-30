@@ -99,18 +99,40 @@ def lk_opt_flow_optimized(images, xy_sig1, t_sig, w_sig, chunk_size=10, output=N
         gc.collect()
 
 if __name__ == "__main__":
-    nd2_file = nd2.imread(FILE_PATH, dask=True)
-    # 軸構成に注意：通常 nd2は (T, C, Y, X)
-    images = nd2_file[:, 0, :, :] 
+
+    path0 = "/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp"
+    path1 = "/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp001"
+    path2 = "/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp002"
+    path3 = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop'
+    path4 = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1'
+
+    file_paths = [path0 + '/exp.nd2',
+                  path1 + '/exp001.nd2',
+                  path2 + '/exp002.nd2',
+                  path3 + '/beads_trans_crop_crop.nd2',
+                  path4 + '/exp_crop1.nd2']
     
-    n_frames, h, w = images.shape
-    output_zarr_path = os.path.join(FOLDER_PATH, 'optical_flow_output.zarr')
+    folder_paths = [path0,
+                    path1,
+                    path2,
+                    path3,
+                    path4]
     
-    # 対策: Zarrのchunkも計算単位に合わせる
-    opt_zarr = zarr.open(output_zarr_path, mode='w', 
-                         shape=(3, n_frames, h, w), 
-                         dtype=np.float32, 
-                         chunks=(1, CHUNK_SIZE, h, w))
-    
-    lk_opt_flow_optimized(images, xy_sig1=XY_SIGMA, t_sig=T_SIGMA, w_sig=W_SIGMA, 
-                          chunk_size=CHUNK_SIZE, output=opt_zarr)
+    for FILE_PATH, FOLDER_PATH in zip(file_paths, folder_paths):
+        print(f"Processing file: {FILE_PATH}")
+        # nd2ファイルの読み込み（Dask配列として）
+        nd2_file = nd2.imread(FILE_PATH, dask=True)
+        # 軸構成に注意：通常 nd2は (T, C, Y, X)
+        images = nd2_file[:, 0, :, :] 
+        
+        n_frames, h, w = images.shape
+        output_zarr_path = os.path.join(FOLDER_PATH, 'optical_flow_output.zarr')
+        
+        # 対策: Zarrのchunkも計算単位に合わせる
+        opt_zarr = zarr.open(output_zarr_path, mode='w', 
+                            shape=(3, n_frames, h, w), 
+                            dtype=np.float32, 
+                            chunks=(1, CHUNK_SIZE, h, w))
+        
+        lk_opt_flow_optimized(images, xy_sig1=XY_SIGMA, t_sig=T_SIGMA, w_sig=W_SIGMA, 
+                            chunk_size=CHUNK_SIZE, output=opt_zarr)
