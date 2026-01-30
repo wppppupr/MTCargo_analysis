@@ -1,5 +1,6 @@
 import nd2
 import zarr
+import os
 import numpy as np
 import dask.array as da
 from scipy.ndimage import convolve
@@ -203,7 +204,7 @@ if __name__ == "__main__":
     
     # Output Zarr
     n_frames, h, w = images.shape
-    output_zarr_path = 'optical_flow_output.zarr'
+    output_zarr_path = os.path.join(FOLDER_PATH, 'optical_flow_output.zarr')
     opt_zarr = zarr.open(output_zarr_path, mode='w', shape=(3, n_frames, h, w), dtype=np.float32, chunks=(1, 10, h, w)) # Chunking T=10?
     
     lk_opt_flow(images, xy_sig1=XY_SIGMA, t_sig=T_SIGMA, w_sig=W_SIGMA, chunk_size=100, output=opt_zarr)
