@@ -10,7 +10,7 @@ FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1'
 
 scale = 0.11
 
-rectangle = 2
+rectangle = 5
 
 height = rectangle/scale
 weight = rectangle/scale
