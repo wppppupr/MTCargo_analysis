@@ -17,6 +17,8 @@ scale = 0.11  # μm/pixel
 PIXEL_PER_FLOW_UNIT = int(velocity * time_interval / scale)  # ピクセル単位でのフローのスケールファクター
 MAXLEVEL = 2
 
+CHUNK_SIZE= 1
+
 ####################################################
 
 def _calc_flow_chunk(start_idx, end_idx, input_path, output_path, WinSize=(15, 15), maxLevel=2):
@@ -231,7 +233,7 @@ if __name__ == "__main__":
     WinSize = (PIXEL_PER_FLOW_UNIT, PIXEL_PER_FLOW_UNIT)
 
     # 1. まず高速に計算だけ行う
-    flow_zarr_path = calculate_optical_flow_zarr(FILE_PATH, chunk_size=1, WinSize=WinSize, maxLevel=MAXLEVEL)
+    flow_zarr_path = calculate_optical_flow_zarr(FILE_PATH, chunk_size=CHUNK_SIZE, WinSize=WinSize, maxLevel=MAXLEVEL)
     
     # 2. 必要なら動画にする (計算結果のZarrを使う)
     video_name = FILE_PATH.replace('.zarr', '_opticalflow.mp4')
