@@ -9,6 +9,13 @@ from tqdm import tqdm
 ####################################################
 
 FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1/MTs_red.zarr'
+
+velocity = 0.5  # μm/sec
+time_interval = 4  # sec/frame
+scale = 0.11  # μm/pixel
+
+PIXEL_PER_FLOW_UNIT = velocity * time_interval / scale  # ピクセル単位でのフローのスケールファクター
+
 ####################################################
 
 def _calc_flow_chunk(start_idx, end_idx, input_path, output_path, WinSize=(15, 15), maxLevel=2):
