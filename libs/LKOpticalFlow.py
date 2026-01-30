@@ -9,8 +9,8 @@ import gc # メモリ解放用
 
 ####################################################
 
-FOLDER_PATH= '/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp001'
-FILE_PATH = FOLDER_PATH + '/exp001.nd2'
+#FOLDER_PATH= '/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp001'
+#FILE_PATH = FOLDER_PATH + '/exp001.nd2'
 
 velocity = 0.5  # μm/sec
 time_interval = 4  # sec/frame
@@ -118,15 +118,15 @@ if __name__ == "__main__":
                     path3,
                     path4]
     
-    for FILE_PATH, FOLDER_PATH in zip(file_paths, folder_paths):
-        print(f"Processing file: {FILE_PATH}")
+    for file, folder in zip(file_paths, folder_paths):
+        print(f"Processing file: {file}")
         # nd2ファイルの読み込み（Dask配列として）
-        nd2_file = nd2.imread(FILE_PATH, dask=True)
+        nd2_file = nd2.imread(file, dask=True)
         # 軸構成に注意：通常 nd2は (T, C, Y, X)
         images = nd2_file[:, 0, :, :] 
         
         n_frames, h, w = images.shape
-        output_zarr_path = os.path.join(FOLDER_PATH, 'optical_flow_output.zarr')
+        output_zarr_path = os.path.join(folder, 'optical_flow_output.zarr')
         
         # 対策: Zarrのchunkも計算単位に合わせる
         opt_zarr = zarr.open(output_zarr_path, mode='w', 
