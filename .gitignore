@@ -13,4 +13,6 @@ env/
 
 # --- Data & Config ---
 data/
-.ipynb_checkpoints/
+.ipynb_checkpoints/# pixi environments
+.pixi/*
+!.pixi/config.toml
