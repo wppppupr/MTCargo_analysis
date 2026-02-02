@@ -102,19 +102,15 @@ if __name__ == "__main__":
 
     mypass = '/media/sasaki/My Passport/Sasaki/MTSingleBeads'
 
-    path0 = os.path.join(mypass,"20260122/exp")
-    path1 = os.path.join(mypass,"20260122/exp001")
     path2 = os.path.join(mypass,"20260122/exp002")
     path3 = os.path.join(mypass,"20260121/beads_trans_crop_crop")
     path4 = os.path.join(mypass,"20260121/exp_crop1")
-    file_paths = [path0 + '/exp.nd2',
-                  path1 + '/exp001.nd2',
+    file_paths = [
                   path2 + '/exp002.nd2',
                   path3 + '/beads_trans_crop_crop.nd2',
                   path4 + '/exp_crop1.nd2']
     
-    folder_paths = [path0,
-                    path1,
+    folder_paths = [
                     path2,
                     path3,
                     path4]
