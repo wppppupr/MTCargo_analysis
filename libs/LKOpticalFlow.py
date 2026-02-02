@@ -100,12 +100,13 @@ def lk_opt_flow_optimized(images, xy_sig1, t_sig, w_sig, chunk_size=10, output=N
 
 if __name__ == "__main__":
 
-    path0 = "/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp"
-    path1 = "/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp001"
-    path2 = "/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp002"
-    path3 = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop'
-    path4 = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1'
+    mypass = '/media/sasaki/My Passport/Sasaki/MTSingleBeads'
 
+    path0 = os.path.join(mypass,"20260122/exp")
+    path1 = os.path.join(mypass,"20260122/exp001")
+    path2 = os.path.join(mypass,"20260122/exp002")
+    path3 = os.path.join(mypass,"20260121/beads_trans_crop_crop")
+    path4 = os.path.join(mypass,"20260121/exp_crop1")
     file_paths = [path0 + '/exp.nd2',
                   path1 + '/exp001.nd2',
                   path2 + '/exp002.nd2',
