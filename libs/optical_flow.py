@@ -157,7 +157,7 @@ def create_flow_movie(image_path, flow_path, output_video_name, scale=5, step=10
         if frame.dtype != np.uint8:
             frame = (frame / 256).astype(np.uint8) if frame.max() > 255 else frame.astype(np.uint8)
             
-        flow = flow_zarr[i]
+        flow = flow_zarr[:, i, :, :]
         
         # 左: 元画像（緑チャンネル）
         mt_img = np.zeros((height, width, 3), dtype=np.uint8)
