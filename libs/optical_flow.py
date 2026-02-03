@@ -8,7 +8,8 @@ from tqdm import tqdm
 
 ####################################################
 
-FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1/MTs_red.zarr'
+mypass = '/media/sasaki/My Passport/Sasaki/MTSingleBeads'
+FILE_PATH = os.path.join(mypass, '20260122/exp002')
 
 velocity = 0.5  # μm/sec
 time_interval = 4  # sec/frame
@@ -230,14 +231,16 @@ def getP(path):
 
 if __name__ == "__main__":
     
-    WinSize = (PIXEL_PER_FLOW_UNIT, PIXEL_PER_FLOW_UNIT)
+    #WinSize = (PIXEL_PER_FLOW_UNIT, PIXEL_PER_FLOW_UNIT)
 
     # 1. まず高速に計算だけ行う
-    flow_zarr_path = calculate_optical_flow_zarr(FILE_PATH, chunk_size=CHUNK_SIZE, WinSize=WinSize, maxLevel=MAXLEVEL)
+    #flow_zarr_path = calculate_optical_flow_zarr(FILE_PATH, chunk_size=CHUNK_SIZE, WinSize=WinSize, maxLevel=MAXLEVEL)
     
     # 2. 必要なら動画にする (計算結果のZarrを使う)
-    video_name = FILE_PATH.replace('.zarr', '_opticalflow.mp4')
-    create_flow_movie(FILE_PATH, flow_zarr_path, video_name, scale=5, step=10)
+    image_path = os.path.join(FILE_PATH, "MTs_red.zarr")
+    flow_path = os.path.join(FILE_PATH, "optical_flow_output.zarr")
+    output_video_name = os.path.join(FILE_PATH, 'opticalflow.mp4')
+    create_flow_movie(image_path, flow_path, output_video_name, scale=5, step=10)
 
     # 3. Polar度の計算
-    _ = getP(FILE_PATH)
+    #_ = getP(FILE_PATH)
