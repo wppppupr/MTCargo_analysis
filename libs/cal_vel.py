@@ -5,7 +5,7 @@ from scipy.optimize import curve_fit
 
 def cal(tracking_df, scale=1, frame_interval=1, pos_window=None, pos_center=False, pos_min_periods=1):
     """
-    データフレーム内の各particleごとに位置を（オプションで）平滑化してから，
+    データフレーム内の各particleごとに位置を（オプションで）平滑化してから
     速さ（スカラー値）と角度（ラジアン），角度変化などを計算して新しいカラムとして追加する関数。
 
     Parameters:
