@@ -15,6 +15,7 @@ path4 = os.path.join(folder, "20260122/exp002", track_path)
 
 paths = [path0, path1, path2, path3, path4]
 labels = ['exp_0', 'exp_1', 'exp_2', 'exp_3', 'exp_4'] # 任意のラベル
+threshold = 10 # 閾値を設定（例：粒子が10個未満のフレームは信頼しない）
 
 
 #####
@@ -73,7 +74,14 @@ for path, label in zip(paths, labels):
 df_polar_all = pd.DataFrame(polars_dict)
 df_count_all = pd.DataFrame(count_dict)
 
+# df_polar_all と同じ形状の True/False マスクを作成
+mask = df_count_all >= threshold
+
+# マスクを適用：条件を満たさない（False）場所を NaN にする
+df_polar_masked = df_polar_all.where(mask)
+
 df_polar_all.to_csv("analysis_data/global_polar.csv", index=False)
+df_polar_masked.to_csv("analysis_data/global_polar_masked.csv", index=False)
 df_count_all.to_csv("analysis_data/global_count.csv", index=False)
 
 print("done")
