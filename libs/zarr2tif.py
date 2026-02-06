@@ -5,7 +5,7 @@ from tqdm import tqdm
 
 # パス定義 (pathlibを使用することでOS差分を吸収しやすくします)
 base_path = Path('/media/sasaki/myssd/Sasaki/MTSingleBeads')
-folder = base_path / '20260121/exp_crop1'
+folder = base_path / '20260122/exp001'
 zarr_path = folder / 'MTs.zarr'
 output_tiff_path = folder / 'MTs.tif'
 
