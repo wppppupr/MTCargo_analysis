@@ -19,17 +19,19 @@ params = dict(
     poly_sigma = 1
 )
 
-p_dir = Path('/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp')
-p_file = p_dir / 'exp.nd2'
+p_dir = Path('/media/sasaki/myssd/Sasaki/MTsingleBeads/20260122/exp002')
+p_file = p_dir / 'exp002.nd2'
 
 ##########################################################################################
-
 scale = 0.11
 interval = 4
 sigma = (0.0, 1.0, 1.0)
+
+print(p_file)
+
 file = nd2.imread(p_file, dask = True)
 
-images = file[0:271, 1, :, :]
+images = file[:, 1, :, :]
 
 images_blur = gaussian_filter(images, sigma)
 
@@ -94,3 +96,5 @@ flows = compute_flow(images_8bit, params)
 flow_p = p_dir / 'green_flow.zarr'
 flows_zarr = zarr.open(flow_p, mode = 'w', dtype = flows.dtype, shape = flows.shape)
 flows_zarr[:] = flows
+
+print('done')
