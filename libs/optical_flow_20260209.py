@@ -19,8 +19,8 @@ params = dict(
     poly_sigma = 1
 )
 
-p_dir = Path('/media/sasaki/myssd/Sasaki/MTsingleBeads/20260122/exp002')
-p_file = p_dir / 'exp002.nd2'
+p_dir = Path('/Volumes/My passport/Sasaki/MTsingleBeads/20260122/exp')
+p_file = p_dir / 'exp.nd2'
 
 ##########################################################################################
 scale = 0.11
@@ -31,7 +31,7 @@ print(p_file)
 
 file = nd2.imread(p_file, dask = True)
 
-images = file[:, 1, :, :]
+images = file[0:272, 1, :, :]
 
 images_blur = gaussian_filter(images, sigma)
 

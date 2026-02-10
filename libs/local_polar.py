@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 ####################################################
 
-FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1'
+FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp002'
 
 scale = 0.11
 
@@ -15,12 +15,7 @@ rectangle = 5
 height = rectangle/scale
 weight = rectangle/scale
 
-
 ####################################################
-
-import numpy as np
-from tqdm import tqdm
-
 
 def local_polar(flow_array, tracks, height, weight):
     # --- パラメータ設定 ---
@@ -28,9 +23,9 @@ def local_polar(flow_array, tracks, height, weight):
     w2 = int(weight / 2)
 
     # トラックデータをNumpy配列化
-    xc_all = tracks['x'].to_numpy().astype(np.int32)
-    yc_all = tracks['y'].to_numpy().astype(np.int32)
-    frames_all = tracks['frame'].to_numpy().astype(np.int32)
+    xc_all = tracks['x'].to_numpy().astype(np.int16)
+    yc_all = tracks['y'].to_numpy().astype(np.int16)
+    frames_all = tracks['frame'].to_numpy().astype(np.int16)
 
     # 結果を格納する配列（最初はNaNで埋めておく）
     Ps = np.full(len(tracks), np.nan)
@@ -52,7 +47,7 @@ def local_polar(flow_array, tracks, height, weight):
 
     print(f"Processing {len(unique_frames)} frames...")
 
-    for t in tqdm(unique_frames):
+    for t in tqdm(unique_frames[1:]):
         # 1. このフレームにある点のインデックスを全て取得（ブールマスク）
         mask = (frames_all == t)
         
@@ -66,7 +61,7 @@ def local_polar(flow_array, tracks, height, weight):
 
         # 2. 現在のフレーム画像を取得（ここがリストやh5pyでも動く理由）
         # flow_array全体を配列アクセスせず、t番目だけを取り出すのでエラーにならない
-        current_flow = flow_array[t] 
+        current_flow = flow_array[t-1] 
         
         # 3. 座標計算（ブロードキャスト）
         # (N_points, window_h, window_w) のインデックスを作成
@@ -111,7 +106,7 @@ if __name__ == "__main__":
 
     print(f"Loading data from {FILE_PATH}...")
 
-    flow_path = os.path.join(FILE_PATH, "MTs_red_flow_LK.zarr")
+    flow_path = os.path.join(FILE_PATH, "green_flow.zarr")
     flow_array = zarr.open_array(flow_path, mode='r')
 
     tracks_path = os.path.join(FILE_PATH, "beads_tracks.csv")
@@ -120,6 +115,6 @@ if __name__ == "__main__":
     Ps = local_polar(flow_array, tracks, height, weight)
 
     tracks['local_P'] = Ps
-    output_path = os.path.join(FILE_PATH, f"beads_tracks_with_local_P_rec{rectangle}_LK.csv")
+    output_path = os.path.join(FILE_PATH, f"beads_tracks_with_local_P_rec{rectangle}_new.csv")
     tracks.to_csv(output_path, index=False)
     print(f"Saved tracks with local P to {output_path}")
