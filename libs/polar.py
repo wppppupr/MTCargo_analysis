@@ -5,7 +5,7 @@ import dask.array as da  # dask.arrayをインポート
 
 ####################################################
 
-FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1'
+FILE_PATH = '/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp002'
 ####################################################
 
 
@@ -39,8 +39,8 @@ def getP(path):
     return PNan
 
 def getP_dask(path):
-    flow_path = os.path.join(path, "MTs_red_flow_LK.zarr")
-    polar_path = os.path.join(path, "MTs_red_polar_LK.zarr")
+    flow_path = os.path.join(path, "green_flow.zarr")
+    polar_path = os.path.join(path, "green_globalP.zarr")
     
     # 1. zarrをdask arrayとして開く（ここではデータはまだ読み込まれません）
     # chunks='auto' で最適なサイズに自動調整
