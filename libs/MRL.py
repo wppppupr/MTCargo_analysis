@@ -86,7 +86,10 @@ plt.style.use('libs/my_style.mplstyle')
 fig, ax = plt.subplots()
 
 ax.plot(final_summary['lag'], final_summary['mrl_mean'])
-ax.fill_between(final_summary['lag'], final_summary['mrl_mean']+final_summary['mrl_exp_std']/np.sqrt(final_summary['n_experiments']), final_summary['mrl_mean']-final_summary['mrl_exp_std']/np.sqrt(final_summary['n_experiments']), alpha = 0.5)
+ax.fill_between(final_summary['lag'], 
+                final_summary['mrl_mean']+final_summary['mrl_exp_std']/np.sqrt(final_summary['n_experiments']), 
+                final_summary['mrl_mean']-final_summary['mrl_exp_std']/np.sqrt(final_summary['n_experiments']), 
+                alpha = 0.5)
 
 ax.set(
     xlim=(0, 200),
