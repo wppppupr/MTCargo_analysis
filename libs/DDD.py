@@ -1,4 +1,4 @@
-TAU = 100
+TAU = 200
 SCALE = 0.11
 INTERVAL = 4
 
@@ -76,7 +76,7 @@ def plot_displacement_radar(paths, tau, bins=36):
     # 見栄えの調整
     ax.set_theta_zero_location('E')  # 0度を東（右）に設定
     ax.set_theta_direction(1)        # 反時計回り
-    ax.set_title(f"Displacement Direction Distribution ($\\Delta$t={TAU} s)", va='bottom')
+    #ax.set_title(f"Displacement Direction Distribution ($\\Delta$t={TAU} s)", va='bottom')
     
     fig.savefig(output_png)
     fig.savefig(output_pdf)
