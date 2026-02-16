@@ -134,18 +134,22 @@ def calculate_dacf(df, scale, lag_time_frames, max_timeshift_frames):
 
 
 
-def _calculate_msd(pos):
-    num_steps = len(pos)
-    msd = []
-    for tau in range(1, num_steps):
-        displacements = pos[tau:] - pos[:-tau]
-        squared_displacements = np.mean(displacements**2, axis=1)
-        msd_tau = np.mean(squared_displacements)
-        msd.append(msd_tau)
+def _calculate_msd(pos, time_averaged = True):
+    if time_averaged == True:
+        num_steps = len(pos)
+        msd = []
+        for tau in range(1, num_steps):
+            displacements = pos[tau:] - pos[:-tau]
+            squared_displacements = np.mean(displacements**2, axis=1)
+            msd_tau = np.mean(squared_displacements)
+            msd.append(msd_tau)
+    else:
+        displacements = pos[1:] - pos[0]
+        msd = np.sum(displacements**2, axis = 1)
     
     return np.array(msd)
 
-def imsd(df, scale = 1, time_scale = 1, display=True, figsize=(10,8), title='indivisual MSD'):
+def imsd(df, scale = 1, time_scale = 1, time_averaged=True,  display=True, figsize=(10,8), title='indivisual MSD'):
     msd_df = pd.DataFrame(columns=['particle', 'lag time', 'MSD'])
 
     if display == True:
@@ -163,7 +167,7 @@ def imsd(df, scale = 1, time_scale = 1, display=True, figsize=(10,8), title='ind
         y = scale * group['y'].to_numpy()
         pos = np.array([x, y]).T
         lag_t = time_scale * np.arange(1,pos.shape[0])
-        msd=_calculate_msd(pos)
+        msd=_calculate_msd(pos, time_averaged)
         data = pd.DataFrame({'particle':particle_id, 'lag time':lag_t, 'MSD':msd})
 
         msd_df=pd.concat([msd_df, data])
@@ -270,10 +274,10 @@ def engp(ingp_list, display=True, figsize=(10,8), title = 'Ensemble NGP'):
 
     return engp, engp_err
 
-def get_msd(path, scale=0.11, interval=10, threshold = 0):
+def get_msd(path, scale=0.11, interval=10, threshold = 0,time_averaged = True):
     track = cv.cal(pd.read_csv(path), scale=scale ,frame_interval=interval)
     track = track[track['v'] >= threshold]
-    IMSD = imsd(track, scale, interval, display=bool)
+    IMSD = imsd(track, scale, interval, time_averaged, display=bool)
     EMSD, _ = emsd(IMSD, display=bool)
 
     return IMSD, EMSD
