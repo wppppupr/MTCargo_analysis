@@ -236,7 +236,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/nest-asyncio-1.6.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/networkx-3.6.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/notebook-shim-0.2.4-pyhd8ed1ab_1.conda
-      - conda: https://conda.anaconda.org/conda-forge/linux-64/numba-0.63.1-py311h3c884d5_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/numba-0.64.0-py311h3c884d5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/numpy-2.3.5-py311h2e04523_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/ocl-icd-2.3.3-hb9d3cd8_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/opencl-headers-2025.06.13-h5888daf_0.conda
@@ -269,6 +269,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pure_eval-0.2.3-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/py-opencv-4.13.0-qt6_py311h44848da_600.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pycparser-2.22-pyh29332c3_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/pyfftw-0.15.1-py311h0372a8f_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.19.2-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pyparsing-3.3.2-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/pyside6-6.10.1-py311he4c1a5a_0.conda
@@ -561,7 +562,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libxml2-2.15.1-h8d039ee_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.1-h8359307_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libzopfli-1.0.3-h9f76cd9_0.tar.bz2
-      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/llvm-openmp-21.1.8-h4a912ad_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/llvm-openmp-22.1.0-hc7d1edf_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/llvmlite-0.46.0-py311h27de090_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/looseversion-1.3.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/lz4-c-1.10.0-h286801f_1.conda
@@ -578,7 +579,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/nest-asyncio-1.6.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/networkx-3.6.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/notebook-shim-0.2.4-pyhd8ed1ab_1.conda
-      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/numba-0.63.1-py311had9367a_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/numba-0.64.0-py311h7b83a5e_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/numpy-2.3.5-py311had1e860_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/opencv-4.13.0-qt6_py311hdb2d507_601.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/openexr-3.4.4-he0ec429_1.conda
@@ -608,6 +609,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pure_eval-0.2.3-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/py-opencv-4.13.0-qt6_py311he96805e_601.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pycparser-2.22-pyh29332c3_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/pyfftw-0.15.1-py311h09efe57_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.19.2-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/pyobjc-core-12.1-py311hce6e4fa_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/pyobjc-framework-cocoa-12.1-py311h9049b8e_0.conda
@@ -5369,19 +5371,19 @@ packages:
   purls: []
   size: 147901
   timestamp: 1607309166373
-- conda: https://conda.anaconda.org/conda-forge/osx-arm64/llvm-openmp-21.1.8-h4a912ad_0.conda
-  sha256: 56bcd20a0a44ddd143b6ce605700fdf876bcf5c509adc50bf27e76673407a070
-  md5: 206ad2df1b5550526e386087bef543c7
+- conda: https://conda.anaconda.org/conda-forge/osx-arm64/llvm-openmp-22.1.0-hc7d1edf_0.conda
+  sha256: 0daeedb3872ad0fdd6f0d7e7165c63488e8a315d7057907434145fba0c1e7b3d
+  md5: ff0820b5588b20be3b858552ecf8ffae
   depends:
   - __osx >=11.0
   constrains:
-  - openmp 21.1.8|21.1.8.*
+  - openmp 22.1.0|22.1.0.*
   - intel-openmp <0.0a0
   license: Apache-2.0 WITH LLVM-exception
   license_family: APACHE
   purls: []
-  size: 285974
-  timestamp: 1765964756583
+  size: 285558
+  timestamp: 1772028716784
 - conda: https://conda.anaconda.org/conda-forge/linux-64/llvmlite-0.46.0-py311h41a00d4_0.conda
   sha256: d33d455c85366f409f26a4186bdf9c08ccc2f068d3cf5da48e9daa31457707a7
   md5: cc330c606421fa13d1139e9766259ae3
@@ -5762,59 +5764,59 @@ packages:
   - pkg:pypi/notebook-shim?source=hash-mapping
   size: 16817
   timestamp: 1733408419340
-- conda: https://conda.anaconda.org/conda-forge/linux-64/numba-0.63.1-py311h3c884d5_0.conda
-  sha256: d096edd82d702ab98ff13bedee05d4ffadf208ad7a3ed3a748b59b976d2ba3b0
-  md5: 3d05eaf5e34f383eec6ded1cac922bac
+- conda: https://conda.anaconda.org/conda-forge/linux-64/numba-0.64.0-py311h3c884d5_0.conda
+  sha256: 31664c8ae08c17ca33b4d2233dc372b562658a3b46328d17959498929b7801c6
+  md5: 4bbce71813dd6802e206ea78095ccde3
   depends:
   - __glibc >=2.17,<3.0.a0
   - _openmp_mutex >=4.5
   - libgcc >=14
   - libstdcxx >=14
   - llvmlite >=0.46.0,<0.47.0a0
-  - numpy >=1.22.3,<2.4
+  - numpy >=1.22.3,<2.5
   - numpy >=1.23,<3
   - python >=3.11,<3.12.0a0
   - python_abi 3.11.* *_cp311
   constrains:
-  - cuda-python >=11.6
-  - cuda-version >=11.2
   - libopenblas !=0.3.6
-  - cudatoolkit >=11.2
-  - tbb >=2021.6.0
   - scipy >=1.0
+  - cuda-python >=11.6
+  - tbb >=2021.6.0
+  - cudatoolkit >=11.2
+  - cuda-version >=11.2
   license: BSD-2-Clause
   license_family: BSD
   purls:
   - pkg:pypi/numba?source=hash-mapping
-  size: 5845064
-  timestamp: 1765466695252
-- conda: https://conda.anaconda.org/conda-forge/osx-arm64/numba-0.63.1-py311had9367a_0.conda
-  sha256: 320c3aa34ff7a069a29e7c129282a855535a56a24f968ba909a4b0093e0ddda9
-  md5: c05f68b104c8a09823bc2b4b32e9d523
+  size: 5873741
+  timestamp: 1772481812917
+- conda: https://conda.anaconda.org/conda-forge/osx-arm64/numba-0.64.0-py311h7b83a5e_0.conda
+  sha256: b3a3244d034dba545a0a3019725a20d5a511bffd10f36ad9ff24d2372f5ebd25
+  md5: 11732558e043ccc98b412e7ae201b8a2
   depends:
   - __osx >=11.0
   - libcxx >=19
   - llvm-openmp >=19.1.7
-  - llvm-openmp >=21.1.7
+  - llvm-openmp >=22.1.0
   - llvmlite >=0.46.0,<0.47.0a0
-  - numpy >=1.22.3,<2.4
+  - numpy >=1.22.3,<2.5
   - numpy >=1.23,<3
   - python >=3.11,<3.12.0a0
   - python >=3.11,<3.12.0a0 *_cpython
   - python_abi 3.11.* *_cp311
   constrains:
-  - libopenblas >=0.3.18,!=0.3.20
-  - tbb >=2021.6.0
-  - cuda-version >=11.2
-  - cudatoolkit >=11.2
-  - cuda-python >=11.6
   - scipy >=1.0
+  - libopenblas >=0.3.18,!=0.3.20
+  - cuda-python >=11.6
+  - cudatoolkit >=11.2
+  - cuda-version >=11.2
+  - tbb >=2021.6.0
   license: BSD-2-Clause
   license_family: BSD
   purls:
   - pkg:pypi/numba?source=hash-mapping
-  size: 5836264
-  timestamp: 1765808829293
+  size: 5873671
+  timestamp: 1772482103514
 - pypi: https://files.pythonhosted.org/packages/0e/cc/0d97ef55dda48cb0f93d7b92d761208e7a99bd2eea6b0e859426e6a99a21/numcodecs-0.16.5-cp311-cp311-macosx_11_0_arm64.whl
   name: numcodecs
   version: 0.16.5
@@ -6702,6 +6704,36 @@ packages:
   - python-ulid>=1,<4 ; python_full_version >= '3.9' and extra == 'python-ulid'
   - semver>=3.0.2 ; extra == 'semver'
   requires_python: '>=3.9'
+- conda: https://conda.anaconda.org/conda-forge/linux-64/pyfftw-0.15.1-py311h0372a8f_1.conda
+  sha256: be57160e2f730e7ac3f4c6f7ee4b4f13994ebaea3b943fea35f1118a0c4458f1
+  md5: b731278bd85f12ccbb1beb79a5ca31b7
+  depends:
+  - __glibc >=2.17,<3.0.a0
+  - libgcc >=14
+  - numpy >=1.23,<3
+  - python >=3.11,<3.12.0a0
+  - python_abi 3.11.* *_cp311
+  license: BSD-3-Clause AND GPL-2.0-or-later
+  license_family: GPL
+  purls:
+  - pkg:pypi/pyfftw?source=hash-mapping
+  size: 2062349
+  timestamp: 1763539726635
+- conda: https://conda.anaconda.org/conda-forge/osx-arm64/pyfftw-0.15.1-py311h09efe57_1.conda
+  sha256: 52308108c71dd72ebbb21e036e625780bd66a2689ac24cb885d4b2a9be5c1c6c
+  md5: 76ccc09cb6b5e768d8167e9d536d6f68
+  depends:
+  - __osx >=11.0
+  - numpy >=1.23,<3
+  - python >=3.11,<3.12.0a0
+  - python >=3.11,<3.12.0a0 *_cpython
+  - python_abi 3.11.* *_cp311
+  license: BSD-3-Clause AND GPL-2.0-or-later
+  license_family: GPL
+  purls:
+  - pkg:pypi/pyfftw?source=hash-mapping
+  size: 771841
+  timestamp: 1763540229894
 - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.19.2-pyhd8ed1ab_0.conda
   sha256: 5577623b9f6685ece2697c6eb7511b4c9ac5fb607c9babc2646c811b428fd46a
   md5: 6b6ece66ebcae2d5f326c77ef2c5a066
