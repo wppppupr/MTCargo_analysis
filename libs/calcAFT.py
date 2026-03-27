@@ -3,11 +3,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import zarr
-import cv2
-import sys
+from skimage import exposure
 from pathlib import Path
 from tqdm import tqdm
 import AFT_tools_v2 as AFT
+import concurrent.futures
+
+def _equalize_frame(frame):
+    frame_eq = exposure.equalize_hist(frame)
+    return (frame_eq * 255.0).astype(np.uint8)
 
 # コマンドライン引数の設定
 parser = argparse.ArgumentParser(description='Calculate AFT.')
@@ -20,6 +24,15 @@ base_path = Path(args.base_path)
 print('loading data from', base_path)
 
 green = zarr.open_array(str(base_path / "MTs.zarr"), read_only=True)
+
+print('equalizing histogram in parallel...')
+# equalize hist
+eq_green = np.empty(green.shape, dtype=np.uint8)
+    
+with concurrent.futures.ProcessPoolExecutor() as executor:
+    results = executor.map(_equalize_frame, green)
+    for i, frame_proc in enumerate(results):
+        eq_green[i] = frame_proc
 
 # AFT parameters
 window_size_um = 10 # MTs length = 10um
@@ -37,8 +50,9 @@ d = 30
 print("Calculating AFT...")
 
 x, y, u, v, im_theta, im_eccentricity = AFT.image_local_order(
-    green[:,:,:], window_size, overlap, save_path='', eccentricity_thresh=0.2,
-    plot_overlay=False, plot_angles=False, plot_eccentricity=False, save_figures=False
+    eq_green[:,:,:], window_size, overlap, save_path='', eccentricity_thresh=0.2,
+    plot_overlay=False, plot_angles=False, plot_eccentricity=False, save_figures=False,
+    n_jobs=-1
 )
 
 im_theta = np.array(im_theta)

@@ -119,8 +119,73 @@ def least_moment(image, xcoords=None, ycoords=None):
 
     return least_moment_njit(image, xcoords, ycoords)
 
+def _process_single_frame(im, im_mask_frame, rpos=None, cpos=None, radius=None, intensity_thresh=None, 
+                          precomputed_filter=None, window_mask=None, xcoords=None, ycoords=None, 
+                          eccentricity_thresh=None, arrow_length=None):
+    N_pts = len(rpos) * len(cpos)
+    x = np.empty(N_pts, dtype=np.int32)
+    y = np.empty(N_pts, dtype=np.int32)
+    u = np.empty(N_pts, dtype=np.float64)
+    v = np.empty(N_pts, dtype=np.float64)
+    im_theta = np.empty((len(rpos), len(cpos)), dtype=np.float64)
+    im_ecc = np.empty((len(rpos), len(cpos)), dtype=np.float64)
+    
+    idx = 0
+    for r_idx, r in enumerate(rpos):
+        for c_idx, c in enumerate(cpos):
+            x[idx] = c
+            y[idx] = r
+
+            # check to see if point is within image mask
+            if im_mask_frame[r,c] == True:
+                # define the window to analyze
+                im_window = im[r-radius:r+radius+1,c-radius:c+radius+1]
+
+                # check that it's above the intensity threshold
+                if np.mean(im_window) > intensity_thresh:
+                    # separate out the periodic and smooth components
+                    im_window_periodic, im_window_smooth = periodic_decomposition(im_window, precomputed_filter)
+                    # take the FFT of the periodic component
+                    im_window_fft = fftshift(fft2(im_window_periodic))
+                    # find the image norm and mulitply by the mask
+                    im_window_fft_norm = image_norm_njit(im_window_fft) * window_mask
+                    # calculate the angle and eccentricity of orientation based on the FFT moments
+                    theta, eccentricity = least_moment_njit(im_window_fft_norm, xcoords, ycoords)
+
+                    # correct for real space
+                    theta = theta + np.pi/2
+
+                    # map everything back to between -pi/2 and pi/2
+                    if theta > np.pi/2:
+                        theta -= np.pi
+
+                    # filter based on eccentricity
+                    if eccentricity < eccentricity_thresh:
+                        eccentricity = np.nan
+                        theta = np.nan
+
+                    # add the values to array
+                    im_theta[r_idx, c_idx] = theta
+                    im_ecc[r_idx, c_idx] = eccentricity
+                    u[idx] = np.cos(theta) * arrow_length if not np.isnan(theta) else np.nan
+                    v[idx] = np.sin(theta) * arrow_length if not np.isnan(theta) else np.nan
+                else:
+                    im_theta[r_idx, c_idx] = np.nan
+                    im_ecc[r_idx, c_idx] = np.nan
+                    u[idx] = np.nan
+                    v[idx] = np.nan
+            else:
+                im_theta[r_idx, c_idx] = np.nan
+                im_ecc[r_idx, c_idx] = np.nan
+                u[idx] = np.nan
+                v[idx] = np.nan
+
+            idx += 1
+
+    return x, y, u, v, im_theta, im_ecc
+
 def image_local_order(imstack, window_size = 33, overlap = 0.5, im_mask = None, intensity_thresh = 0, eccentricity_thresh = 0, 
-                        plot_overlay=False, plot_angles=False, plot_eccentricity=False, save_figures=False, save_path = ''):
+                        plot_overlay=False, plot_angles=False, plot_eccentricity=False, save_figures=False, save_path = '', n_jobs=1):
     
     # check if an output directory is given
     if len(save_path) > 0:
@@ -187,98 +252,97 @@ def image_local_order(imstack, window_size = 33, overlap = 0.5, im_mask = None, 
 
     N_pts = len(rpos) * len(cpos)
 
-    for frame,im in enumerate(imstack):
+    if n_jobs == 1:
+        for frame, im in enumerate(imstack):
+            x, y, u, v, im_theta, im_ecc = _process_single_frame(
+                im, im_mask[frame], rpos=rpos, cpos=cpos, radius=radius, 
+                intensity_thresh=intensity_thresh, precomputed_filter=precomputed_filter, 
+                window_mask=window_mask, xcoords=xcoords, ycoords=ycoords, 
+                eccentricity_thresh=eccentricity_thresh, arrow_length=arrow_length
+            )
 
-        x = np.empty(N_pts, dtype=np.int32)
-        y = np.empty(N_pts, dtype=np.int32)
-        u = np.empty(N_pts, dtype=np.float64)
-        v = np.empty(N_pts, dtype=np.float64)
-        im_theta = np.empty((len(rpos), len(cpos)), dtype=np.float64)
-        im_ecc = np.empty((len(rpos), len(cpos)), dtype=np.float64)
+            if plot_angles:
+                plt.figure()
+                plt.imshow(im_theta * 180 / np.pi, vmin=-90, vmax=90, cmap='hsv')
+                plt.colorbar()
+                plt.title('Orientation')
+                plt.show()
+                if save_figures:
+                    plt.savefig(save_path + 'angle_map_frame_%03d.tif' % (frame), format='png', dpi=300)
+
+            if plot_eccentricity:
+                plt.figure()
+                plt.imshow(im_ecc, vmin=0, vmax=1)
+                plt.colorbar()
+                plt.title('Eccentricity')
+                plt.show()
+                if save_figures:
+                    plt.savefig(save_path + 'eccentrcitiy_map_frame_%03d.tif' % (frame), format='png', dpi=300)
+
+            if plot_overlay:
+                plt.figure()
+                plt.imshow(im, cmap='Greys_r')
+                plt.quiver(x,y,u,v, color='yellow', pivot='mid', scale_units='xy', scale=overlap/2, headaxislength=0, headlength=0, width=0.005)
+                plt.title('Overlay')
+                plt.show()
+                if save_figures:
+                    plt.savefig(save_path + 'overlay_frame_%03d.tif' % (frame), format='png', dpi=300)
+
+            theta_stack.append(im_theta)
+            ecc_stack.append(im_ecc)
+            u_stack.append(u)
+            v_stack.append(v)
+    else:
+        import concurrent.futures
+        from functools import partial
         
-        idx = 0
-        for r_idx, r in enumerate(rpos):
-            for c_idx, c in enumerate(cpos):
-                x[idx] = c
-                y[idx] = r
+        max_workers = None if n_jobs <= 0 else n_jobs
+        
+        process_func = partial(_process_single_frame, 
+                               rpos=rpos, cpos=cpos, radius=radius, 
+                               intensity_thresh=intensity_thresh, 
+                               precomputed_filter=precomputed_filter, 
+                               window_mask=window_mask, xcoords=xcoords, ycoords=ycoords,
+                               eccentricity_thresh=eccentricity_thresh, arrow_length=arrow_length)
+        
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            # Map returns results in the same order as input
+            results = list(executor.map(process_func, imstack, im_mask))
+            
+        for frame, res in enumerate(results):
+            x, y, u, v, im_theta, im_ecc = res
+            
+            if plot_angles:
+                plt.figure()
+                plt.imshow(im_theta * 180 / np.pi, vmin=-90, vmax=90, cmap='hsv')
+                plt.colorbar()
+                plt.title('Orientation')
+                plt.show()
+                if save_figures:
+                    plt.savefig(save_path + 'angle_map_frame_%03d.tif' % (frame), format='png', dpi=300)
 
-                # check to see if point is within image mask
-                if im_mask[frame,r,c] == True:
-                    # define the window to analyze
-                    im_window = im[r-radius:r+radius+1,c-radius:c+radius+1]
+            if plot_eccentricity:
+                plt.figure()
+                plt.imshow(im_ecc, vmin=0, vmax=1)
+                plt.colorbar()
+                plt.title('Eccentricity')
+                plt.show()
+                if save_figures:
+                    plt.savefig(save_path + 'eccentrcitiy_map_frame_%03d.tif' % (frame), format='png', dpi=300)
 
-                    # check that it's above the intensity threshold
-                    if np.mean(im_window) > intensity_thresh:
-                        # separate out the periodic and smooth components
-                        im_window_periodic, im_window_smooth = periodic_decomposition(im_window, precomputed_filter)
-                        # take the FFT of the periodic component
-                        im_window_fft = fftshift(fft2(im_window_periodic))
-                        # find the image norm and mulitply by the mask
-                        im_window_fft_norm = image_norm_njit(im_window_fft) * window_mask
-                        # calculate the angle and eccentricity of orientation based on the FFT moments
-                        theta, eccentricity = least_moment_njit(im_window_fft_norm, xcoords, ycoords)
+            if plot_overlay:
+                plt.figure()
+                plt.imshow(imstack[frame], cmap='Greys_r')
+                plt.quiver(x,y,u,v, color='yellow', pivot='mid', scale_units='xy', scale=overlap/2, headaxislength=0, headlength=0, width=0.005)
+                plt.title('Overlay')
+                plt.show()
+                if save_figures:
+                    plt.savefig(save_path + 'overlay_frame_%03d.tif' % (frame), format='png', dpi=300)
 
-                        # correct for real space
-                        theta = theta + np.pi/2
-
-                        # map everything back to between -pi/2 and pi/2
-                        if theta > np.pi/2:
-                            theta -= np.pi
-
-                        # filter based on eccentricity
-                        if eccentricity < eccentricity_thresh:
-                            eccentricity = np.nan
-                            theta = np.nan
-
-                        # add the values to array
-                        im_theta[r_idx, c_idx] = theta
-                        im_ecc[r_idx, c_idx] = eccentricity
-                        u[idx] = np.cos(theta) * arrow_length if not np.isnan(theta) else np.nan
-                        v[idx] = np.sin(theta) * arrow_length if not np.isnan(theta) else np.nan
-                    else:
-                        im_theta[r_idx, c_idx] = np.nan
-                        im_ecc[r_idx, c_idx] = np.nan
-                        u[idx] = np.nan
-                        v[idx] = np.nan
-                else:
-                    im_theta[r_idx, c_idx] = np.nan
-                    im_ecc[r_idx, c_idx] = np.nan
-                    u[idx] = np.nan
-                    v[idx] = np.nan
-
-                idx += 1
-
-        if plot_angles:
-            plt.figure()
-            plt.imshow(im_theta * 180 / np.pi, vmin=-90, vmax=90, cmap='hsv')
-            plt.colorbar()
-            plt.title('Orientation')
-            plt.show()
-            if save_figures:
-                plt.savefig(save_path + 'angle_map_frame_%03d.tif' % (frame), format='png', dpi=300)
-
-        if plot_eccentricity:
-            plt.figure()
-            plt.imshow(im_ecc, vmin=0, vmax=1)
-            plt.colorbar()
-            plt.title('Eccentricity')
-            plt.show()
-            if save_figures:
-                plt.savefig(save_path + 'eccentrcitiy_map_frame_%03d.tif' % (frame), format='png', dpi=300)
-
-        if plot_overlay:
-            plt.figure()
-            plt.imshow(im, cmap='Greys_r')
-            plt.quiver(x,y,u,v, color='yellow', pivot='mid', scale_units='xy', scale=overlap/2, headaxislength=0, headlength=0, width=0.005)
-            plt.title('Overlay')
-            plt.show()
-            if save_figures:
-                plt.savefig(save_path + 'overlay_frame_%03d.tif' % (frame), format='png', dpi=300)
-
-        theta_stack.append(im_theta)
-        ecc_stack.append(im_ecc)
-        u_stack.append(u)
-        v_stack.append(v)
+            theta_stack.append(im_theta)
+            ecc_stack.append(im_ecc)
+            u_stack.append(u)
+            v_stack.append(v)
 
     # reduce dimensions if only one frame
     if N_images == 1:
