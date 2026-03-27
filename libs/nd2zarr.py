@@ -235,8 +235,8 @@ def process_nd2_to_zarrMT(file_path: str,
 
     # チャンクサイズの調整
     # メモリ効率と処理速度のバランスが良いサイズに再分割します
-    # 例: (時間方向10フレーム, Y全画素, X全画素) 単位で処理
-    preferred_chunks = (10, -1, -1)
+    # 例: (時間方向1フレーム, Y全画素, X全画素) 単位で処理
+    preferred_chunks = (1, -1, -1)
     dask_mt_raw = dask_mt_raw.rechunk(preferred_chunks)
 
     if normalize_global:
@@ -278,12 +278,12 @@ def process_nd2_to_zarrMT(file_path: str,
         
         os.makedirs(save_dir, exist_ok=True)
         
-        # Zarrの圧縮設定 (zstdは圧縮率と速度のバランスが良い)
+        # Zarrの圧縮設定 (lz4は速度重視)
         if int(zarr.__version__.split('.')[0]) >= 3:
             from zarr.codecs import BloscCodec
-            compressor_kwargs = {'compressors': [BloscCodec(cname='zstd', clevel=5, shuffle='shuffle')]}
+            compressor_kwargs = {'compressors': [BloscCodec(cname='lz4', clevel=1, shuffle='shuffle')]}
         else:
-            compressor_kwargs = {'compressor': Blosc(cname='zstd', clevel=5, shuffle=Blosc.SHUFFLE)}
+            compressor_kwargs = {'compressor': Blosc(cname='lz4', clevel=1, shuffle=Blosc.SHUFFLE)}
         
         print(f"Processing and saving to Zarr: {save_dir}")
         
