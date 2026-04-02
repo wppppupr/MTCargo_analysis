@@ -22,6 +22,8 @@ def main():
     parser.add_argument('--bg_color', type=str, default='#117733', help="Hex color for tinting original images.")
     parser.add_argument('--arrow_color', type=str, default='#CC6677', help="Hex color for flow arrows.")
     parser.add_argument('--thickness', type=int, default=2, help="Thickness of flow arrows.")
+    parser.add_argument('--vmax_prc', type=float, default=90, help="Percentile for max intensity normalization (e.g., 99.5).")
+    parser.add_argument('--vmin_prc', type=float, default=5, help="Percentile for min intensity normalization (e.g., 0.1).")
     
     args = parser.parse_args()
 
@@ -45,8 +47,28 @@ def main():
         if len(image_paths) < num_pairs + 1:
             print(f"Warning: Number of images ({len(image_paths)}) is less than necessary. Processing {actual_pairs} pairs.")
 
+        W_even = (W // 2) * 2
+        H_even = (H // 2) * 2
+
+        # コーデック設定
+        # Macでは 'avc1' がベストですが、失敗する場合は 'mp4v' に戻してください
         fourcc = cv2.VideoWriter_fourcc(*'avc1')
-        out = cv2.VideoWriter(args.output_video, fourcc, args.fps, (W, H))
+        out = cv2.VideoWriter(args.output_video, fourcc, args.fps, (W_even, H_even))
+
+        # --- Find global min and max for normalization ---
+        print(f"Calculating global min ({args.vmin_prc}th prc) and max ({args.vmax_prc}th prc) intensity for normalization...")
+        global_min = float('inf')
+        global_max = float('-inf')
+        for idx in tqdm(range(actual_pairs), desc="Finding min/max"):
+            img = cv2.imread(image_paths[idx], cv2.IMREAD_UNCHANGED)
+            if img is not None:
+                # Use percentiles to ignore bright outliers (dust/noise) which makes the rest too faint
+                global_min = min(global_min, np.percentile(img, args.vmin_prc))
+                global_max = max(global_max, np.percentile(img, args.vmax_prc))
+        
+        print(f"Global min: {global_min}, Global max: {global_max}")
+        if global_max <= global_min:
+            global_max = global_min + 1
 
         # --- Optimize memory: Use a lookup table (LUT) for tinting instead of float arrays ---
         lut = np.zeros((256, 3), dtype=np.uint8)
@@ -57,10 +79,15 @@ def main():
         flow_buffer = np.empty((1, 2, H, W), dtype=flows.dtype)
 
         for i in tqdm(range(actual_pairs), desc="Generating Video"):
-            img = cv2.imread(image_paths[i], cv2.IMREAD_GRAYSCALE)
+            img = cv2.imread(image_paths[i], cv2.IMREAD_UNCHANGED)
             if img is None:
                 print(f"Warning: Could not read image {image_paths[i]}")
                 continue
+            
+            # Normalize using global min/max
+            img = img.astype(np.float32)
+            img = (img - global_min) / (global_max - global_min)
+            img = np.clip(img * 255, 0, 255).astype(np.uint8)
 
             if (img.shape[0] != H) or (img.shape[1] != W):
                 img = cv2.resize(img, (W, H), interpolation=cv2.INTER_AREA)
@@ -70,7 +97,7 @@ def main():
             tinted_img = lut[img].copy()
 
             # Read flow directly into pre-allocated buffer to avoid memory leaks
-            flows.read_direct(flow_buffer, np.s_[i:i+1], np.s_[0:1])
+            flows.read_direct(flow_buffer, np.s_[i:i+1], np.s_[:])
             flow = flow_buffer[0] # shape: (2, H, W) -> [dx, dy]
 
             for y in range(0, H, args.step):
