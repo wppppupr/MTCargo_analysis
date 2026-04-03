@@ -7,8 +7,9 @@ from pathlib import Path
 from tqdm import tqdm
 import time
 import os
+from skimage.exposure import match_histograms
 
-def convert_nd2_to_tif_8bit(nd2_path, tif_output_dir, mode='minmax_global', target_channel=None):
+def convert_nd2_to_tif_8bit(nd2_path, tif_output_dir, mode='hist_match_prev', target_channel=None):
     """
     ND2ファイルを読み込み、8-bitに変換して、指定したディレクトリ内に個別のTIFF画像群として保存します。
     ターミナルから特定のチャンネルだけを抽出して変換することも可能です。
@@ -20,6 +21,7 @@ def convert_nd2_to_tif_8bit(nd2_path, tif_output_dir, mode='minmax_global', targ
               1. 'minmax_global'- 全体の最小・最大値を計算して正規化。（デフォルト設定。画像のチラつきを防ぎます）
               2. 'minmax_frame' - フレームごとに最小・最大を計算して正規化。（高速ですが、フレーム間で輝度が変わります）
               3. 'shift'        - 単純なビットシフトを使用。（最速・元の輝度を保持。暗く映る場合があります）
+              4. 'hist_match_prev' - 1つ前のフレームのヒストグラムに合わせる。（急激な輝度変化を抑えます）
         target_channel: 抽出するチャンネル名 (例: 'GFP')、またはインデックス (例: '0')。Noneなら全て。
     """
     nd2_path = Path(nd2_path)
@@ -117,10 +119,15 @@ def convert_nd2_to_tif_8bit(nd2_path, tif_output_dir, mode='minmax_global', targ
             else:
                 global_scale = 1.0
         
+        elif mode == 'hist_match_prev':
+            print("Mode: 'hist_match_prev' (Matching histogram to the previous frame)")
+        
         else:
             print("Mode: 'minmax_frame' (Normalizing frame by frame)")
 
         # --- メインループ ---
+        prev_frame_8bit = None
+        
         if len(dask_arr.shape) >= 3:
             for i in tqdm(range(num_frames), desc="Converting and saving frames"):
                 # compute()で1フレーム分だけメモリに展開（I/O負荷を軽減）
@@ -134,8 +141,21 @@ def convert_nd2_to_tif_8bit(nd2_path, tif_output_dir, mode='minmax_global', targ
                 
                 elif mode == 'minmax_global':
                     f_float = (frame.astype(np.float32) - global_min) * global_scale
-                    frame_8bit = np.clip(f_float, 0, 255).astype(np.uint8)
+                    frame_8bit = np.clip(f_float, 0, 255).astype(np.uint8)    
                 
+                elif mode == 'hist_match_prev':
+                    # 各フレームをまず自身のmin-maxで8-bit化
+                    f_min, f_max = float(frame.min()), float(frame.max())
+                    f_scale = 255.0 / (f_max - f_min) if f_max > f_min else 1.0
+                    f_float = (frame.astype(np.float32) - f_min) * f_scale
+                    frame_8bit = np.clip(f_float, 0, 255).astype(np.uint8)
+                    
+                    if prev_frame_8bit is not None:
+                        # 1つ前のフレーム(8-bit)のヒストグラムに合わせる
+                        frame_8bit = match_histograms(frame_8bit, prev_frame_8bit).astype(np.uint8)
+                    
+                    prev_frame_8bit = frame_8bit
+
                 else: # 'minmax_frame'
                     f_min, f_max = float(frame.min()), float(frame.max())
                     f_scale = 255.0 / (f_max - f_min) if f_max > f_min else 1.0
@@ -170,8 +190,8 @@ if __name__ == '__main__':
     parser.add_argument("input", type=str, help="入力ND2ファイルのパス")
     parser.add_argument("output_dir", type=str, help="連番TIFF画像を保存する出力ディレクトリのパス")
     parser.add_argument("--channel", type=str, default=None, help="抽出する特定のチャンネル名 (例: GFP) またはインデックス番号")
-    parser.add_argument("--mode", type=str, default="minmax_global", choices=['minmax_global', 'minmax_frame', 'shift'],
-                        help="8-bitへの圧縮モード。デフォルトは 'minmax_global'")
+    parser.add_argument("--mode", type=str, default="hist_match_prev", choices=['minmax_global', 'minmax_frame', 'shift', 'hist_match_prev'],
+                        help="8-bitへの圧縮モード。デフォルトは 'hist_match_prev'")
     
     args = parser.parse_args()
     
