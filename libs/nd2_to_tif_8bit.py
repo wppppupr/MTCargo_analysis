@@ -9,7 +9,7 @@ import time
 import os
 from skimage.exposure import match_histograms
 
-def convert_nd2_to_tif_8bit(nd2_path, tif_output_dir, mode='hist_match_prev', target_channel=None):
+def convert_nd2_to_tif_8bit(nd2_path, tif_output_dir, mode='minmax_global', target_channel=None):
     """
     ND2ファイルを読み込み、8-bitに変換して、指定したディレクトリ内に個別のTIFF画像群として保存します。
     ターミナルから特定のチャンネルだけを抽出して変換することも可能です。
@@ -190,8 +190,8 @@ if __name__ == '__main__':
     parser.add_argument("input", type=str, help="入力ND2ファイルのパス")
     parser.add_argument("output_dir", type=str, help="連番TIFF画像を保存する出力ディレクトリのパス")
     parser.add_argument("--channel", type=str, default=None, help="抽出する特定のチャンネル名 (例: GFP) またはインデックス番号")
-    parser.add_argument("--mode", type=str, default="hist_match_prev", choices=['minmax_global', 'minmax_frame', 'shift', 'hist_match_prev'],
-                        help="8-bitへの圧縮モード。デフォルトは 'hist_match_prev'")
+    parser.add_argument("--mode", type=str, default="minmax_global", choices=['minmax_global', 'minmax_frame', 'shift', 'hist_match_prev'],
+                        help="8-bitへの圧縮モード。デフォルトは 'minmax_global'。 'minmax_frame' はフレームごとに正規化、 'shift' はビットシフト、 'hist_match_prev' は前フレームのヒストグラムに合わせる方法です。")
     
     args = parser.parse_args()
     
