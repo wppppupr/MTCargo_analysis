@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import os
 import zarr
 import numpy as np
+import argparse
 from matplotlib.animation import FuncAnimation, FFMpegWriter
 from matplotlib.colors import LinearSegmentedColormap
 import pandas as pd
@@ -12,12 +13,30 @@ import matplotlib.font_manager as fm
 from tqdm import tqdm  # 進捗バー用ライブラリ
 
 # --- 設定 ---
-folder = "/Volumes/data/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop"
-output_name = os.path.join(folder, "tracking.mov")
-track_path = os.path.join(folder, "beads_tracks.csv")
-MTs_path = os.path.join(folder, "MTs.zarr")
-MTs_red_path = os.path.join(folder, "MTs_red.zarr")
-beads_path = os.path.join(folder, "beads.zarr")
+parser = argparse.ArgumentParser(description='Create movie from tracking data.')
+parser.add_argument('folder', type=str, help='Path to the directory containing hdf5 and csv')
+parser.add_argument('--tracks_csv', type=str, default='beads_tracks.csv', help='Trackpy csv file name')
+parser.add_argument('--MTs_zarr', type=str, default='MTs.zarr', help='MTs zarr file name')
+parser.add_argument('--MTs_red_zarr', type=str, default='MTs_red.zarr', help='MTs_red zarr file name')
+parser.add_argument('--beads_zarr', type=str, default='beads.zarr', help='beads zarr file name')
+parser.add_argument('--output_name', type=str, default='tracking.mov', help='Output movie file name')
+parser.add_argument('--scale', type=float, default=0.11, help='Scale factor')
+parser.add_argument('--vmax_prc', type=float, default=99.5, help='Global percentile for max intensity normalization (e.g., 99.5).')
+parser.add_argument('--vmin_prc', type=float, default=0.5, help='Global percentile for min intensity normalization (e.g., 0.5).')
+parser.add_argument('--vmax_prc_MTs', type=float, default=None, help='Percentile for max intensity of MTs.')
+parser.add_argument('--vmin_prc_MTs', type=float, default=None, help='Percentile for min intensity of MTs.')
+parser.add_argument('--vmax_prc_red', type=float, default=None, help='Percentile for max intensity of MTs_red.')
+parser.add_argument('--vmin_prc_red', type=float, default=None, help='Percentile for min intensity of MTs_red.')
+parser.add_argument('--vmax_prc_beads', type=float, default=None, help='Percentile for max intensity of beads.')
+parser.add_argument('--vmin_prc_beads', type=float, default=None, help='Percentile for min intensity of beads.')
+args = parser.parse_args()
+
+folder = args.folder
+output_name = os.path.join(folder, args.output_name)
+track_path = os.path.join(folder, args.tracks_csv)
+MTs_path = os.path.join(folder, args.MTs_zarr)
+MTs_red_path = os.path.join(folder, args.MTs_red_zarr)
+beads_path = os.path.join(folder, args.beads_zarr)
 
 scale = 0.11
 
@@ -40,6 +59,40 @@ for p, group in groups:
 
 total_frames = MTs.shape[0]
 
+# --- 輝度の正規化のためのグローバル最小・最大値の計算 ---
+print(f"Calculating global intensity percentiles...")
+# サンプルフレームでパーセンタイルを推定 (全フレームだと時間がかかるため、最大50フレームで計算)
+sample_frames = np.linspace(0, total_frames - 1, min(total_frames, 50), dtype=int)
+
+def get_vmin_vmax(zarr_array, vmin_prc, vmax_prc):
+    if zarr_array.shape[0] == 0:
+        return 0, 1
+    vmin = float('inf')
+    vmax = float('-inf')
+    for f in sample_frames:
+        img = zarr_array[f]
+        vmin = min(vmin, np.percentile(img, vmin_prc))
+        vmax = max(vmax, np.percentile(img, vmax_prc))
+    if vmax <= vmin:
+        vmax = vmin + 1
+    return vmin, vmax
+
+MTs_vmin_prc = args.vmin_prc_MTs if args.vmin_prc_MTs is not None else args.vmin_prc
+MTs_vmax_prc = args.vmax_prc_MTs if args.vmax_prc_MTs is not None else args.vmax_prc
+MTs_vmin, MTs_vmax = get_vmin_vmax(MTs, MTs_vmin_prc, MTs_vmax_prc)
+
+MTs_red_vmin_prc = args.vmin_prc_red if args.vmin_prc_red is not None else args.vmin_prc
+MTs_red_vmax_prc = args.vmax_prc_red if args.vmax_prc_red is not None else args.vmax_prc
+MTs_red_vmin, MTs_red_vmax = get_vmin_vmax(MTs_red, MTs_red_vmin_prc, MTs_red_vmax_prc)
+
+beads_vmin_prc = args.vmin_prc_beads if args.vmin_prc_beads is not None else args.vmin_prc
+beads_vmax_prc = args.vmax_prc_beads if args.vmax_prc_beads is not None else args.vmax_prc
+beads_vmin, beads_vmax = get_vmin_vmax(beads, beads_vmin_prc, beads_vmax_prc)
+
+print(f"MTs norm (vmin_prc={MTs_vmin_prc}, vmax_prc={MTs_vmax_prc}): min={MTs_vmin:.2f}, max={MTs_vmax:.2f}")
+print(f"MTs_red norm (vmin_prc={MTs_red_vmin_prc}, vmax_prc={MTs_red_vmax_prc}): min={MTs_red_vmin:.2f}, max={MTs_red_vmax:.2f}")
+print(f"beads norm (vmin_prc={beads_vmin_prc}, vmax_prc={beads_vmax_prc}): min={beads_vmin:.2f}, max={beads_vmax:.2f}")
+
 # --- カラーマップ作成 ---
 colormap_data = {
     "MTs": [(0, 0, 0), (119/255, 217/255, 168/255)],
@@ -61,11 +114,14 @@ fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
 # 背景初期化
 extent = [0, MTs.shape[2], 0, MTs.shape[1]]
 im1 = ax.imshow(MTs[0], cmap=colormaps['MTs'], interpolation='none', 
-                aspect='auto', origin='lower', extent=extent)
+                aspect='auto', origin='lower', extent=extent,
+                vmin=MTs_vmin, vmax=MTs_vmax)
 im2 = ax.imshow(MTs_red[0], cmap=colormaps['MTs_red'], interpolation='none', 
-                aspect='auto', alpha=0.9, origin='lower', extent=extent)
+                aspect='auto', alpha=0.9, origin='lower', extent=extent,
+                vmin=MTs_red_vmin, vmax=MTs_red_vmax)
 im3 = ax.imshow(beads[0], cmap=colormaps['beads'], interpolation='none', 
-                aspect='auto', alpha=0.6, origin='lower', extent=extent)
+                aspect='auto', alpha=0.6, origin='lower', extent=extent,
+                vmin=beads_vmin, vmax=beads_vmax)
 
 # Normalize設定
 norm = Normalize(vmin=0, vmax=total_frames)

@@ -1,25 +1,30 @@
 #!/bin/zsh
 
+TARGET_DIR = '/Volumes/My Passport/Sasaki/MTsingleBeads'
+
+# tifに変換する
 pixi run python nd2_to_tif_8bit.py \
-    '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop/beads_trans_crop_crop.nd2' \
-    '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop/GFP_hist_match_prev' \
-    --channel GFP \
+    '${TARGET_DIR}/beads_trans_crop_crop.nd2' \
+    '${TARGET_DIR}/20260121/beads_trans_crop_crop/TRITC_hist_match_prev' \
+    --channel TRITC \
     --mode hist_match_prev
 
-pixi run python nd2_to_tif_8bit.py \
-    '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1/exp_crop1.nd2' \
-    '/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1/GFP_hist_match_prev' \
-    --channel GFP \
-    --mode hist_match_prev
+# zarrに変換する (MTs)
+pixi run python nd2_to_zarr_channel.py \
+    --file_path '${TARGET_DIR}/beads_trans_crop_crop.nd2' \
+    --out_dir '${TARGET_DIR}/20260121/beads_trans_crop_crop' \
+    --channel TRITC \
+    --out_name TRITC.zarr
 
-pixi run python nd2_to_tif_8bit.py \
-    '/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp/exp_crop.nd2' \
-    '/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp/GFP_hist_match_prev' \
-    --channel GFP \
-    --mode hist_match_prev
+# zarrに変換する (beads)
+pixi run python nd2_to_zarr_channel.py \
+    --file_path '${TARGET_DIR}/beads_trans_crop_crop.nd2' \
+    --out_dir '${TARGET_DIR}/20260121/beads_trans_crop_crop' \
+    --sigma '(0, 2, 2)' \
+    --channel Cy5 \
+    --out_name Cy5.zarr
 
-pixi run python nd2_to_tif_8bit.py \
-    '/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp001/exp001.nd2' \
-    '/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp001/GFP_hist_match_prev' \
-    --channel GFP \
-    --mode hist_match_prev
+# nematic parameterの計算
+pixi run calcAFT.py \
+    '${TARGET_DIR}/TRITC.zarr' \
+    --n_jobs 4
