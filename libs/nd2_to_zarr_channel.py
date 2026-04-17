@@ -7,6 +7,7 @@ from skimage import exposure
 from scipy.ndimage import gaussian_filter
 import os
 import argparse
+import ast
 
 def process_chunk_wrapper(chunk, equalize, sigma, scale_factor, global_min=None, global_max=None):
     """
@@ -189,12 +190,18 @@ if __name__ == "__main__":
     parser.add_argument('--out_name', type=str, default=None, help='Output Zarr file name.')
     parser.add_argument('--normalize_global', type=bool, default=True, help='Normalize global min/max to prevent flickering.')
     parser.add_argument('--equalize', type=bool, default=False, help='Equalize histogram.')
-    parser.add_argument('--sigma', type=tuple, default=(0, 1, 1), help='Gaussian sigma for spatial smoothing.')
+    parser.add_argument('--sigma', type=str, default='(0, 1, 1)', help='Gaussian sigma for spatial smoothing.')
     parser.add_argument('--save', type=bool, default=True, help='Save the processed data to Zarr.')
     args = parser.parse_args()
     
     print('checking file...')
     
+    try:
+        sigma_val = ast.literal_eval(args.sigma)
+    except:
+        # 万が一失敗した時のフォールバック
+        sigma_val = (0, 0, 0)
+
     if os.path.exists(args.file_path):
         print('start processing nd2 to zarr...')
         process_channel_to_zarr(
@@ -203,7 +210,7 @@ if __name__ == "__main__":
             out_name=args.out_name,
             normalize_global=args.normalize_global,
             equalize=args.equalize, 
-            sigma=args.sigma,
+            sigma=sigma_val,
             save=args.save,
             out_dir=args.out_dir
         )

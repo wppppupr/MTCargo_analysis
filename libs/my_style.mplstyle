@@ -36,7 +36,7 @@ ytick.direction    : out
 
 ### LEGEND PROPERTIES ###
 legend.fontsize     : 18.0
-legend.frameon      : True  # 背景に馴染ませるため枠線なしを推奨
+legend.frameon      : True
 
 ### COLOR CYCLE (Paul Tol's Muted) ###
 # 各色に # を追加し、引用符を削除しました
