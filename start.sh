@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/bin/zsh
 
-TARGET_DIR="/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/20260512"
+TARGET_DIR='/Volumes/My Passport/Sasaki/MTsingleBeads/20260512'
 ND2="beads3um001.nd2"
 
 <<comment
