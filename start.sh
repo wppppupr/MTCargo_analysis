@@ -1,33 +1,34 @@
-#!/bin/zsh
+#!/bin/bash
 
-TARGET_DIR="/Volumes/My Passport/Sasaki/MTsingleBeads/beads3um/20260416"
-ND2="exp002.nd2"
+TARGET_DIR="/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/20260512"
+ND2="beads3um001.nd2"
 
 # 変数展開を有効にするため、ダブルクォーテーションで囲む
 # tifに変換する
-pixi run python nd2_to_tif_8bit.py \
+pixi run python libs/nd2_to_tif_8bit.py \
     "${TARGET_DIR}/${ND2}" \
-    "${TARGET_DIR}/TRITC_hist_match_prev" \
-    --channel TRITC \
+    "${TARGET_DIR}/GFP_hist_match_prev" \
+    --channel GFP \
     --mode hist_match_prev
 
 # zarrに変換する (MTs)
-pixi run python nd2_to_zarr_channel.py \
+pixi run python libs/nd2_to_zarr_channel.py \
     --file_path "${TARGET_DIR}/${ND2}" \
     --out_dir "${TARGET_DIR}" \
-    --channel TRITC \
-    --out_name TRITC.zarr
+    --channel GFP \
+    --out_name GFP.zarr
 
 # zarrに変換する (beads)
-pixi run python nd2_to_zarr_channel.py \
+pixi run python libs/nd2_to_zarr_channel.py \
     --file_path "${TARGET_DIR}/${ND2}" \
     --out_dir "${TARGET_DIR}" \
     --sigma '(0,2,2)'\
-    --channel 1 \
+    --channel Cy5 \
     --out_name beads.zarr
 
 # nematic parameterの計算
-pixi run python calcAFT.py \
+pixi run python libs/calcAFT.py \
     "${TARGET_DIR}" \
-    --zarr_path "TRITC.zarr" \
+    --zarr_path "GFP.zarr" \
     --n_jobs 4
+
