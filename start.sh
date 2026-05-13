@@ -3,11 +3,12 @@
 TARGET_DIR="/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/20260512"
 ND2="beads3um001.nd2"
 
+<<comment
 # 変数展開を有効にするため、ダブルクォーテーションで囲む
 # tifに変換する
 pixi run python libs/nd2_to_tif_8bit.py \
     "${TARGET_DIR}/${ND2}" \
-    "${TARGET_DIR}/GFP_hist_match_prev" \
+    "${TARGET_DIR}/GFP" \
     --channel GFP \
 
 # zarrに変換する (MTs)
@@ -24,6 +25,7 @@ pixi run python libs/nd2_to_zarr_channel.py \
     --sigma '(0,2,2)'\
     --channel Cy5 \
     --out_name beads.zarr
+comment
 
 # nematic parameterの計算
 pixi run python libs/calcAFT.py \
