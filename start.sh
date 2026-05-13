@@ -9,7 +9,6 @@ pixi run python libs/nd2_to_tif_8bit.py \
     "${TARGET_DIR}/${ND2}" \
     "${TARGET_DIR}/GFP_hist_match_prev" \
     --channel GFP \
-    --mode hist_match_prev
 
 # zarrに変換する (MTs)
 pixi run python libs/nd2_to_zarr_channel.py \
