@@ -23,6 +23,8 @@ def calc_optical_flow(tif_folder, output_h5):
     tif_folder = Path(tif_folder)
     output_h5 = Path(output_h5)
 
+    print(f'Calculating optical flow for TIFF files in: {tif_folder}')
+
     # 1. 画像のリストアップと準備
     files = sorted(list(tif_folder.glob('*.tif')))
     if not files:
