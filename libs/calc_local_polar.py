@@ -16,6 +16,8 @@ def main():
     parser.add_argument('--tracks_csv', type=str, default='beads_tracks.csv', help='Trackpy csv file name')
     parser.add_argument('--windows', type=str, nargs='+', default=['10:200:10', '200:2000:100'], 
                         help='Window sizes. Accepts space/comma separated numbers, or start:stop:step (e.g. 10 50 100, or 10:200:10)')
+    parser.add_argument('--roi_bbox', type=int, nargs=4, default=None, metavar=('XMIN', 'XMAX', 'YMIN', 'YMAX'),
+                        help='Bounding box for flow ROI (xmin xmax ymin ymax)')
     args = parser.parse_args()
 
     base_path = Path(args.base_path)
@@ -66,6 +68,21 @@ def main():
 
         active_frames = sorted([f for f in grouped.groups.keys() if f < num_frames])
 
+        if args.roi_bbox is not None:
+            roi_xmin, roi_xmax, roi_ymin, roi_ymax = args.roi_bbox
+            roi_xmin = np.clip(roi_xmin, 0, cols - 1)
+            roi_xmax = np.clip(roi_xmax, 0, cols - 1)
+            roi_ymin = np.clip(roi_ymin, 0, rows - 1)
+            roi_ymax = np.clip(roi_ymax, 0, rows - 1)
+            
+            # create slices for ROI to extract the field
+            roi_y_slice = slice(roi_ymin, roi_ymax + 1)
+            roi_x_slice = slice(roi_xmin, roi_xmax + 1)
+            
+            polar_order_roi_array = np.full((len(local_sizes), num_frames), np.nan, dtype=np.float32)
+        else:
+            polar_order_roi_array = None
+
         # ds_particles の初期化 (ここで df_tracks を変換してしまう)
         if 'particle' not in df_tracks.columns:
             df_tracks['particle'] = np.arange(len(df_tracks))
@@ -96,10 +113,18 @@ def main():
                 m_y = flow_data[t, ..., 1].astype(np.float32)
             
             v_mag = np.hypot(m_x, m_y)
-            m_ux = m_x / v_mag
-            m_uy = m_y / v_mag
+            with np.errstate(divide='ignore', invalid='ignore'):
+                m_ux = m_x / v_mag
+                m_uy = m_y / v_mag
+                m_ux[~np.isfinite(m_ux)] = 0
+                m_uy[~np.isfinite(m_uy)] = 0
 
             p_vals = np.empty((len(local_sizes), num_p), dtype=np.float32)
+            
+            if args.roi_bbox is not None:
+                roi_p_vals = np.empty((len(local_sizes),), dtype=np.float32)
+            else:
+                roi_p_vals = None
             
             for w_idx, size in enumerate(local_sizes):
                 u_avg = uniform_filter(m_ux, size=size)
@@ -107,16 +132,22 @@ def main():
                 p_field = np.hypot(u_avg, v_avg, dtype=np.float32)
 
                 p_vals[w_idx, :] = p_field[y_idx, x_idx]
+                
+                if args.roi_bbox is not None:
+                    roi_p_vals[w_idx] = np.mean(p_field[roi_y_slice, roi_x_slice])
 
-            return t, p_vals, p_ids
+            return t, p_vals, p_ids, roi_p_vals
 
         # 3. 実行
         print(f"Calculating for window sizes: {local_sizes}...")
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            for t, p_vals, p_ids in tqdm(executor.map(process_frame, active_frames), total=len(active_frames)):
+            for t, p_vals, p_ids, roi_p_vals in tqdm(executor.map(process_frame, active_frames), total=len(active_frames)):
                 f_i = frame_to_idx[t]
                 p_indices = [particle_to_idx[p] for p in p_ids]
                 polar_order_array[:, f_i, p_indices] = p_vals
+                
+                if args.roi_bbox is not None:
+                    polar_order_roi_array[:, t] = roi_p_vals
 
     # 4. xarray Dataset の構築と保存
     print("\nConsolidating data into xarray...")
@@ -140,6 +171,27 @@ def main():
     ds_particles.to_zarr(str(out_particle), mode='w', consolidated=False)
     
     print(f"Success! Data saved to {out_particle}")
+
+    if args.roi_bbox is not None:
+        print("\nConsolidating ROI data into xarray...")
+        ds_roi = xr.Dataset(
+            data_vars={
+                'polar_order': xr.DataArray(
+                    polar_order_roi_array,
+                    dims=['window size', 'frame'],
+                    coords={'window size': local_sizes, 'frame': np.arange(num_frames)}
+                )
+            }
+        )
+        ds_roi.attrs['description'] = f'Local polar order analysis for flow ROI (xmin={roi_xmin}, xmax={roi_xmax}, ymin={roi_ymin}, ymax={roi_ymax})'
+        ds_roi.attrs['roi_bbox'] = [int(roi_xmin), int(roi_xmax), int(roi_ymin), int(roi_ymax)]
+        ds_roi.attrs['window sizes'] = local_sizes
+        
+        out_roi = base_path / "local_polar_flow_roi.zarr"
+        if out_roi.exists():
+            shutil.rmtree(out_roi, ignore_errors=True)
+        ds_roi.to_zarr(str(out_roi), mode='w', consolidated=False)
+        print(f"Success! ROI Data saved to {out_roi}")
 
 if __name__ == "__main__":
     main()
