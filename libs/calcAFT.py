@@ -17,7 +17,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Calculate Alignment by Fourier Transform (AFT) for a given image stack.')
     parser.add_argument('base_path', type=str, 
                         help='Path to the base directory containing MTs.zarr')
-    parser.add_argument('--zarr_path', type=str, default="MTs.zarr", 
+    parser.add_argument('--zarr_path', type=str, default="MTs.zarr",
                         help='Path to the Zarr file containing the image stack (default: MTs.zarr)')
     parser.add_argument('--window_size_um', type=float, default=10.0, 
                         help='Length of microtubules in um for window size calculation (default: 10.0)')

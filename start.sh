@@ -1,6 +1,6 @@
 #!/bin/zsh
 
-TARGET_DIR='/Volumes/My Passport/Sasaki/MTsingleBeads/20260512'
+TARGET_DIR='/Volumes/My Passport/Sasaki/MTsingleBeads/beads3um/20260512'
 ND2="beads3um001.nd2"
 
 <<comment
@@ -31,5 +31,4 @@ comment
 pixi run python libs/calcAFT.py \
     "${TARGET_DIR}" \
     --zarr_path "GFP.zarr" \
-    --n_jobs 4
-
+    --neighborhood_radius 5
