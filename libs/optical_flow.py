@@ -46,7 +46,7 @@ def calc_optical_flow(tif_folder, output_h5):
                                   chunks=(1, 2, h, w), # 1フレーム単位でチャンク化
                                   compression='lzf')
         
-        current_flow = np.zeros((2, h, w), np.float32)
+        current_flow = np.zeros((h, w, 2), np.float32)
         
         # 3. 1フレームずつ読み込みながら計算して書き込む (メモリに優しい)
         prev_img = tifffile.imread(files[0])
@@ -69,7 +69,7 @@ def calc_optical_flow(tif_folder, output_h5):
             )
             
             # 1フレーム分を HDF5 に書き込む（float32 -> float16 に自動変換）
-            dset[i] = current_flow
+            dset[i] = current_flow.transpose(2, 0, 1)
             
             # 次のループのために画像を入れ替え
             prev_img = next_img
