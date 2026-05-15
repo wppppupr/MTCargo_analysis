@@ -1,7 +1,7 @@
-TARGET_DIR='/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp'
-TARGET_DIR0='/Volumes/My Passport/Sasaki/MTsingleBeads/20260122/exp001'
-TARGET_DIR1='/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop'
-TARGET_DIR2='/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/exp_crop1'
+TARGET_DIR='/mnt/SSD/Sasaki/MTsingleBeads/20260122/exp'
+TARGET_DIR0='/mnt/SSD/Sasaki/MTsingleBeads/20260122/exp001'
+TARGET_DIR1='/mnt/SSD/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop'
+TARGET_DIR2='/mnt/SSD/Sasaki/MTsingleBeads/20260121/exp_crop1'
 
 #pixi run python libs/optical_flow.py "${TARGET_DIR}/GFP" "${TARGET_DIR}/Farneback.h5"
 pixi run python libs/optical_flow.py "${TARGET_DIR0}/GFP" "${TARGET_DIR0}/Farneback.h5"
