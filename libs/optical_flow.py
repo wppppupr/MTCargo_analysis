@@ -39,14 +39,14 @@ def calc_optical_flow(tif_folder, output_h5):
     # 2. HDF5ファイルを開いてデータセットを準備
     with h5py.File(output_h5, 'w') as h5f:
         # 形状を計算結果に合わせて (T, H, W, 2) にするか、(T, 2, H, W) にするか統一する
-        # ここでは後処理のしやすさを考え (T, H, W, 2) で作成
+        # ここでは後処理のしやすさを考え (T, 2, H, W) で作成
         dset = h5f.create_dataset('flows', 
-                                  shape=(num_pairs, h, w, 2), 
+                                  shape=(num_pairs, 2, h, w), 
                                   dtype=np.float16, 
-                                  chunks=(1, h, w, 2), # 1フレーム単位でチャンク化
+                                  chunks=(1, 2, h, w), # 1フレーム単位でチャンク化
                                   compression='lzf')
         
-        current_flow = np.zeros((h, w, 2), np.float32)
+        current_flow = np.zeros((2, h, w), np.float32)
         
         # 3. 1フレームずつ読み込みながら計算して書き込む (メモリに優しい)
         prev_img = tifffile.imread(files[0])
