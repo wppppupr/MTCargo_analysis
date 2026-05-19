@@ -18,6 +18,7 @@ def main():
                         help='Window sizes. Accepts space/comma separated numbers, or start:stop:step (e.g. 10 50 100, or 10:200:10)')
     parser.add_argument('--roi_bbox', type=int, nargs=4, default=None, metavar=('XMIN', 'XMAX', 'YMIN', 'YMAX'),
                         help='Bounding box for flow ROI (xmin xmax ymin ymax)')
+    parser.add_argument('--particle_radius', type=int, default=0, help='Radius (in pixels) around particles to mask out (0 to disable masking).')
     args = parser.parse_args()
 
     base_path = Path(args.base_path)
@@ -119,6 +120,19 @@ def main():
                 m_ux[~np.isfinite(m_ux)] = 0
                 m_uy[~np.isfinite(m_uy)] = 0
 
+            if args.particle_radius > 0:
+                particle_mask = np.zeros((rows, cols), dtype=bool)
+                particle_mask[y_idx, x_idx] = True
+                r = args.particle_radius
+                y_grid, x_grid = np.ogrid[-r:r+1, -r:r+1]
+                struct = x_grid**2 + y_grid**2 <= r**2
+                particle_mask = binary_dilation(particle_mask, structure=struct)
+                valid_mask = (~particle_mask).astype(np.float32)
+                m_ux_masked = m_ux * valid_mask
+                m_uy_masked = m_uy * valid_mask
+            else:
+                valid_mask = None
+
             p_vals = np.empty((len(local_sizes), num_p), dtype=np.float32)
             
             if args.roi_bbox is not None:
@@ -127,14 +141,21 @@ def main():
                 roi_p_vals = None
             
             for w_idx, size in enumerate(local_sizes):
-                u_avg = uniform_filter(m_ux, size=size)
-                v_avg = uniform_filter(m_uy, size=size)
+                if args.particle_radius > 0:
+                    valid_avg = uniform_filter(valid_mask, size=size)
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        u_avg = uniform_filter(m_ux_masked, size=size) / valid_avg
+                        v_avg = uniform_filter(m_uy_masked, size=size) / valid_avg
+                else:
+                    u_avg = uniform_filter(m_ux, size=size)
+                    v_avg = uniform_filter(m_uy, size=size)
+
                 p_field = np.hypot(u_avg, v_avg, dtype=np.float32)
 
                 p_vals[w_idx, :] = p_field[y_idx, x_idx]
                 
                 if args.roi_bbox is not None:
-                    roi_p_vals[w_idx] = np.mean(p_field[roi_y_slice, roi_x_slice])
+                    roi_p_vals[w_idx] = np.nanmean(p_field[roi_y_slice, roi_x_slice])
 
             return t, p_vals, p_ids, roi_p_vals
 
@@ -161,6 +182,7 @@ def main():
     # メタデータの付与
     ds_particles.attrs['description'] = 'Local polar order analysis: Particles'
     ds_particles.attrs['window sizes'] = local_sizes
+    ds_particles.attrs['particle_radius'] = args.particle_radius
 
     out_particle = base_path / "local_polar_w.zarr"
 
@@ -185,6 +207,7 @@ def main():
         )
         ds_roi.attrs['description'] = f'Local polar order analysis for flow ROI (xmin={roi_xmin}, xmax={roi_xmax}, ymin={roi_ymin}, ymax={roi_ymax})'
         ds_roi.attrs['roi_bbox'] = [int(roi_xmin), int(roi_xmax), int(roi_ymin), int(roi_ymax)]
+        ds_roi.attrs['particle_radius'] = args.particle_radius
         ds_roi.attrs['window sizes'] = local_sizes
         
         out_roi = base_path / "local_polar_flow_roi.zarr"
