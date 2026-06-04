@@ -9,6 +9,48 @@ import os
 import argparse
 import ast
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
+def create_zarr_array(zarr_path, shape, chunks, dtype, cname='zstd', clevel=5):
+    """
+    Creates a Zarr array on disk, supporting both Zarr v2 and Zarr v3.
+    """
+    zarr_version = int(zarr.__version__.split('.')[0])
+    
+    if zarr_version >= 3:
+        from zarr.codecs import BloscCodec, BytesCodec
+        codecs = [
+            BytesCodec(endian='little'),
+            BloscCodec(cname=cname, clevel=clevel, shuffle='shuffle')
+        ]
+        return zarr.create(
+            store=zarr_path,
+            shape=shape,
+            chunks=chunks,
+            dtype=dtype,
+            codecs=codecs,
+            overwrite=True
+        )
+    else:
+        from numcodecs import Blosc
+        compressor = Blosc(cname=cname, clevel=clevel, shuffle=Blosc.SHUFFLE)
+        return zarr.open(
+            zarr_path,
+            mode='w',
+            shape=shape,
+            chunks=chunks,
+            dtype=dtype,
+            compressor=compressor
+        )
+
 def process_chunk_wrapper(chunk, equalize, sigma, scale_factor, global_min=None, global_max=None):
     """
     Daskのブロック（チャンク）ごとに呼ばれる処理関数。
@@ -55,7 +97,8 @@ def process_channel_to_zarr(file_path: str,
                             equalize: bool = False,
                             sigma=(0, 1, 1),
                             save: bool = True,
-                            out_dir: str | None = None):
+                            out_dir: str | None = None,
+                            low_memory: bool = False):
     """
     nd2ファイルを読み込み、指定されたチャンネルを処理してZarr形式で保存します。
     """
@@ -118,28 +161,26 @@ def process_channel_to_zarr(file_path: str,
             sigma_2d = sigma[-2:] # 最後の2次元 (Y, X)
         else:
             sigma_2d = sigma
-            
-        # 次元の形に合わせてrechunk
-        rechunk_tuple = (10,) + (-1,) * (len(dask_raw.shape) - 1)
-        dask_raw = dask_raw.rechunk(rechunk_tuple)
 
+        # global min/maxの計算をrechunkの前に行い、メモリ消費を抑える
         if normalize_global:
             import dask
             print("Calculating global min/max for the channel... (This prevents flickering)")
-            c_min, c_max = dask.compute(dask_raw.min(), dask_raw.max())
+            if low_memory:
+                # 低メモリモードでは単一スレッド（同期的）で計算し、一時メモリの蓄積を防ぐ
+                with dask.config.set(scheduler='synchronous'):
+                    c_min, c_max = dask.compute(dask_raw.min(), dask_raw.max())
+            else:
+                c_min, c_max = dask.compute(dask_raw.min(), dask_raw.max())
+            c_min = float(c_min)
+            c_max = float(c_max)
+            print(f"Global Min: {c_min}, Global Max: {c_max}")
         else:
             c_min = c_max = None
 
-        dask_processed = dask_raw.map_blocks(
-            process_chunk_wrapper,
-            equalize=equalize,
-            sigma=sigma_2d,
-            scale_factor=scale_factor,
-            global_min=c_min,
-            global_max=c_max,
-            dtype=np.uint8
-        )
-        
+        # 次元の形に合わせてrechunk
+        rechunk_tuple = (10,) + (-1,) * (len(dask_raw.shape) - 1)
+
         if save:
             base_name = os.path.splitext(os.path.basename(file_path))[0]
             
@@ -152,13 +193,6 @@ def process_channel_to_zarr(file_path: str,
             
             os.makedirs(save_dir, exist_ok=True)
             
-            # Zarrの圧縮設定
-            if int(zarr.__version__.split('.')[0]) >= 3:
-                from zarr.codecs import BloscCodec
-                compressor_kwargs = {'compressors': [BloscCodec(cname='zstd', clevel=5, shuffle='shuffle')]}
-            else:
-                compressor_kwargs = {'compressor': Blosc(cname='zstd', clevel=5, shuffle=Blosc.SHUFFLE)}
-            
             if out_name:
                 zarr_name = out_name
                 if not zarr_name.endswith('.zarr'):
@@ -169,17 +203,85 @@ def process_channel_to_zarr(file_path: str,
                 
             zarr_path = os.path.join(save_dir, zarr_name)
             print(f"Processing and saving to Zarr: {zarr_path}")
-            
-            from dask.diagnostics import ProgressBar
-            with ProgressBar():
-                dask_processed.to_zarr(
-                    zarr_path, 
-                    overwrite=True,
-                    **compressor_kwargs
-                )
 
-            return zarr_path
+            if low_memory:
+                # --- 低メモリ順次書き込みモード ---
+                # Zarr配列の初期化
+                z_arr = create_zarr_array(
+                    zarr_path=zarr_path,
+                    shape=dask_raw.shape,
+                    chunks=rechunk_tuple,
+                    dtype=np.uint8
+                )
+                
+                chunk_size_t = rechunk_tuple[0]
+                num_frames = dask_raw.shape[0]
+                
+                from tqdm import tqdm
+                print("Writing to Zarr chunk-by-chunk (low-memory sequential mode)...")
+                for start_idx in tqdm(range(0, num_frames, chunk_size_t), desc="Saving chunks"):
+                    end_idx = min(start_idx + chunk_size_t, num_frames)
+                    
+                    # 該当チャンクのみをロードする (低メモリ用に同期的)
+                    with dask.config.set(scheduler='synchronous'):
+                        chunk = dask_raw[start_idx:end_idx].compute()
+                    
+                    # チャンクの処理
+                    processed_chunk = process_chunk_wrapper(
+                        chunk,
+                        equalize=equalize,
+                        sigma=sigma_2d,
+                        scale_factor=scale_factor,
+                        global_min=c_min,
+                        global_max=c_max
+                    )
+                    
+                    # Zarrスライスへ直接書き込む
+                    z_arr[start_idx:end_idx] = processed_chunk
+                
+                return zarr_path
+            
+            else:
+                # --- 通常の並列書き込みモード ---
+                dask_raw_rechunked = dask_raw.rechunk(rechunk_tuple)
+                dask_processed = dask_raw_rechunked.map_blocks(
+                    process_chunk_wrapper,
+                    equalize=equalize,
+                    sigma=sigma_2d,
+                    scale_factor=scale_factor,
+                    global_min=c_min,
+                    global_max=c_max,
+                    dtype=np.uint8
+                )
+                
+                # Zarrの圧縮設定
+                if int(zarr.__version__.split('.')[0]) >= 3:
+                    from zarr.codecs import BloscCodec
+                    compressor_kwargs = {'compressors': [BloscCodec(cname='zstd', clevel=5, shuffle='shuffle')]}
+                else:
+                    compressor_kwargs = {'compressor': Blosc(cname='zstd', clevel=5, shuffle=Blosc.SHUFFLE)}
+
+                from dask.diagnostics import ProgressBar
+                with ProgressBar():
+                    dask_processed.to_zarr(
+                        zarr_path, 
+                        overwrite=True,
+                        **compressor_kwargs
+                    )
+
+                return zarr_path
         else:
+            # save=Falseの時
+            dask_raw_rechunked = dask_raw.rechunk(rechunk_tuple)
+            dask_processed = dask_raw_rechunked.map_blocks(
+                process_chunk_wrapper,
+                equalize=equalize,
+                sigma=sigma_2d,
+                scale_factor=scale_factor,
+                global_min=c_min,
+                global_max=c_max,
+                dtype=np.uint8
+            )
             return dask_processed
 
 if __name__ == "__main__":
@@ -188,10 +290,11 @@ if __name__ == "__main__":
     parser.add_argument('--out_dir', type=str, required=True, help='Path to the output directory.')
     parser.add_argument('--channel', type=str, required=True, help='Target channel name or index to extract (e.g., "0", "GFP").')
     parser.add_argument('--out_name', type=str, default=None, help='Output Zarr file name.')
-    parser.add_argument('--normalize_global', type=bool, default=True, help='Normalize global min/max to prevent flickering.')
-    parser.add_argument('--equalize', type=bool, default=False, help='Equalize histogram.')
+    parser.add_argument('--normalize_global', type=str2bool, default=True, help='Normalize global min/max to prevent flickering.')
+    parser.add_argument('--equalize', type=str2bool, default=False, help='Equalize histogram.')
     parser.add_argument('--sigma', type=str, default='(0, 1, 1)', help='Gaussian sigma for spatial smoothing.')
-    parser.add_argument('--save', type=bool, default=True, help='Save the processed data to Zarr.')
+    parser.add_argument('--save', type=str2bool, default=True, help='Save the processed data to Zarr.')
+    parser.add_argument('--low_memory', type=str2bool, default=False, help='Enable low-memory sequential processing mode to prevent OOM errors.')
     args = parser.parse_args()
     
     print('checking file...')
@@ -212,7 +315,8 @@ if __name__ == "__main__":
             equalize=args.equalize, 
             sigma=sigma_val,
             save=args.save,
-            out_dir=args.out_dir
+            out_dir=args.out_dir,
+            low_memory=args.low_memory
         )
         print('done.')
     else:
