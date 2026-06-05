@@ -1,6 +1,6 @@
 #!/bin/bash
 
-TARGET_DIR='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads3um/20260603'
+TARGET_DIR='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads20um/20260602'
 
 for FILE in "${TARGET_DIR}"/*.nd2; do
     BASENAME=$(basename "$FILE")
@@ -28,10 +28,11 @@ for FILE in "${TARGET_DIR}"/*.nd2; do
         --channel Cy5 \
         --out_name "beads.zarr"
 
+    <<co
     # nematic parameterの計算
     pixi run python libs/calcAFT.py \
         "${TARGET_DIR}/${BASENAME%.nd2}" \
         --zarr_path "TRITC.zarr" \
         --neighborhood_radius 5
-
+co
 done

@@ -18,3 +18,5 @@ data/
 .ipynb_checkpoints/# pixi environments
 .pixi/*
 !.pixi/config.toml
+
+log.txt
