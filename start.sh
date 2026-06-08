@@ -1,6 +1,7 @@
 #!/bin/bash
 
-TARGET_DIR='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads20um/20260602'
+TARGET_DIR='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads7um/20260608'
+TARGET_DIR2='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads8um/20260608'
 
 for FILE in "${TARGET_DIR}"/*.nd2; do
     BASENAME=$(basename "$FILE")
@@ -10,16 +11,16 @@ for FILE in "${TARGET_DIR}"/*.nd2; do
     # tifに変換
     pixi run python libs/nd2_to_tif_8bit.py \
         "$FILE" \
-        "${TARGET_DIR}/${BASENAME%.nd2}/TRITC" \
-        --channel TRITC
+        "${TARGET_DIR}/${BASENAME%.nd2}/GFP" \
+        --channel GFP
 
     # zarrに変換する (MTs)
     pixi run python libs/nd2_to_zarr_channel.py \
         --file_path "$FILE" \
         --out_dir "${TARGET_DIR}/${BASENAME%.nd2}" \
-        --channel TRITC \
-        --out_name "TRITC.zarr"
-
+        --channel GFP \
+        --out_name "GFP.zarr"
+    <<co
     # zarrに変換する (beads)
     pixi run python libs/nd2_to_zarr_channel.py \
         --file_path "$FILE" \
@@ -27,12 +28,47 @@ for FILE in "${TARGET_DIR}"/*.nd2; do
         --sigma '(0,2,2)' \
         --channel Cy5 \
         --out_name "beads.zarr"
+co
 
-    <<co
     # nematic parameterの計算
     pixi run python libs/calcAFT.py \
         "${TARGET_DIR}/${BASENAME%.nd2}" \
-        --zarr_path "TRITC.zarr" \
+        --zarr_path "GFP.zarr" \
         --neighborhood_radius 5
-co
+
+done
+
+
+for FILE in "${TARGET_DIR2}"/*.nd2; do
+    BASENAME=$(basename "$FILE")
+
+    echo "Processing $BASENAME..."
+
+    # tifに変換
+    pixi run python libs/nd2_to_tif_8bit.py \
+        "$FILE" \
+        "${TARGET_DIR2}/${BASENAME%.nd2}/GFP" \
+        --channel GFP
+
+    # zarrに変換する (MTs)
+    pixi run python libs/nd2_to_zarr_channel.py \
+        --file_path "$FILE" \
+        --out_dir "${TARGET_DIR2}/${BASENAME%.nd2}" \
+        --channel GFP \
+        --out_name "GFP.zarr"
+
+    # zarrに変換する (beads)
+    pixi run python libs/nd2_to_zarr_channel.py \
+        --file_path "$FILE" \
+        --out_dir "${TARGET_DIR2}/${BASENAME%.nd2}" \
+        --sigma '(0,2,2)' \
+        --channel Cy5 \
+        --out_name "beads.zarr"
+
+    # nematic parameterの計算
+    pixi run python libs/calcAFT.py \
+        "${TARGET_DIR2}/${BASENAME%.nd2}" \
+        --zarr_path "GFP.zarr" \
+        --neighborhood_radius 5
+
 done
