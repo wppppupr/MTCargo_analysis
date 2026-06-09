@@ -1,22 +1,12 @@
 TARGET_DIR='/mnt/SSD/Sasaki/MTsingleBeads/20260122/exp'
-TARGET_DIR0='/mnt/SSD/Sasaki/MTsingleBeads/20260122/exp001'
-TARGET_DIR1='/mnt/SSD/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop'
-TARGET_DIR2='/mnt/SSD/Sasaki/MTsingleBeads/20260121/exp_crop1'
+H5_FILE='TRITC_flows.h5'
 
-<<comment
-#pixi run python libs/optical_flow.py "${TARGET_DIR}/GFP" "${TARGET_DIR}/Farneback.h5"
-pixi run python libs/optical_flow.py "${TARGET_DIR0}/GFP" "${TARGET_DIR0}/Farneback.h5"
-pixi run python libs/optical_flow.py "${TARGET_DIR1}/GFP" "${TARGET_DIR1}/Farneback.h5"
-pixi run python libs/optical_flow.py "${TARGET_DIR2}/GFP" "${TARGET_DIR2}/Farneback.h5"
-comment
+for FILE in "${TARGET_DIR}"/*.nd2; do
+    BASENAME=$(basename "$FILE")
 
-pixi run python libs/calc_local_polar.py "${TARGET_DIR}" --particle_radius 6
+    echo "Processing $BASENAME..."
 
-pixi run python libs/calc_local_polar.py "${TARGET_DIR0}" --particle_radius 6
-#pixi run python libs/calc_bg_polar.py "${TARGET_DIR0}"
+    pixi run python libs/calc_local_polar.py "${TARGET_DIR}/${BASENAME%.nd2}" --particle_radius 6 --h5_file "${H5_FILE}"
+    pixi run python libs/calc_bg_polar.py "${TARGET_DIR}/${BASENAME%.nd2}" --h5_file "${H5_FILE}"
 
-pixi run python libs/calc_local_polar.py "${TARGET_DIR1}" --particle_radius 6
-#pixi run python libs/calc_bg_polar.py "${TARGET_DIR1}"
-
-pixi run python libs/calc_local_polar.py "${TARGET_DIR2}" --particle_radius 6
-#pixi run python libs/calc_bg_polar.py "${TARGET_DIR2}"
+done

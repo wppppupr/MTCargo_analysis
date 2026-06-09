@@ -14,6 +14,7 @@ def main():
     parser = argparse.ArgumentParser(description='Calculate local polar order for particles and background.')
     parser.add_argument('base_path', type=str, help='Path to the directory containing hdf5 and csv')
     parser.add_argument('--tracks_csv', type=str, default='beads_tracks.csv', help='Trackpy csv file name')
+    parser.add_argument('--h5_file', type=str, default='GFP_flows.h5', help='H5 file name')
     parser.add_argument('--windows', type=str, nargs='+', default=['10:200:10', '200:2000:100'], 
                         help='Window sizes. Accepts space/comma separated numbers, or start:stop:step (e.g. 10 50 100, or 10:200:10)')
     parser.add_argument('--roi_bbox', type=int, nargs=4, default=None, metavar=('XMIN', 'XMAX', 'YMIN', 'YMAX'),
@@ -23,7 +24,7 @@ def main():
 
     base_path = Path(args.base_path)
     csv_path = base_path / args.tracks_csv
-    h5_path = base_path / "GFP_flows.h5"
+    h5_path = base_path / args.h5_file
 
     if not csv_path.exists() or not h5_path.exists():
         print("Error: Required files (CSV or H5) not found.")

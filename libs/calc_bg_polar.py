@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 def main():
     parser = argparse.ArgumentParser(description='Calculate local polar order for an arbitrary ROI.')
     parser.add_argument('base_path', type=str, help='Path to the directory containing hdf5 and csv')
+    parser.add_argument('--h5_file', type=str, default='GFP_flows.h5', help='H5 file name')
     parser.add_argument('--roi_x', type=int, default=None, help='X coordinate of the ROI center (optional)')
     parser.add_argument('--roi_y', type=int, default=None, help='Y coordinate of the ROI center (optional)')
     parser.add_argument('--tracks_csv', type=str, default='beads_tracks.csv', help='Trackpy csv file name')
@@ -22,7 +23,7 @@ def main():
 
     base_path = Path(args.base_path)
     csv_path = base_path / args.tracks_csv
-    h5_path = base_path / "GFP_flows.h5"
+    h5_path = base_path / args.h5_file
 
     if not h5_path.exists():
         print(f"Error: HDF5 file not found at {h5_path}")
