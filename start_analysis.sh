@@ -1,7 +1,9 @@
-TARGET_DIR='/mnt/SSD/Sasaki/MTsingleBeads/20260122/exp'
+TARGET_DIR='/Volumes/data/Sasaki/MTsingleBeads/beads3um/20260603'
 H5_FILE='TRITC_flows.h5'
 
-for FILE in "${TARGET_DIR}"/*.nd2; do
+for FILE in "${TARGET_DIR}"/*; do
+    [ -d "$FILE" ] || continue
+    
     BASENAME=$(basename "$FILE")
 
     echo "Processing $BASENAME..."
