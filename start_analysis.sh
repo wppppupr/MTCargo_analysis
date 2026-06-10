@@ -1,5 +1,5 @@
-TARGET_DIR='/Volumes/data/Sasaki/MTsingleBeads/beads7um/20260608'
-H5_FILE='TRITC_flows.h5'
+TARGET_DIR='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads8um/20260608'
+H5_FILE='GFP_flows.h5'
 
 for FILE in "${TARGET_DIR}"/*; do
     [ -d "$FILE" ] || continue

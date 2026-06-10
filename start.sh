@@ -1,17 +1,6 @@
 #!/bin/bash
 
-TARGET_DIR='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads7um/20260608'
-TARGET_DIR2='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads8um/20260608'
-
-# zarrに変換する (beads)
-pixi run python libs/nd2_to_zarr_channel.py \
-    --file_path "/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads8um/20260608/beads8um.nd2" \
-    --out_dir /mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads8um/20260608/beads8um \
-    --sigma '(0,2,2)' \
-    --channel Cy5 \
-    --out_name "beads.zarr"
-
-<<co
+TARGET_DIR='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads8um/20260609'
 
 for FILE in "${TARGET_DIR}"/*.nd2; do
     BASENAME=$(basename "$FILE")
@@ -47,4 +36,4 @@ for FILE in "${TARGET_DIR}"/*.nd2; do
 
 done
 
-co
+echo "Done"
