@@ -35,63 +35,74 @@ def concatMSD(folder, interval_list, scale = 0.11):
     
     return pd.concat(MSD_list)
 
+def calc_MSD(MSD_df):
+    emsd = MSD_df.groupby('lag time').mean()['MSD']
+    N = 1 + max(MSD_df["exp"])
+    emsd_err = MSD_df.groupby('lag time').std()['MSD'] / np.sqrt(N)
+
+    return emsd, emsd_err, N
+
+def fit(msd_df, min_t = 20, max_t = 144):
+    # expごとにフィッティングを行う
+    popt_list = []
+    pcov_list = []
+    for i in msd_df["exp"].unique():
+        sub_df = msd_df[msd_df["exp"] == i]
+        mask = (sub_df.index >= min_t) & (sub_df.index <= max_t)
+        popt, pcov = curve_fit(fm.ln_pl, np.log10(np.float64(sub_df.index[mask])), np.log10(np.float64(sub_df["MSD"].to_numpy()[mask])))
+        popt_list.append(popt)
+        pcov_list.append(pcov)
+    return np.array(popt_list), np.array(pcov_list)
+
+def func(popt_list):
+    mean = np.mean(popt_list, axis=0)
+    err = np.std(popt_list, axis=0)/np.sqrt(popt_list.shape[0])
+    return mean, err
+
 def main():
-    I_concat_1um = concatMSD(mypass / "beads1um", [4, 4, 4, 4])
-    I_concat_3um = concatMSD(mypass / "beads3um", [4, 4, 4])
-    I_concat_7um = concatMSD(mypass / "beads7um", [4, 4, 4])
-    #I_concat_8um = concatMSD(mypass / "beads8um", [4, 4])
-    I_concat_20um = concatMSD(mypass / "beads20um", [4, 4, 4, 4])
+    msd1um = concatMSD(mypass / "beads1um", [4, 4, 4, 4])
+    msd3um = concatMSD(mypass / "beads3um", [4, 4, 4])
+    msd7um = concatMSD(mypass / "beads7um", [4, 4, 4])
+    msd20um = concatMSD(mypass / "beads20um", [4, 4, 4, 4])
+
+    emsd_1um, err_1um, N_1um = calc_MSD(msd1um)
+    emsd_3um, err_3um, N_3um = calc_MSD(msd3um)
+    emsd_7um, err_7um, N_7um = calc_MSD(msd7um)
+    emsd_20um, err_20um, N_20um = calc_MSD(msd20um)
 
     scale = 0.11
 
     alpha = 1
     marker_size = 10
+    
+    min_t = 30
+    max_t = 120
 
-    min_t = 20
-    max_t = 144
+    popt_1um, pcov_1um = fit(msd1um, min_t, max_t)
+    popt_3um, pcov_3um = fit(msd3um, min_t, max_t)
+    popt_7um, pcov_7um = fit(msd7um, min_t, max_t)
+    popt_20um, pcov_20um = fit(msd20um, min_t, max_t)
 
-    minimum=min_t/4
-    maximum=max_t/4
-
-    emsd_combined_1um = I_concat_1um.groupby('lag time').mean()['MSD']
-    emsd_err_combined_1um = I_concat_1um.groupby('lag time').std()['MSD'] / np.sqrt(1+max(I_concat_1um["exp"]))
-    emsd_combined_3um = I_concat_3um.groupby('lag time').mean()['MSD']
-    emsd_err_combined_3um = I_concat_3um.groupby('lag time').std()['MSD'] / np.sqrt(1+max(I_concat_3um["exp"]))
-    emsd_combined_7um = I_concat_7um.groupby('lag time').mean()['MSD']
-    emsd_err_combined_7um = I_concat_7um.groupby('lag time').std()['MSD'] / np.sqrt(1+max(I_concat_7um["exp"]))
-    #emsd_combined_8um = I_concat_8um.groupby('lag time').mean()['MSD']
-    #emsd_err_combined_8um = I_concat_8um.groupby('lag time').std()['MSD'] / np.sqrt(1+max(I_concat_8um["exp"]))
-    emsd_combined_20um = I_concat_20um.groupby('lag time').mean()['MSD']
-    emsd_err_combined_20um = I_concat_20um.groupby('lag time').std()['MSD'] / np.sqrt(1+max(I_concat_20um["exp"]))
-
-    mask = (emsd_combined_1um.index > minimum) & (emsd_combined_1um.index < maximum)
-
-    # take log10 of selected x and y values and convert to numpy arrays
-    x = np.log10(emsd_combined_1um.index[mask].to_numpy())
-    y = np.log10(np.float32(emsd_combined_1um[mask].to_numpy()))
-    # remove non-finite entries (e.g., log of non-positive values)
-    finite = np.isfinite(x) & np.isfinite(y)
-    x = x[finite]
-    y = y[finite]
-    # fit
-    popt, pcov = curve_fit(fm.ln_pl, x, y)
+    mean_popt_1um, err_popt_1um = func(popt_1um)
+    mean_popt_3um, err_popt_3um = func(popt_3um)
+    mean_popt_7um, err_popt_7um = func(popt_7um)
+    mean_popt_20um, err_popt_20um = func(popt_20um)
 
     fig, ax = plt.subplots()
 
-    ax.errorbar(emsd_combined_1um.index, emsd_combined_1um, yerr=emsd_err_combined_1um, marker='o', label=f'1.18 \u03bcm, N={1+max(I_concat_1um["exp"])}', alpha = alpha, markersize = marker_size)
-    ax.errorbar(emsd_combined_3um.index, emsd_combined_3um, yerr=emsd_err_combined_3um, marker='d', label=f'3.37 \u03bcm, N={1+max(I_concat_3um["exp"])}', alpha = alpha, markersize = marker_size)
-    ax.errorbar(emsd_combined_7um.index, emsd_combined_7um, yerr=emsd_err_combined_7um, marker='^', label=f'7.24 \u03bcm, N={1+max(I_concat_7um["exp"])}', alpha = alpha, markersize = marker_size)  
-    #ax.errorbar(emsd_combined_8um.index, emsd_combined_8um, yerr=emsd_err_combined_8um, marker='v', label=f'8.66 \u03bcm, N={1+max(I_concat_8um["exp"])}', alpha = alpha, markersize = marker_size)
-    ax.errorbar(emsd_combined_20um.index, emsd_combined_20um, yerr=emsd_err_combined_20um, marker='s', label=f'20.0 \u03bcm, N={1+max(I_concat_20um["exp"])}', alpha = alpha, markersize = marker_size)
+    ax.errorbar(emsd_1um.index, emsd_1um, yerr=err_1um, marker='o', label=f'1.18 \u03bcm, N={N_1um}', alpha = alpha, markersize = marker_size)
+    ax.errorbar(emsd_3um.index, emsd_3um, yerr=err_3um, marker='d', label=f'3.37 \u03bcm, N={N_3um}', alpha = alpha, markersize = marker_size)
+    ax.errorbar(emsd_7um.index, emsd_7um, yerr=err_7um, marker='^', label=f'7.24 \u03bcm, N={N_7um}', alpha = alpha, markersize = marker_size)  
+    ax.errorbar(emsd_20um.index, emsd_20um, yerr=err_20um, marker='s', label=f'20.0 \u03bcm, N={N_20um}', alpha = alpha, markersize = marker_size)
 
     ax.legend()
 
     xrange = [min_t, max_t]
 
-    ax.plot(xrange, fm.power_law(xrange, *popt) * 5, label = f'{popt[1]:.2f}$\\times\\Delta t^{{{popt[0]:.2f}}}$', color='#333333')
-    ax.text(25, 3e1, f'$\propto \Delta t^{{{popt[0]:.1f}}}$')
+    ax.plot(xrange, fm.power_law(xrange, *mean_popt_1um) * 5, label = f'{mean_popt_1um[1]:.2f}$\\times\\Delta t^{{{mean_popt_1um[0]:.2f}}}$', color='#333333')
+    ax.text(25, 3e1, f'$\propto \Delta t^{{{mean_popt_1um[0]:.1f}}}$')
 
-    ax.plot([80,200], fm.power_law([80,200], 1 ,popt[1]*1e-1) * 8, label = f'{popt[1]:.2f}$\\times\\Delta t^{{{popt[0]:.2f}}}$', color='#333333')
+    ax.plot([80,200], fm.power_law([80,200], 1 ,mean_popt_1um[1]*1e-1) * 8, label = f'{mean_popt_1um[1]:.2f}$\\times\\Delta t^{{{mean_popt_1um[0]:.2f}}}$', color='#333333')
     ax.text(70, 2, f'$\propto \Delta t^{{{1.0}}}$')
 
     ax.set(
@@ -106,6 +117,14 @@ def main():
 
     fig.savefig(mypass / "figure" / "MSD.png", bbox_inches = 'tight')
     fig.savefig(mypass / "figure" / "MSD.pdf", bbox_inches = 'tight')
+
+    fig2, ax2 = plt.subplots()
+    ax2.errorbar([1.18, 3.37, 7.24, 20.0], [mean_popt_1um[0], mean_popt_3um[0], mean_popt_7um[0], mean_popt_20um[0]], yerr = [err_popt_1um[0], err_popt_3um[0], err_popt_7um[0], err_popt_20um[0]], marker='o')
+    ax2.set(xlabel='Cargo Radius $R_C$ [\u03bcm]', ylabel='$\\alpha$')
+
+    fig2.savefig(mypass / "figure" / "alpha.png", bbox_inches = 'tight')
+    fig2.savefig(mypass / "figure" / "alpha.pdf", bbox_inches = 'tight')
+    
 
 if __name__ == "__main__":
     main()
