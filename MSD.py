@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import pandas as pd
 from scipy.optimize import curve_fit
 import os
@@ -36,9 +37,9 @@ def concatMSD(folder, interval_list, scale = 0.11):
     return pd.concat(MSD_list)
 
 def calc_MSD(MSD_df):
-    emsd = MSD_df.groupby('lag time').mean()['MSD']
+    emsd = MSD_df.groupby('lag time').mean()['MSD'].astype(float)
     N = 1 + max(MSD_df["exp"])
-    emsd_err = MSD_df.groupby('lag time').std()['MSD'] / np.sqrt(N)
+    emsd_err = (MSD_df.groupby('lag time').std()['MSD'] / np.sqrt(N)).astype(float)
 
     return emsd, emsd_err, N
 
@@ -77,8 +78,8 @@ def main():
     alpha = 1
     marker_size = 10
     
-    min_t = 30
-    max_t = 120
+    min_t = 60
+    max_t = 200
 
     popt_1um, pcov_1um = fit(msd1um, min_t, max_t)
     popt_3um, pcov_3um = fit(msd3um, min_t, max_t)
@@ -93,26 +94,36 @@ def main():
     mean_popt_20um, err_popt_20um = func(popt_20um)
 
     fig, ax = plt.subplots()
-
+    """
     ax.errorbar(emsd_1um.index, emsd_1um, yerr=err_1um, marker='o', label=f'1.18 \u03bcm, N={N_1um}', alpha = alpha, markersize = marker_size)
-    ax.errorbar(emsd_3um.index, emsd_3um, yerr=err_3um, marker='d', label=f'3.37 \u03bcm, N={N_3um}', alpha = alpha, markersize = marker_size)
-    ax.errorbar(emsd_5um.index, emsd_5um, yerr=err_5um, marker='^', label=f'5.00 \u03bcm, N={N_5um}', alpha = alpha, markersize = marker_size)
-    ax.errorbar(emsd_7um.index, emsd_7um, yerr=err_7um, marker='<', label=f'7.24 \u03bcm, N={N_7um}', alpha = alpha, markersize = marker_size)  
+    ax.errorbar(emsd_3um.index, emsd_3um, yerr=err_3um, marker=10, label=f'3.37 \u03bcm, N={N_3um}', alpha = alpha, markersize = marker_size)
+    ax.errorbar(emsd_5um.index, emsd_5um, yerr=err_5um, marker=11, label=f'5.00 \u03bcm, N={N_5um}', alpha = alpha, markersize = marker_size)
+    ax.errorbar(emsd_7um.index, emsd_7um, yerr=err_7um, marker='*', label=f'7.24 \u03bcm, N={N_7um}', alpha = alpha, markersize = marker_size)  
     ax.errorbar(emsd_20um.index, emsd_20um, yerr=err_20um, marker='s', label=f'20.0 \u03bcm, N={N_20um}', alpha = alpha, markersize = marker_size)
+    """
 
+    ax.plot(emsd_1um.index, emsd_1um, marker='o', label=f'1.18 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[0])
+    ax.fill_between(emsd_1um.index, emsd_1um - err_1um, emsd_1um + err_1um, edgecolor=style_colors[0], facecolor=mcolors.to_rgba(style_colors[0], alpha=0.2))
+    ax.plot(emsd_3um.index, emsd_3um, marker='d', label=f'3.37 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[1])
+    ax.fill_between(emsd_3um.index, emsd_3um - err_3um, emsd_3um + err_3um, edgecolor=style_colors[1], facecolor=mcolors.to_rgba(style_colors[1], alpha=0.2))
+    ax.plot(emsd_5um.index, emsd_5um, marker=10, label=f'5.00 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[2])
+    ax.fill_between(emsd_5um.index, emsd_5um - err_5um, emsd_5um + err_5um, edgecolor=style_colors[2], facecolor=mcolors.to_rgba(style_colors[2], alpha=0.2))
+    ax.plot(emsd_7um.index, emsd_7um, marker=11, label=f'7.24 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[3])  
+    ax.fill_between(emsd_7um.index, emsd_7um - err_7um, emsd_7um + err_7um, edgecolor=style_colors[3], facecolor=mcolors.to_rgba(style_colors[3], alpha=0.2))
+    ax.plot(emsd_20um.index, emsd_20um, marker='s', label=f'20.0 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[4])
+    ax.fill_between(emsd_20um.index, emsd_20um - err_20um, emsd_20um + err_20um, edgecolor=style_colors[4], facecolor=mcolors.to_rgba(style_colors[4], alpha=0.2))
+    
     ax.legend()
 
-    xrange = [min_t, max_t]
+    ax.plot([80,200], fm.power_law([80,200], 1 ,mean_popt_1um[1]*1e-1)*0.8 , label = f'{mean_popt_1um[1]:.2f}$\\times\\Delta t^{{{mean_popt_1um[0]:.2f}}}$', color='#333333')
+    ax.text(130, 0.15, f'$\propto \Delta t^{{{1.0}}}$')
 
-    ax.plot(xrange, fm.power_law(xrange, *mean_popt_1um) * 5, label = f'{mean_popt_1um[1]:.2f}$\\times\\Delta t^{{{mean_popt_1um[0]:.2f}}}$', color='#333333')
-    ax.text(25, 3e1, f'$\propto \Delta t^{{{mean_popt_1um[0]:.1f}}}$')
-
-    ax.plot([80,200], fm.power_law([80,200], 1 ,mean_popt_1um[1]*1e-1) * 8, label = f'{mean_popt_1um[1]:.2f}$\\times\\Delta t^{{{mean_popt_1um[0]:.2f}}}$', color='#333333')
-    ax.text(70, 2, f'$\propto \Delta t^{{{1.0}}}$')
+    ax.plot([80,200], fm.power_law([80,200], 2 ,mean_popt_1um[1]*1e-1)*8 , label = f'{mean_popt_1um[1]:.2f}$\\times\\Delta t^{{{mean_popt_1um[0]:.2f}}}$', color='#333333')
+    ax.text(50, 200, f'$\propto \Delta t^{{{2.0}}}$')
 
     ax.set(
-        xlim=(3.5e-0, 150),
-        ylim=(1e-1, 1e2),
+        xlim=(3.5e-0, 400),
+        ylim=(1e-2, 1e3),
         xscale='log',
         yscale='log',
         xlabel='lag time $\Delta t$ [s]',
@@ -120,14 +131,14 @@ def main():
         )
 
 
-    fig.savefig(mypass / "figure" / "MSD.png", bbox_inches = 'tight')
+    #fig.savefig(mypass / "figure" / "MSD.png", bbox_inches = 'tight')
     fig.savefig(mypass / "figure" / "MSD.pdf", bbox_inches = 'tight')
 
     fig2, ax2 = plt.subplots()
     ax2.errorbar([1.18, 3.37, 5.00, 7.24, 20.0], [mean_popt_1um[0], mean_popt_3um[0], mean_popt_5um[0], mean_popt_7um[0], mean_popt_20um[0]], yerr = [err_popt_1um[0], err_popt_3um[0], err_popt_5um[0], err_popt_7um[0], err_popt_20um[0]], marker='o')
-    ax2.set(xlabel='Cargo Radius $R_C$ [\u03bcm]', ylabel='$\\alpha$')
+    ax2.set(xlabel='Cargo Diameter $D_C$ [\u03bcm]', ylabel='$\\alpha$')
 
-    fig2.savefig(mypass / "figure" / "alpha.png", bbox_inches = 'tight')
+    #fig2.savefig(mypass / "figure" / "alpha.png", bbox_inches = 'tight')
     fig2.savefig(mypass / "figure" / "alpha.pdf", bbox_inches = 'tight')
     
 
