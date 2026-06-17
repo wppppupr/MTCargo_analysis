@@ -15,8 +15,8 @@ from libs import displacement as dpm
 plt.style.use('libs/my_style.mplstyle')
 style_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
-#mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
-mypass = Path('/Volumes/data/Sasaki/MTSingleBeads')
+mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
+#mypass = Path('/Volumes/data/Sasaki/MTSingleBeads')
 
 def concatMSD(folder, interval_list, scale = 0.11):
     MSD_list = []
@@ -62,11 +62,13 @@ def func(popt_list):
 def main():
     msd1um = concatMSD(mypass / "beads1um", [4, 4, 4, 4])
     msd3um = concatMSD(mypass / "beads3um", [4, 4, 4])
+    msd5um = concatMSD(mypass / "beads5um", [4, 4, 4])
     msd7um = concatMSD(mypass / "beads7um", [4, 4, 4])
     msd20um = concatMSD(mypass / "beads20um", [4, 4, 4, 4])
 
     emsd_1um, err_1um, N_1um = calc_MSD(msd1um)
     emsd_3um, err_3um, N_3um = calc_MSD(msd3um)
+    emsd_5um, err_5um, N_5um = calc_MSD(msd5um)
     emsd_7um, err_7um, N_7um = calc_MSD(msd7um)
     emsd_20um, err_20um, N_20um = calc_MSD(msd20um)
 
@@ -80,11 +82,13 @@ def main():
 
     popt_1um, pcov_1um = fit(msd1um, min_t, max_t)
     popt_3um, pcov_3um = fit(msd3um, min_t, max_t)
+    popt_5um, pcov_5um = fit(msd5um, min_t, max_t)
     popt_7um, pcov_7um = fit(msd7um, min_t, max_t)
     popt_20um, pcov_20um = fit(msd20um, min_t, max_t)
 
     mean_popt_1um, err_popt_1um = func(popt_1um)
     mean_popt_3um, err_popt_3um = func(popt_3um)
+    mean_popt_5um, err_popt_5um = func(popt_5um)
     mean_popt_7um, err_popt_7um = func(popt_7um)
     mean_popt_20um, err_popt_20um = func(popt_20um)
 
@@ -92,7 +96,8 @@ def main():
 
     ax.errorbar(emsd_1um.index, emsd_1um, yerr=err_1um, marker='o', label=f'1.18 \u03bcm, N={N_1um}', alpha = alpha, markersize = marker_size)
     ax.errorbar(emsd_3um.index, emsd_3um, yerr=err_3um, marker='d', label=f'3.37 \u03bcm, N={N_3um}', alpha = alpha, markersize = marker_size)
-    ax.errorbar(emsd_7um.index, emsd_7um, yerr=err_7um, marker='^', label=f'7.24 \u03bcm, N={N_7um}', alpha = alpha, markersize = marker_size)  
+    ax.errorbar(emsd_5um.index, emsd_5um, yerr=err_5um, marker='^', label=f'5.00 \u03bcm, N={N_5um}', alpha = alpha, markersize = marker_size)
+    ax.errorbar(emsd_7um.index, emsd_7um, yerr=err_7um, marker='<', label=f'7.24 \u03bcm, N={N_7um}', alpha = alpha, markersize = marker_size)  
     ax.errorbar(emsd_20um.index, emsd_20um, yerr=err_20um, marker='s', label=f'20.0 \u03bcm, N={N_20um}', alpha = alpha, markersize = marker_size)
 
     ax.legend()
@@ -119,7 +124,7 @@ def main():
     fig.savefig(mypass / "figure" / "MSD.pdf", bbox_inches = 'tight')
 
     fig2, ax2 = plt.subplots()
-    ax2.errorbar([1.18, 3.37, 7.24, 20.0], [mean_popt_1um[0], mean_popt_3um[0], mean_popt_7um[0], mean_popt_20um[0]], yerr = [err_popt_1um[0], err_popt_3um[0], err_popt_7um[0], err_popt_20um[0]], marker='o')
+    ax2.errorbar([1.18, 3.37, 5.00, 7.24, 20.0], [mean_popt_1um[0], mean_popt_3um[0], mean_popt_5um[0], mean_popt_7um[0], mean_popt_20um[0]], yerr = [err_popt_1um[0], err_popt_3um[0], err_popt_5um[0], err_popt_7um[0], err_popt_20um[0]], marker='o')
     ax2.set(xlabel='Cargo Radius $R_C$ [\u03bcm]', ylabel='$\\alpha$')
 
     fig2.savefig(mypass / "figure" / "alpha.png", bbox_inches = 'tight')

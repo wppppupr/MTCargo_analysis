@@ -20,6 +20,7 @@ root = Path('/Volumes/data/Sasaki/MTsingleBeads')
 
 beads1um = "beads1um"
 beads3um = "beads3um"
+beads5um = "beads5um"
 beads7um = "beads7um"
 
 def func(root, folder):
@@ -87,9 +88,12 @@ def plot_polar(df, ax=None, label=None, marker='o', linestyle='-', scale = 0.11)
 def main():
     particles1um, bgs1um = func(root, "beads1um")
     particles3um, bgs3um = func(root, "beads3um")
+    particles5um, bgs5um = func(root, "beads5um")
     particles7um, bgs7um = func(root, "beads7um")
+    
     df_p1, df_bg1 = make_df(particles1um, bgs1um)
     df_p3, df_bg3 = make_df(particles3um, bgs3um)
+    df_p5, df_bg5 = make_df(particles5um, bgs5um)
     df_p7, df_bg7 = make_df(particles7um, bgs7um)
 
     fig, ax = plt.subplots()
@@ -97,6 +101,8 @@ def main():
     plot_polar(df_bg1, ax=ax, label='Background', marker='s', linestyle='--')
     plot_polar(df_p3, ax=ax, label='3um Beads', marker='^', linestyle='-')
     plot_polar(df_bg3, ax=ax, label='3um Beads Background', marker='v', linestyle='--')
+    plot_polar(df_p5, ax=ax, label='5um Beads', marker='D', linestyle='-')
+    plot_polar(df_bg5, ax=ax, label='5um Beads Background', marker='d', linestyle='--')
     plot_polar(df_p7, ax=ax, label='7um Beads', marker='D', linestyle='-')
     plot_polar(df_bg7, ax=ax, label='7um Beads Background', marker='d', linestyle='--')
     ax.set_xlabel('Window Size (pixels)')
