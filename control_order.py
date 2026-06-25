@@ -65,7 +65,7 @@ errs = [err_1uM, err_4uM, err_8uM]
 
 fig, ax = plt.subplots()
 ax.errorbar([1, 4, 8], means, errs, marker='o')
-ax.set_xlabel('MTs concentration [\u03bcM]')
+ax.set_xlabel('tub concentration [\u03bcM]')
 ax.set_ylabel('Nematic order parameter')
 ax.set_xlim(0,10)
 ax.set_ylim(0,1)
