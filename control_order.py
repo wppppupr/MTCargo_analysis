@@ -12,8 +12,8 @@ sys.path.append(os.path.abspath(".."))
 
 plt.style.use('libs/my_style.mplstyle')
 
-#mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
-mypass = Path('/Volumes/data/Sasaki/MTsingleBeads')
+mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
+#mypass = Path('/Volumes/data/Sasaki/MTsingleBeads')
 
 input_dir = mypass /'control'
 
@@ -58,13 +58,15 @@ def load(input_dir, folder):
 
 mean_1uM, err_1uM = load(input_dir, 'MTs1uM')
 mean_4uM, err_4uM = load(input_dir, 'MTs4uM')
+mean_6uM, err_6uM = load(input_dir, 'MTs6uM')
 mean_8uM, err_8uM = load(input_dir, 'MTs8uM')
+mean_10uM, err_10uM = load(input_dir, 'MTs10uM')
 
-means = [mean_1uM, mean_4uM, mean_8uM]
-errs = [err_1uM, err_4uM, err_8uM]
+means = [mean_1uM, mean_4uM, mean_6uM, mean_8uM, mean_10uM]
+errs = [err_1uM, err_4uM, err_6uM, err_8uM, err_10uM]
 
 fig, ax = plt.subplots()
-ax.errorbar([1, 4, 8], means, errs, marker='o')
+ax.errorbar([1, 4, 6, 8, 10], means, errs, marker='o')
 ax.set_xlabel('tub concentration [\u03bcM]')
 ax.set_ylabel('Nematic order parameter')
 ax.set_xlim(0,10)
@@ -73,7 +75,7 @@ ax.set_ylim(0,1)
 fig.savefig(mypass / "figure" / "control_order.pdf", bbox_inches = 'tight')
 
 fig2, ax = plt.subplots()
-ax.errorbar([28, 7, 3.5], means, errs, marker='o')
+ax.errorbar([28, 7, 4.67, 3.5, 2.8], means, errs, marker='o')
 ax.set_xlabel('MTs dilution')
 ax.set_ylabel('Nematic order parameter')
 ax.set_xlim(0,30)
