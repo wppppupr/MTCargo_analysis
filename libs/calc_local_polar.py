@@ -7,7 +7,8 @@ import os
 import shutil
 from pathlib import Path
 from tqdm import tqdm
-from scipy.ndimage import uniform_filter, binary_dilation
+import cv2
+from scipy.ndimage import binary_dilation
 from concurrent.futures import ThreadPoolExecutor
 
 def main():
@@ -142,14 +143,21 @@ def main():
                 roi_p_vals = None
             
             for w_idx, size in enumerate(local_sizes):
+                kernel = np.zeros((size, size), dtype=np.float32)
+                center = size / 2.0 - 0.5
+                ky, kx = np.ogrid[:size, :size]
+                kmask = (kx - center)**2 + (ky - center)**2 <= (size / 2.0)**2
+                kernel[kmask] = 1.0
+                kernel /= kernel.sum()
+
                 if args.particle_radius > 0:
-                    valid_avg = uniform_filter(valid_mask, size=size)
+                    valid_avg = cv2.filter2D(valid_mask, -1, kernel, borderType=cv2.BORDER_REFLECT)
                     with np.errstate(divide='ignore', invalid='ignore'):
-                        u_avg = uniform_filter(m_ux_masked, size=size) / valid_avg
-                        v_avg = uniform_filter(m_uy_masked, size=size) / valid_avg
+                        u_avg = cv2.filter2D(m_ux_masked, -1, kernel, borderType=cv2.BORDER_REFLECT) / valid_avg
+                        v_avg = cv2.filter2D(m_uy_masked, -1, kernel, borderType=cv2.BORDER_REFLECT) / valid_avg
                 else:
-                    u_avg = uniform_filter(m_ux, size=size)
-                    v_avg = uniform_filter(m_uy, size=size)
+                    u_avg = cv2.filter2D(m_ux, -1, kernel, borderType=cv2.BORDER_REFLECT)
+                    v_avg = cv2.filter2D(m_uy, -1, kernel, borderType=cv2.BORDER_REFLECT)
 
                 p_field = np.hypot(u_avg, v_avg, dtype=np.float32)
 

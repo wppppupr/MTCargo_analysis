@@ -7,7 +7,7 @@ import os
 import shutil
 from pathlib import Path
 from tqdm import tqdm
-from scipy.ndimage import uniform_filter
+import cv2
 from concurrent.futures import ThreadPoolExecutor
 
 def main():
@@ -84,8 +84,15 @@ def main():
             
             for w_idx, size in enumerate(local_sizes):
                 # 1. 局所ポーラー度フィールド全体を計算
-                u_avg = uniform_filter(m_ux, size=size)
-                v_avg = uniform_filter(m_uy, size=size)
+                kernel = np.zeros((size, size), dtype=np.float32)
+                center = size / 2.0 - 0.5
+                ky, kx = np.ogrid[:size, :size]
+                kmask = (kx - center)**2 + (ky - center)**2 <= (size / 2.0)**2
+                kernel[kmask] = 1.0
+                kernel /= kernel.sum()
+
+                u_avg = cv2.filter2D(m_ux, -1, kernel, borderType=cv2.BORDER_REFLECT)
+                v_avg = cv2.filter2D(m_uy, -1, kernel, borderType=cv2.BORDER_REFLECT)
                 p_field = np.hypot(u_avg, v_avg, dtype=np.float32)
 
                 p_vals[w_idx] = np.mean(p_field)
