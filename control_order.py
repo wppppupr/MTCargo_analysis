@@ -12,8 +12,8 @@ sys.path.append(os.path.abspath(".."))
 
 plt.style.use('libs/my_style.mplstyle')
 
-mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
-#mypass = Path('/Volumes/data/Sasaki/MTsingleBeads')
+#mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
+mypass = Path('/Volumes/data/Sasaki/MTsingleBeads')
 
 input_dir = mypass /'control'
 
@@ -69,7 +69,7 @@ fig, ax = plt.subplots()
 ax.errorbar([1, 4, 6, 8, 10], means, errs, marker='o')
 ax.set_xlabel('tub concentration [\u03bcM]')
 ax.set_ylabel('Nematic order parameter')
-ax.set_xlim(0,10)
+ax.set_xlim(0,11)
 ax.set_ylim(0,1)
 
 fig.savefig(mypass / "figure" / "control_order.pdf", bbox_inches = 'tight')
