@@ -16,8 +16,8 @@ from libs import displacement as dpm
 plt.style.use('libs/my_style.mplstyle')
 style_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
-#mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
-mypass = Path('/Volumes/data/Sasaki/MTSingleBeads')
+mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
+#mypass = Path('/Volumes/data/Sasaki/MTSingleBeads')
 
 def concatMSD(folder, interval_list, scale = 0.11):
     MSD_list = []
