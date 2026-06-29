@@ -6,6 +6,7 @@
 font.family         : sans-serif
 font.sans-serif     : Arial
 font.size           : 20.0
+mathtext.fontset    : cm
 
 # テキスト全般の色（黒）
 text.color          : 000000
