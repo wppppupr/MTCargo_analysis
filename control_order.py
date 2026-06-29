@@ -12,8 +12,8 @@ sys.path.append(os.path.abspath(".."))
 
 plt.style.use('libs/my_style.mplstyle')
 
-#mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
-mypass = Path('/Volumes/data/Sasaki/MTsingleBeads')
+mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
+#mypass = Path('/Volumes/data/Sasaki/MTsingleBeads')
 
 input_dir = mypass /'control'
 
