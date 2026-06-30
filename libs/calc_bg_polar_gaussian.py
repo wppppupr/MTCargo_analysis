@@ -186,7 +186,7 @@ def main():
     ds_roi.attrs['roi_y'] = int(y_idx)
     ds_roi.attrs['sigmas'] = local_sizes
 
-    out_roi = base_path / f"local_polar_bg.zarr"
+    out_roi = base_path / f"local_polar_bg_gaussian.zarr"
 
     if out_roi.exists():
         shutil.rmtree(out_roi, ignore_errors=True)
