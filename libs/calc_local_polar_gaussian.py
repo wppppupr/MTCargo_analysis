@@ -16,8 +16,8 @@ def main():
     parser.add_argument('base_path', type=str, help='Path to the directory containing hdf5 and csv')
     parser.add_argument('--tracks_csv', type=str, default='beads_tracks.csv', help='Trackpy csv file name')
     parser.add_argument('--h5_file', type=str, default='GFP_flows.h5', help='H5 file name')
-    parser.add_argument('--windows', type=str, nargs='+', default=['5:100:5', '100:1000:50'], 
-                        help='Window sizes. Accepts space/comma separated numbers, or start:stop:step (e.g. 10 50 100, or 10:200:10)')
+    parser.add_argument('--sigmas', type=str, nargs='+', default=['5:100:5', '100:1000:50'], 
+                        help='Gaussian sigmas. Accepts space/comma separated numbers, or start:stop:step (e.g. 10 50 100, or 10:200:10)')
     parser.add_argument('--roi_bbox', type=int, nargs=4, default=None, metavar=('XMIN', 'XMAX', 'YMIN', 'YMAX'),
                         help='Bounding box for flow ROI (xmin xmax ymin ymax)')
     parser.add_argument('--particle_radius', type=int, default=0, help='Radius (in pixels) around particles to mask out (0 to disable masking).')
@@ -33,7 +33,7 @@ def main():
 
     # Parse window sizes
     sizes = set()
-    for arg_w in args.windows:
+    for arg_w in args.sigmas:
         for p in arg_w.split(','):
             if not p.strip(): continue
             if ':' in p:
@@ -143,13 +143,11 @@ def main():
                 roi_p_vals = None
             
             for w_idx, size in enumerate(local_sizes):
-                kernel_size = 2 * size + 1
-                kernel = np.zeros((kernel_size, kernel_size), dtype=np.float32)
-                center = size
-                ky, kx = np.ogrid[:kernel_size, :kernel_size]
-                kmask = (kx - center)**2 + (ky - center)**2 <= size**2
-                kernel[kmask] = 1.0
-                kernel /= kernel.sum()
+                sigma = float(size)
+                kernel_size = int(np.ceil(6 * sigma))
+                if kernel_size % 2 == 0: kernel_size += 1
+                k1d = cv2.getGaussianKernel(kernel_size, sigma)
+                kernel = (k1d @ k1d.T).astype(np.float32)
 
                 if args.particle_radius > 0:
                     valid_avg = cv2.filter2D(valid_mask, -1, kernel, borderType=cv2.BORDER_REFLECT)
@@ -185,16 +183,16 @@ def main():
     
     ds_particles['polar_order'] = xr.DataArray(
         polar_order_array,
-        dims=['window size', 'frame', 'particle'],
-        coords={'window size': local_sizes, 'frame': ds_particles.frame, 'particle': ds_particles.particle}
+        dims=['sigma', 'frame', 'particle'],
+        coords={'sigma': local_sizes, 'frame': ds_particles.frame, 'particle': ds_particles.particle}
     )
     
     # メタデータの付与
     ds_particles.attrs['description'] = 'Local polar order analysis: Particles'
-    ds_particles.attrs['window sizes'] = local_sizes
+    ds_particles.attrs['sigmas'] = local_sizes
     ds_particles.attrs['particle_radius'] = args.particle_radius
 
-    out_particle = base_path / "local_polar_w.zarr"
+    out_particle = base_path / "local_polar_w_gaussian.zarr"
 
     # Zarr保存
     if out_particle.exists():
@@ -210,17 +208,17 @@ def main():
             data_vars={
                 'polar_order': xr.DataArray(
                     polar_order_roi_array,
-                    dims=['window size', 'frame'],
-                    coords={'window size': local_sizes, 'frame': np.arange(num_frames)}
+                    dims=['sigma', 'frame'],
+                    coords={'sigma': local_sizes, 'frame': np.arange(num_frames)}
                 )
             }
         )
         ds_roi.attrs['description'] = f'Local polar order analysis for flow ROI (xmin={roi_xmin}, xmax={roi_xmax}, ymin={roi_ymin}, ymax={roi_ymax})'
         ds_roi.attrs['roi_bbox'] = [int(roi_xmin), int(roi_xmax), int(roi_ymin), int(roi_ymax)]
         ds_roi.attrs['particle_radius'] = args.particle_radius
-        ds_roi.attrs['window sizes'] = local_sizes
+        ds_roi.attrs['sigmas'] = local_sizes
         
-        out_roi = base_path / "local_polar_flow_roi.zarr"
+        out_roi = base_path / "local_polar_flow_roi_gaussian.zarr"
         if out_roi.exists():
             shutil.rmtree(out_roi, ignore_errors=True)
         ds_roi.to_zarr(str(out_roi), mode='w', consolidated=False)

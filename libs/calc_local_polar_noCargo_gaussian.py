@@ -16,8 +16,8 @@ def main():
     parser.add_argument('--h5_file', type=str, default='GFP_flows.h5', help='H5 file name')
     parser.add_argument('--roi_x', type=int, default=None, help='X coordinate of the ROI center (optional)')
     parser.add_argument('--roi_y', type=int, default=None, help='Y coordinate of the ROI center (optional)')
-    parser.add_argument('--windows', type=str, nargs='+', default=['5:100:5', '100:1000:50'], 
-                        help='Window sizes. Accepts space/comma separated numbers, or start:stop:step (e.g. 10 50 100, or 10:200:10)')
+    parser.add_argument('--sigmas', type=str, nargs='+', default=['5:100:5', '100:1000:50'], 
+                        help='Gaussian sigmas. Accepts space/comma separated numbers, or start:stop:step (e.g. 10 50 100, or 10:200:10)')
     args = parser.parse_args()
 
     base_path = Path(args.base_path)
@@ -29,7 +29,7 @@ def main():
 
     # Parse window sizes
     sizes = set()
-    for arg_w in args.windows:
+    for arg_w in args.sigmas:
         for p in arg_w.split(','):
             if not p.strip(): continue
             if ':' in p:
@@ -60,7 +60,7 @@ def main():
             channel_first = True
 
         max_size = max(local_sizes)
-        half_w = max_size
+        half_w = int(np.ceil(3 * max_size))
 
         polar_order_array = np.full((len(local_sizes), num_frames), np.nan, dtype=np.float32)
 
@@ -84,13 +84,11 @@ def main():
             
             for w_idx, size in enumerate(local_sizes):
                 # 1. 局所ポーラー度フィールド全体を計算
-                kernel_size = 2 * size + 1
-                kernel = np.zeros((kernel_size, kernel_size), dtype=np.float32)
-                center = size
-                ky, kx = np.ogrid[:kernel_size, :kernel_size]
-                kmask = (kx - center)**2 + (ky - center)**2 <= size**2
-                kernel[kmask] = 1.0
-                kernel /= kernel.sum()
+                sigma = float(size)
+                kernel_size = int(np.ceil(6 * sigma))
+                if kernel_size % 2 == 0: kernel_size += 1
+                k1d = cv2.getGaussianKernel(kernel_size, sigma)
+                kernel = (k1d @ k1d.T).astype(np.float32)
 
                 u_avg = cv2.filter2D(m_ux, -1, kernel, borderType=cv2.BORDER_REFLECT)
                 v_avg = cv2.filter2D(m_uy, -1, kernel, borderType=cv2.BORDER_REFLECT)
@@ -114,17 +112,17 @@ def main():
         data_vars={
             'polar_order': xr.DataArray(
                 polar_order_array,
-                dims=['window size', 'frame'],
-                coords={'window size': local_sizes, 'frame': np.arange(num_frames)}
+                dims=['sigma', 'frame'],
+                coords={'sigma': local_sizes, 'frame': np.arange(num_frames)}
             )
         }
     )
     
     # Add metadata
     ds_roi.attrs['description'] = f'Local polar order analysis for arbitrary ROI'
-    ds_roi.attrs['window sizes'] = local_sizes
+    ds_roi.attrs['sigmas'] = local_sizes
 
-    out_roi = base_path / f"local_polar_noCargo.zarr"
+    out_roi = base_path / f"local_polar_noCargo_gaussian.zarr"
 
     if out_roi.exists():
         shutil.rmtree(out_roi, ignore_errors=True)

@@ -1,18 +1,67 @@
 TARGET_DIR='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads1uM/20260121'
 TARGET_DIR2='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads1uM/20260122'
 TARGET_DIR3='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads7uM/20260608'
-H5_FILE='GFP_flows.h5'
+TARGET_DIR4='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads3uM/20260603'
+TARGET_DIR5='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads5uM/20260616'
+TARGET_DIR6='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/control/MTs8uM/20260624'
 
+H5_FILE='GFP_flows.h5'
 
 pixi run python libs/bead_flow_interaction.py \
     "${TARGET_DIR}/beads_trans_crop_crop" \
     --h5_file "${H5_FILE}" \
     --particle_radius 6
 
+pixi run python libs/bead_flow_interaction_gaussian.py \
+    "${TARGET_DIR}/beads_trans_crop_crop" \
+    --h5_file "${H5_FILE}" \
+    --particle_radius 6
+
+pixi run python libs/calc_local_polar.py \
+    "${TARGET_DIR}/beads_trans_crop_crop" \
+    --h5_file "${H5_FILE}" \
+    --particle_radius 6
+
+pixi run python libs/calc_local_polar_gaussian.py \
+    "${TARGET_DIR}/beads_trans_crop_crop" \
+    --h5_file "${H5_FILE}" \
+    --particle_radius 6
+
+pixi run python libs/calc_bg_polar.py \
+    "${TARGET_DIR}/beads_trans_crop_crop" \
+    --h5_file "${H5_FILE}"
+
+pixi run python libs/calc_bg_polar_gaussian.py \
+    "${TARGET_DIR}/beads_trans_crop_crop" \
+    --h5_file "${H5_FILE}"
+
 pixi run python libs/bead_flow_interaction.py \
     "${TARGET_DIR}/exp_crop1" \
     --h5_file "${H5_FILE}" \
     --particle_radius 6
+
+pixi run python libs/bead_flow_interaction_gaussian.py \
+    "${TARGET_DIR}/exp_crop1" \
+    --h5_file "${H5_FILE}" \
+    --particle_radius 6
+
+pixi run python libs/calc_local_polar.py \
+    "${TARGET_DIR}/exp_crop1" \
+    --h5_file "${H5_FILE}" \
+    --particle_radius 6
+
+pixi run python libs/calc_local_polar_gaussian.py \
+    "${TARGET_DIR}/exp_crop1" \
+    --h5_file "${H5_FILE}" \
+    --particle_radius 6
+
+pixi run python libs/calc_bg_polar.py \
+    "${TARGET_DIR}/exp_crop1" \
+    --h5_file "${H5_FILE}"
+
+pixi run python libs/calc_bg_polar_gaussian.py \
+    "${TARGET_DIR}/exp_crop1" \
+    --h5_file "${H5_FILE}"
 
 for FILE in "${TARGET_DIR2}"/*.nd2; do
     BASENAME=$(basename "$FILE")
@@ -21,6 +70,29 @@ for FILE in "${TARGET_DIR2}"/*.nd2; do
         "${TARGET_DIR2}/${BASENAME%.nd2}" \
         --h5_file "${H5_FILE}" \
         --particle_radius 6
+
+    pixi run python libs/bead_flow_interaction_gaussian.py \
+        "${TARGET_DIR2}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}" \
+        --particle_radius 6
+
+    pixi run python libs/calc_local_polar.py \
+        "${TARGET_DIR2}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}" \
+        --particle_radius 6
+
+    pixi run python libs/calc_local_polar_gaussian.py \
+        "${TARGET_DIR2}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}" \
+        --particle_radius 6
+
+    pixi run python libs/calc_bg_polar.py \
+        "${TARGET_DIR2}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}"
+
+    pixi run python libs/calc_bg_polar_gaussian.py \
+        "${TARGET_DIR2}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}"
 
 done
 
@@ -32,73 +104,98 @@ for FILE in "${TARGET_DIR3}"/*.nd2; do
         --h5_file "${H5_FILE}" \
         --particle_radius 33
 
+    pixi run python libs/bead_flow_interaction_gaussian.py \
+        "${TARGET_DIR3}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}" \
+        --particle_radius 33
+
+    pixi run python libs/calc_local_polar.py \
+        "${TARGET_DIR3}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}" \
+        --particle_radius 33
+
+    pixi run python libs/calc_local_polar_gaussian.py \
+        "${TARGET_DIR3}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}" \
+        --particle_radius 33
+
+    pixi run python libs/calc_bg_polar.py \
+        "${TARGET_DIR3}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}"
+
+    pixi run python libs/calc_bg_polar_gaussian.py \
+        "${TARGET_DIR3}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}"
+
 done
 
-<<co
-
-for FILE in "${TARGET_DIR}"/*.nd2; do
+for FILE in "${TARGET_DIR4}"/*.nd2; do
     BASENAME=$(basename "$FILE")
 
-    echo "Processing $BASENAME..."
+    pixi run python libs/bead_flow_interaction.py \
+        "${TARGET_DIR4}/${BASENAME%.nd2}" \
+        --h5_file "TRITC_flows.h5" \
+        --particle_radius 16
 
-    # zarrに変換する (MTs)
-    pixi run python libs/nd2_to_zarr_channel.py \
-        --file_path "$FILE" \
-        --out_dir "${TARGET_DIR}/${BASENAME%.nd2}" \
-        --channel GFP \
-        --out_name "GFP.zarr"
+    pixi run python libs/bead_flow_interaction_gaussian.py \
+        "${TARGET_DIR4}/${BASENAME%.nd2}" \
+        --h5_file "TRITC_flows.h5" \
+        --particle_radius 16
 
-    # nematic parameterの計算
-    pixi run python libs/calcAFT.py \
-        "${TARGET_DIR}/${BASENAME%.nd2}" \
-        --zarr_path "GFP.zarr" \
-        --neighborhood_radius 5
+    pixi run python libs/calc_local_polar.py \
+        "${TARGET_DIR4}/${BASENAME%.nd2}" \
+        --h5_file "TRITC_flows.h5" \
+        --particle_radius 16
+
+    pixi run python libs/calc_local_polar_gaussian.py \
+        "${TARGET_DIR4}/${BASENAME%.nd2}" \
+        --h5_file "TRITC_flows.h5" \
+        --particle_radius 16
+
+    pixi run python libs/calc_bg_polar.py \
+        "${TARGET_DIR4}/${BASENAME%.nd2}" \
+        --h5_file "TRITC_flows.h5"
+
+    pixi run python libs/calc_bg_polar_gaussian.py \
+        "${TARGET_DIR4}/${BASENAME%.nd2}" \
+        --h5_file "TRITC_flows.h5"
 
 done
 
-for FILE in "${TARGET_DIR2}"/*.nd2; do
+for FILE in "${TARGET_DIR5}"/*.nd2; do
     BASENAME=$(basename "$FILE")
 
-    echo "Processing $BASENAME..."
+    pixi run python libs/bead_flow_interaction.py \
+        "${TARGET_DIR5}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}" \
+        --particle_radius 23
 
-    # zarrに変換する (MTs)
-    pixi run python libs/nd2_to_zarr_channel.py \
-        --file_path "$FILE" \
-        --out_dir "${TARGET_DIR2}/${BASENAME%.nd2}" \
-        --channel GFP \
-        --out_name "GFP.zarr"
+    pixi run python libs/bead_flow_interaction_gaussian.py \
+        "${TARGET_DIR5}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}" \
+        --particle_radius 23
+    
+    pixi run python libs/calc_local_polar.py \
+        "${TARGET_DIR5}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}" \
+        --particle_radius 23
 
-    # nematic parameterの計算
-    pixi run python libs/calcAFT.py \
-        "${TARGET_DIR2}/${BASENAME%.nd2}" \
-        --zarr_path "GFP.zarr" \
-        --neighborhood_radius 5
+    pixi run python libs/calc_local_polar_gaussian.py \
+        "${TARGET_DIR5}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}" \
+        --particle_radius 23
+
+    pixi run python libs/calc_bg_polar.py \
+        "${TARGET_DIR5}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}"
+
+    pixi run python libs/calc_bg_polar_gaussian.py \
+        "${TARGET_DIR5}/${BASENAME%.nd2}" \
+        --h5_file "${H5_FILE}"
 
 done
 
-echo "Done"
-
-for FILE in "${TARGET_DIR5}"/*; do
-    [ -d "$FILE" ] || continue
-
+for FILE in "${TARGET_DIR6}"/*.nd2; do
     BASENAME=$(basename "$FILE")
-
-    echo "Processing $BASENAME..."
-
-    pixi run python libs/calc_local_polar.py "${TARGET_DIR5}/${BASENAME%.nd2}" --particle_radius 33 --h5_file "${H5_FILE}"
-    pixi run python libs/calc_bg_polar.py "${TARGET_DIR5}/${BASENAME%.nd2}" --h5_file "${H5_FILE}"
-
+    pixi run python libs/calc_local_polar_noCargo.py "${TARGET_DIR6}/${BASENAME%.nd2}"
 done
-
-for FILE in "${TARGET_DIR6}"/*; do
-    [ -d "$FILE" ] || continue
-
-    BASENAME=$(basename "$FILE")
-
-    echo "Processing $BASENAME..."
-
-    pixi run python libs/calc_local_polar_noCargo.py "${TARGET_DIR6}/${BASENAME%.nd2}" --h5_file "${H5_FILE}"
-
-done
-
-co

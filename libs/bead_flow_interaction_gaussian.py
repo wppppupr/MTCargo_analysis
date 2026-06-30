@@ -39,36 +39,34 @@ def calculate_flow_bead_dot_product(bx, by, b_dx, b_dy, flow_u, flow_v, radius, 
     H, W = flow_u.shape
     
     # 円を囲むバウンディングボックスを計算 (画像外に出ないようにクリップ)
-    x_min = max(0, int(np.floor(bx - radius)))
-    x_max = min(W, int(np.ceil(bx + radius)) + 1)
-    y_min = max(0, int(np.floor(by - radius)))
-    y_max = min(H, int(np.ceil(by + radius)) + 1)
+    x_min = max(0, int(np.floor(bx - 3*radius)))
+    x_max = min(W, int(np.ceil(bx + 3*radius)) + 1)
+    y_min = max(0, int(np.floor(by - 3*radius)))
+    y_max = min(H, int(np.ceil(by + 3*radius)) + 1)
     
     # バウンディングボックス内のグリッドを生成
     y_idx, x_idx = np.ogrid[y_min:y_max, x_min:x_max]
     
-    # 中心(bx, by)からの距離の二乗を計算し、円内のマスクを作成
+    sigma = float(radius)
+    # 中心(bx, by)からの距離の二乗を計算
     dist_sq = (x_idx - bx)**2 + (y_idx - by)**2
-    mask = (dist_sq <= radius**2) & (dist_sq > particle_radius**2)
     
-    # マスク内のピクセルが存在しない場合(例えば完全に画像外)は0を返す
-    if not np.any(mask):
+    weights = np.exp(-dist_sq / (2 * sigma**2))
+    if particle_radius > 0:
+        weights[dist_sq <= particle_radius**2] = 0
+    
+    weights_sum = np.sum(weights)
+    if weights_sum == 0:
         return 0.0, 0.0, 0.0, 0.0, 0.0
         
-    # 円内のフローを抽出
-    local_u = flow_u[y_min:y_max, x_min:x_max][mask]
-    local_v = flow_v[y_min:y_max, x_min:x_max][mask]
+    local_u = flow_u[y_min:y_max, x_min:x_max]
+    local_v = flow_v[y_min:y_max, x_min:x_max]
     
-    # ビーズの速度のノルム
     b_norm = np.sqrt(b_dx**2 + b_dy**2)
-    
-    # 各ピクセルでの内積を計算
     local_dot = b_dx * local_u + b_dy * local_v
     
-    # 各ピクセルでのcos類似度を計算
     if b_norm > 0:
         local_flow_norm = np.sqrt(local_u**2 + local_v**2)
-        # flow_normが0のピクセルでは0除算を避ける
         local_cos = np.divide(
             local_dot, 
             b_norm * local_flow_norm, 
@@ -76,15 +74,23 @@ def calculate_flow_bead_dot_product(bx, by, b_dx, b_dy, flow_u, flow_v, radius, 
             where=local_flow_norm != 0
         )
     else:
-        # ビーズが動いていない場合はcos類似度を0とする
         local_cos = np.zeros_like(local_dot)
         
-    # それぞれの平均を計算（無効な値・NaNなどがあれば除く）
-    mean_dot = np.nanmean(local_dot)
-    mean_cos = np.nanmean(local_cos)
-    mean_u = np.nanmean(local_u)
-    mean_v = np.nanmean(local_v)
-    cos_std = np.nanstd(local_cos)
+    # Calculate weighted means, excluding NaNs
+    valid = ~np.isnan(local_dot) & ~np.isnan(local_cos) & ~np.isnan(local_u) & ~np.isnan(local_v)
+    w_valid = weights[valid]
+    w_sum = np.sum(w_valid)
+    
+    if w_sum == 0:
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+        
+    mean_dot = np.sum(w_valid * local_dot[valid]) / w_sum
+    mean_cos = np.sum(w_valid * local_cos[valid]) / w_sum
+    mean_u = np.sum(w_valid * local_u[valid]) / w_sum
+    mean_v = np.sum(w_valid * local_v[valid]) / w_sum
+    
+    cos_var = np.sum(w_valid * (local_cos[valid] - mean_cos)**2) / w_sum
+    cos_std = np.sqrt(cos_var)
 
     # 全てがNaNだった場合のフォールバック
     if np.isnan(mean_dot): mean_dot = 0.0
@@ -118,40 +124,35 @@ def calculate_flow_bead_dot_product_broadcast(bx_arr, by_arr, b_dx_arr, b_dy_arr
     # (N, 1, 1) と (1, H, W) の演算になり、結果は (N, H, W)
     dist_sq = (x_grid[np.newaxis, :, :] - bx_arr)**2 + (y_grid[np.newaxis, :, :] - by_arr)**2
     
-    # 3. 各粒子に対する円内マスクを作成 (shape: (N, H, W))
-    mask = (dist_sq <= radius**2) & (dist_sq > particle_radius**2)
-    
-    # 4. フローデータの次元を拡張して粒子次元に対応させる (shape: (1, H, W))
+    sigma = float(radius)
+    # 3. Gaussian weights instead of mask
+    weights = np.exp(-dist_sq / (2 * sigma**2))
+    if particle_radius > 0:
+        weights = np.where(dist_sq <= particle_radius**2, 0, weights)
+        
     flow_u_ext = flow_u[np.newaxis, :, :]
     flow_v_ext = flow_v[np.newaxis, :, :]
     
-    # 5. 各ピクセルでの内積を一括計算 (shape: (N, H, W))
-    # ベクトル演算: b_dx * flow_u + b_dy * flow_v
     dot_grid = b_dx_arr * flow_u_ext + b_dy_arr * flow_v_ext
     
-    # 6. 各ピクセルでのcos類似度を一括計算 (shape: (N, H, W))
-    b_norm = np.sqrt(b_dx_arr**2 + b_dy_arr**2)  # (N, 1, 1)
-    flow_norm = np.sqrt(flow_u_ext**2 + flow_v_ext**2)  # (1, H, W)
-    denom = b_norm * flow_norm  # (N, H, W)
-    
-    # 0除算を回避してcos類似度を計算
+    b_norm = np.sqrt(b_dx_arr**2 + b_dy_arr**2)
+    flow_norm = np.sqrt(flow_u_ext**2 + flow_v_ext**2)
+    denom = b_norm * flow_norm
     cos_grid = np.divide(dot_grid, denom, out=np.zeros_like(dot_grid), where=denom > 0)
     
-    # 7. マスクを適用して平均・標準偏差を計算 (ここがポイント)
-    # マスク外の値を NaN に置換することで、np.nanmean などの恩恵を受ける
-    dot_masked = np.where(mask, dot_grid, np.nan)
-    cos_masked = np.where(mask, cos_grid, np.nan)
-    u_masked = np.where(mask, flow_u_ext, np.nan)
-    v_masked = np.where(mask, flow_v_ext, np.nan)
+    # Create mask for NaNs in flow data
+    valid_mask = ~np.isnan(flow_u_ext) & ~np.isnan(flow_v_ext)
+    weights = np.where(valid_mask, weights, 0.0)
+    weights_sum = np.sum(weights, axis=(1, 2))
     
-    # 粒子ごと（axis=(1,2) つまり H, W 方向）に統計量を計算
-    # 警告（すべてNaNの粒子がある場合）を一時的に無視
     with np.errstate(all='ignore'):
-        mean_dot = np.nanmean(dot_masked, axis=(1, 2))
-        mean_cos = np.nanmean(cos_masked, axis=(1, 2))
-        mean_u = np.nanmean(u_masked, axis=(1, 2))
-        mean_v = np.nanmean(v_masked, axis=(1, 2))
-        cos_std = np.nanstd(cos_masked, axis=(1, 2))
+        mean_dot = np.sum(weights * dot_grid, axis=(1, 2)) / weights_sum
+        mean_cos = np.sum(weights * cos_grid, axis=(1, 2)) / weights_sum
+        mean_u = np.sum(weights * flow_u_ext, axis=(1, 2)) / weights_sum
+        mean_v = np.sum(weights * flow_v_ext, axis=(1, 2)) / weights_sum
+        
+        cos_var = np.sum(weights * (cos_grid - mean_cos[:, np.newaxis, np.newaxis])**2, axis=(1, 2)) / weights_sum
+        cos_std = np.sqrt(cos_var)
         
     # 全てがNaN（画像外など）だった粒子のフォールバック処理
     mean_dot = np.isnan(mean_dot, out=mean_dot, where=np.isnan(mean_dot)) # 0にする場合は後述
@@ -220,11 +221,11 @@ def main():
     parser.add_argument('base_path', type=str, help='Path to the directory containing hdf5 and csv')
     parser.add_argument('--tracks_csv', type=str, default='beads_tracks.csv', help='Trackpy csv file name')
     parser.add_argument('--h5_file', type=str, default='GFP_flows.h5', help='H5 file name')
-    parser.add_argument('--radii', type=str, nargs='+', default=['5:100:5', '100:1000:50'], 
-                        help='Radii sizes. Accepts space/comma separated numbers, or start:stop:step (e.g. 10 50 100, or 10:200:10)')
+    parser.add_argument('--sigmas', type=str, nargs='+', default=['5:100:5', '100:1000:50'], 
+                        help='Gaussian sigmas. Accepts space/comma separated numbers, or start:stop:step (e.g. 10 50 100, or 10:200:10)')
     parser.add_argument('--particle_radius', type=float, default=0.0, help='Inner radius to exclude particle itself')
     parser.add_argument('--dt', type=int, default=1, help='Time difference (frames) to calculate bead velocity')
-    parser.add_argument('--output', type=str, default='beads_flow_interaction.csv', help='Output CSV file name')
+    parser.add_argument('--output', type=str, default='beads_flow_interaction_gaussian.csv', help='Output CSV file name')
     
     args = parser.parse_args()
     
@@ -238,7 +239,7 @@ def main():
         return
         
     sizes = set()
-    for arg_w in args.radii:
+    for arg_w in args.sigmas:
         for p in arg_w.split(','):
             if not p.strip(): continue
             if ':' in p:
@@ -307,7 +308,7 @@ def main():
                     results.append({
                         'frame': t,
                         'particle': p_id,
-                        'radius': rad,
+                        'sigma': rad,
                         'dot_product': dot[i],
                         'cos_sim': cos[i],
                         'mean_flow_u': mu[i],
