@@ -39,7 +39,7 @@ def concatMSD(folder, interval_list, scale = 0.11):
 def calc_MSD(MSD_df):
     emsd = MSD_df.groupby('lag time').mean()['MSD'].astype(float)
     N = 1 + max(MSD_df["exp"])
-    emsd_err = (MSD_df.groupby('lag time').std()['MSD'] / np.sqrt(N)).astype(float)
+    emsd_err = MSD_df.groupby('lag time').std()['MSD'].astype(float)
 
     return emsd, emsd_err, N
 
@@ -57,7 +57,7 @@ def fit(msd_df, min_t = 20, max_t = 144):
 
 def func(popt_list):
     mean = np.mean(popt_list, axis=0)
-    err = np.std(popt_list, axis=0)/np.sqrt(popt_list.shape[0])
+    err = np.std(popt_list, axis=0)#/np.sqrt(popt_list.shape[0])
     return mean, err
 
 def main():
