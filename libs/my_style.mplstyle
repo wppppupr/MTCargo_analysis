@@ -41,7 +41,7 @@ legend.frameon      : True
 
 ### COLOR CYCLE (Paul Tol's Muted) ###
 # 各色に # を追加し、引用符を削除しました
-axes.prop_cycle : cycler('color', ['CC6677', '332288', 'DDCC77', '117733', '88CCEE', '882255', '44AA99', '999933', 'AA4499'])
+axes.prop_cycle : cycler('color', ['#332288', '#88CCEE', '#44AA99', '#117733','#DDCC77','#999933','#CC6677','#AA4499', #882255'])
 
 ### LINE & MARKER PROPERTIES ###
 lines.linewidth     : 3.0
