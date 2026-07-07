@@ -7,6 +7,6 @@ for FILE in "${TARGET_DIR}"/*.nd2; do
 
     pixi run python libs/calc_strain_rate.py \
     "${TARGET_DIR}/${BASENAME%.nd2}/${H5_FILE}" \
-    "${TARGET_DIR}/${BASENAME}/vortex.h5"
+    "${TARGET_DIR}/${BASENAME%.nd2}/vortex.h5"
 
 done
