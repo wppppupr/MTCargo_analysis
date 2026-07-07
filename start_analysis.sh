@@ -1,4 +1,5 @@
-TARGET_DIR='/Volumes/data/Sasaki/MTsingleBeads/control/MTs8uM/20260624'
+#TARGET_DIR='/Volumes/data/Sasaki/MTsingleBeads/control/MTs8uM/20260624'
+TARGET_DIR='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/control/MTs8uM/20260624'
 
 H5_FILE='GFP_flows.h5'
 
