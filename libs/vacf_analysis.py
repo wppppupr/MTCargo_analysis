@@ -124,6 +124,9 @@ def plot_all_beads_vacf(root_dir, out_dir):
         )
 
     ax.legend()
+
+    ax.hlines(0, 0, 30, colors='#333333', linestyles='dashed', alpha = 0.6, zorder = -1)
+
     ax.set(
         xlim=(0, 30),
         ylim=(-1, 1),

@@ -115,19 +115,19 @@ def main():
     
     ax.legend()
 
-    ax.plot([80,200], fm.power_law([80,200], 1 ,mean_popt_1um[1]*1e-1)*0.8 , label = f'{mean_popt_1um[1]:.2f}$\\times\\Delta t^{{{mean_popt_1um[0]:.2f}}}$', color='#333333')
-    ax.text(130, 0.15, f'$\propto \Delta t^{{{1.0}}}$')
+    ax.plot([80, 200], fm.power_law([80,200], 1 ,mean_popt_1um[1]*1e-1)*0.8 , label = f'{mean_popt_1um[1]:.2f}$\\times\\Delta t^{{{mean_popt_1um[0]:.2f}}}$', color='#333333')
+    ax.text(130, 3, f'$\propto \Delta t^{{{1.0}}}$')
 
-    ax.plot([80,200], fm.power_law([80,200], 2 ,mean_popt_1um[1]*1e-1)*8 , label = f'{mean_popt_1um[1]:.2f}$\\times\\Delta t^{{{mean_popt_1um[0]:.2f}}}$', color='#333333')
-    ax.text(50, 200, f'$\propto \Delta t^{{{2.0}}}$')
+    ax.plot([80, 200], fm.power_law([80,200], 2 ,mean_popt_1um[1]*1e-1)*8 , label = f'{mean_popt_1um[1]:.2f}$\\times\\Delta t^{{{mean_popt_1um[0]:.2f}}}$', color='#333333')
+    ax.text(50, 400, f'$\propto \Delta t^{{{2.0}}}$')
 
     ax.set(
-        xlim=(3.5e-0, 400),
-        ylim=(1e-2, 1e3),
+        xlim=(4e-0, 1000),
+        ylim=(1e-1, 1e4),
         xscale='log',
         yscale='log',
         xlabel='lag time $\Delta t$ [s]',
-        ylabel='MSD $\\langle \\Delta \\vec{r}^2 \\rangle$ [\u03bcm$^2$]'
+        ylabel='MSD $\\langle \\Delta r^2 \\rangle$ [\u03bcm$^2$]'
         )
 
 
