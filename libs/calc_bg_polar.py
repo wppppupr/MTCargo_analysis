@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--roi_x', type=int, default=None, help='X coordinate of the ROI center (optional)')
     parser.add_argument('--roi_y', type=int, default=None, help='Y coordinate of the ROI center (optional)')
     parser.add_argument('--tracks_csv', type=str, default='beads_tracks.csv', help='Trackpy csv file name')
-    parser.add_argument('--windows', type=str, nargs='+', default=['5:100:5', '100:1000:50'], 
+    parser.add_argument('--windows', type=str, nargs='+', default=['5:100:5', '100:500:50'], 
                         help='Window sizes. Accepts space/comma separated numbers, or start:stop:step (e.g. 10 50 100, or 10:200:10)')
     args = parser.parse_args()
 

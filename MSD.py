@@ -61,8 +61,8 @@ def func(popt_list):
     return mean, err
 
 def main():
-    msd1um = concatMSD(mypass / "beads1um", [4, 4, 4, 4])
-    msd3um = concatMSD(mypass / "beads3um", [4, 4, 4])
+    msd1um = concatMSD(mypass / "beads1um", [4, 4, 4])
+    msd3um = concatMSD(mypass / "beads3um", [4, 4, 4, 4])
     msd5um = concatMSD(mypass / "beads5um", [4, 4, 4])
     msd7um = concatMSD(mypass / "beads7um", [4, 4, 4])
     msd20um = concatMSD(mypass / "beads20um", [4, 4, 4, 4])
@@ -127,7 +127,7 @@ def main():
         xscale='log',
         yscale='log',
         xlabel='lag time $\Delta t$ [s]',
-        ylabel='MSD $\\langle \\Delta r^2 \\rangle$ [\u03bcm$^2$]'
+        ylabel='MSD $\\langle \\Delta \\vec{r}^2 \\rangle$ [\u03bcm$^2$]'
         )
 
 
