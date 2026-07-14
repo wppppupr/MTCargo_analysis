@@ -28,6 +28,40 @@ def PDF(df, tau, scale=1, abs_PDF = bool, xy = 'x'):
     return np.array(pdf_list).flatten()
 
 
+def PDF_theta(df, tau, theta_array, scale=1, abs_PDF=False, component='parallel'):
+    pdf_list = []
+    
+    for _, group in df.groupby('particle'):
+        group = group.sort_values(by='frame')
+        
+        frames = group['frame'].to_numpy()
+        x = scale * group['x'].to_numpy()
+        y = scale * group['y'].to_numpy()
+        
+        dx = x[tau:] - x[:-tau]
+        dy = y[tau:] - y[:-tau]
+        
+        start_frames = frames[:-tau]
+        valid_idx = start_frames < len(theta_array)
+        
+        dx = dx[valid_idx]
+        dy = dy[valid_idx]
+        valid_frames = start_frames[valid_idx]
+        th = theta_array[valid_frames]
+        
+        if component == 'parallel':
+            displacements = dx * np.cos(th) + dy * np.sin(th)
+        elif component == 'perpendicular':
+            displacements = -dx * np.sin(th) + dy * np.cos(th)
+            
+        if abs_PDF:
+            displacements = np.abs(displacements)
+            
+        pdf_list.extend(displacements)
+        
+    return np.array(pdf_list).flatten()
+
+
 def pdf_sim(MT_conc, S, tau, start, stop, r, abs_PDF = bool):
     dis = []
     for seed in range(start, stop):
@@ -301,3 +335,77 @@ def get_msd_df(path_list, scale=0.11, interval=10, threshold = 0):
     MSDs = pd.concat(MSDs)
 
     return MSDs
+
+def spatial_velocity_correlation(df, lag_time_frames, scale=1, normalize=True):
+    """
+    同じフレームにおける粒子間の運動方向の空間相関を計算する関数（全空間での平均）。
+    
+    Args:
+        df (pd.DataFrame): 'frame', 'particle', 'x', 'y' を列に持つデータフレーム。
+        lag_time_frames (int): 変位を計算するためのラグタイム Δt (フレーム数)。
+        scale (float): 空間スケール (ピクセル -> um など)。
+        normalize (bool): True なら運動方向ベクトルを正規化して cosθ を計算。
+                          False なら内積をそのまま計算。
+        
+    Returns:
+        float: 全空間（全ペア・全フレーム）での相関の平均値。計算可能なペアが存在しない場合は np.nan。
+    """
+    disp_list = []
+    for particle, group in df.groupby('particle'):
+        group = group.sort_values(by='frame')
+        frames = group['frame'].to_numpy()
+        x = group['x'].to_numpy() * scale
+        y = group['y'].to_numpy() * scale
+        
+        if len(frames) <= lag_time_frames:
+            continue
+            
+        start_frames = frames[:-lag_time_frames]
+        start_x = x[:-lag_time_frames]
+        start_y = y[:-lag_time_frames]
+        
+        dx = x[lag_time_frames:] - x[:-lag_time_frames]
+        dy = y[lag_time_frames:] - y[:-lag_time_frames]
+        
+        particle_df = pd.DataFrame({
+            'frame': start_frames,
+            'particle': particle,
+            'x': start_x,
+            'y': start_y,
+            'dx': dx,
+            'dy': dy
+        })
+        disp_list.append(particle_df)
+        
+    if not disp_list:
+        return np.nan
+        
+    disp_df = pd.concat(disp_list, ignore_index=True)
+    
+    correlations = []
+    
+    for frame, group in disp_df.groupby('frame'):
+        coords = group[['x', 'y']].to_numpy()
+        disp = group[['dx', 'dy']].to_numpy()
+        
+        if len(coords) < 2:
+            continue
+            
+        if normalize:
+            norms = np.linalg.norm(disp, axis=1, keepdims=True)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                disp = np.where(norms > 0, disp / norms, 0)
+                
+        # disp の内積行列を計算
+        corr_matrix = disp @ disp.T
+        
+        # 上三角成分（対角成分を除く）を取得
+        i, j = np.triu_indices(len(coords), k=1)
+        corrs = corr_matrix[i, j]
+        
+        correlations.extend(corrs)
+        
+    if len(correlations) == 0:
+        return np.nan
+        
+    return np.array(correlations)

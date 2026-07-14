@@ -130,8 +130,8 @@ def plot_all_beads_vacf(root_dir, out_dir):
     ax.set(
         xlim=(0, 30),
         ylim=(-1, 1),
-        xlabel=r'lag time $\Delta t$ [s]',
-        ylabel=r'VACF $\langle \vec{v}(t)\cdot \vec{v}(t+\Delta t) \rangle$ [μm$^2$/s$^2$]'
+        xlabel='lag time $\Delta t$ [s]',
+        ylabel='ACF $\langle \\Delta\\hat{r}_i(t)\\cdot \\Delta\\hat{r}_i(t+\\Delta t) \\rangle$'
     )
 
     save_path = out / "VACF.pdf"
@@ -149,8 +149,8 @@ def main():
 
     # NASのルートディレクトリ
     # 必要に応じてパスを変更してください
-    # root_dir = '/Volumes/data/Sasaki/MTsingleBeads'
-    root_dir = '/mnt/NAS-Ebanaru/sasaki/MTsingleBeads'
+    root_dir = '/Volumes/data/Sasaki/MTsingleBeads'
+    #root_dir = '/mnt/NAS-Ebanaru/sasaki/MTsingleBeads'
     
     out_dir = Path(root_dir) / 'figure'
     
