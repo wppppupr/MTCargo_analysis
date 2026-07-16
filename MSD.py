@@ -17,7 +17,7 @@ plt.style.use('libs/my_style.mplstyle')
 style_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
 mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
-#mypass = Path('/Volumes/data/Sasaki/MTSingleBeads')
+mypass = Path('/Volumes/data/Sasaki/MTSingleBeads')
 
 def concatMSD(folder, interval_list, scale = 0.11):
     MSD_list = []
@@ -63,7 +63,7 @@ def func(popt_list):
 def main():
     msd1um = concatMSD(mypass / "beads1um", [4, 4, 4])
     msd3um = concatMSD(mypass / "beads3um", [4, 4, 4, 4])
-    msd5um = concatMSD(mypass / "beads5um", [4, 4, 4])
+    msd5um = concatMSD(mypass / "beads5um", [4, 4, 4, 4])
     msd7um = concatMSD(mypass / "beads7um", [4, 4, 4])
     msd20um = concatMSD(mypass / "beads20um", [4, 4, 4, 4])
 
