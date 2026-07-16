@@ -36,7 +36,7 @@ for FILE in "${TARGET_DIR}"/*.nd2; do
 done
 
 cd ..
-cd opticalflow-acivenematics
+cd opticalflow-activenematics
 
 for FILE in "${TARGET_DIR}"/*; do
     [ -d "$FILE" ] || continue
