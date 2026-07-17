@@ -91,6 +91,7 @@ def plot_all_beads_vacf(root_dir, out_dir):
     # 各ビーズサイズのディレクトリ名とプロット用設定
     # (ディレクトリ名, マーカー, ラベル)
     beads_info = [
+        ("beads06um", '^', '0.63 μm'),
         ("beads1um", 'o', '1.18 μm'),
         ("beads3um", 'd', '3.37 μm'),
         ("beads5um", 10,  '5 μm'),

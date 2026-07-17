@@ -61,12 +61,14 @@ def func(popt_list):
     return mean, err
 
 def main():
+    msd06um = concatMSD(mypass / "beads06um", [4, 4, 4, 4])
     msd1um = concatMSD(mypass / "beads1um", [4, 4, 4])
     msd3um = concatMSD(mypass / "beads3um", [4, 4, 4, 4])
     msd5um = concatMSD(mypass / "beads5um", [4, 4, 4, 4])
     msd7um = concatMSD(mypass / "beads7um", [4, 4, 4])
     msd20um = concatMSD(mypass / "beads20um", [4, 4, 4, 4])
 
+    emsd_06um, err_06um, N_06um = calc_MSD(msd06um)
     emsd_1um, err_1um, N_1um = calc_MSD(msd1um)
     emsd_3um, err_3um, N_3um = calc_MSD(msd3um)
     emsd_5um, err_5um, N_5um = calc_MSD(msd5um)
@@ -81,12 +83,14 @@ def main():
     min_t = 60
     max_t = 200
 
+    popt_06um, pcov_06um = fit(msd06um, min_t, max_t)
     popt_1um, pcov_1um = fit(msd1um, min_t, max_t)
     popt_3um, pcov_3um = fit(msd3um, min_t, max_t)
     popt_5um, pcov_5um = fit(msd5um, min_t, max_t)
     popt_7um, pcov_7um = fit(msd7um, min_t, max_t)
     popt_20um, pcov_20um = fit(msd20um, min_t, max_t)
 
+    mean_popt_06um, err_popt_06um = func(popt_06um)
     mean_popt_1um, err_popt_1um = func(popt_1um)
     mean_popt_3um, err_popt_3um = func(popt_3um)
     mean_popt_5um, err_popt_5um = func(popt_5um)
@@ -102,16 +106,18 @@ def main():
     ax.errorbar(emsd_20um.index, emsd_20um, yerr=err_20um, marker='s', label=f'20.0 \u03bcm, N={N_20um}', alpha = alpha, markersize = marker_size)
     """
 
-    ax.plot(emsd_1um.index, emsd_1um, marker='o', label=f'1.18 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[0])
-    ax.fill_between(emsd_1um.index, emsd_1um - err_1um, emsd_1um + err_1um, edgecolor=style_colors[0], facecolor=mcolors.to_rgba(style_colors[0], alpha=0.2))
-    ax.plot(emsd_3um.index, emsd_3um, marker='d', label=f'3.37 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[1])
-    ax.fill_between(emsd_3um.index, emsd_3um - err_3um, emsd_3um + err_3um, edgecolor=style_colors[1], facecolor=mcolors.to_rgba(style_colors[1], alpha=0.2))
-    ax.plot(emsd_5um.index, emsd_5um, marker=10, label=f'5.00 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[2])
-    ax.fill_between(emsd_5um.index, emsd_5um - err_5um, emsd_5um + err_5um, edgecolor=style_colors[2], facecolor=mcolors.to_rgba(style_colors[2], alpha=0.2))
-    ax.plot(emsd_7um.index, emsd_7um, marker=11, label=f'7.24 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[3])  
-    ax.fill_between(emsd_7um.index, emsd_7um - err_7um, emsd_7um + err_7um, edgecolor=style_colors[3], facecolor=mcolors.to_rgba(style_colors[3], alpha=0.2))
-    ax.plot(emsd_20um.index, emsd_20um, marker='s', label=f'20.0 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[4])
-    ax.fill_between(emsd_20um.index, emsd_20um - err_20um, emsd_20um + err_20um, edgecolor=style_colors[4], facecolor=mcolors.to_rgba(style_colors[4], alpha=0.2))
+    ax.plot(emsd_06um.index, emsd_06um, marker='^', label=f'0.60 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[0])
+    ax.fill_between(emsd_06um.index, emsd_06um - err_06um, emsd_06um + err_06um, edgecolor=style_colors[0], facecolor=mcolors.to_rgba(style_colors[0], alpha=0.2))
+    ax.plot(emsd_1um.index, emsd_1um, marker='o', label=f'1.18 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[1])
+    ax.fill_between(emsd_1um.index, emsd_1um - err_1um, emsd_1um + err_1um, edgecolor=style_colors[1], facecolor=mcolors.to_rgba(style_colors[1], alpha=0.2))
+    ax.plot(emsd_3um.index, emsd_3um, marker='d', label=f'3.37 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[2])
+    ax.fill_between(emsd_3um.index, emsd_3um - err_3um, emsd_3um + err_3um, edgecolor=style_colors[2], facecolor=mcolors.to_rgba(style_colors[2], alpha=0.2))
+    ax.plot(emsd_5um.index, emsd_5um, marker=10, label=f'5.00 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[3])
+    ax.fill_between(emsd_5um.index, emsd_5um - err_5um, emsd_5um + err_5um, edgecolor=style_colors[3], facecolor=mcolors.to_rgba(style_colors[3], alpha=0.2))
+    ax.plot(emsd_7um.index, emsd_7um, marker=11, label=f'7.24 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[4])  
+    ax.fill_between(emsd_7um.index, emsd_7um - err_7um, emsd_7um + err_7um, edgecolor=style_colors[4], facecolor=mcolors.to_rgba(style_colors[4], alpha=0.2))
+    ax.plot(emsd_20um.index, emsd_20um, marker='s', label=f'20.0 \u03bcm', alpha = alpha, markersize = marker_size, color=style_colors[5])
+    ax.fill_between(emsd_20um.index, emsd_20um - err_20um, emsd_20um + err_20um, edgecolor=style_colors[5], facecolor=mcolors.to_rgba(style_colors[5], alpha=0.2))
     
     ax.legend()
 
@@ -135,7 +141,7 @@ def main():
     fig.savefig(mypass / "figure" / "MSD.pdf", bbox_inches = 'tight')
 
     fig2, ax2 = plt.subplots()
-    ax2.errorbar([1.18, 3.37, 5.00, 7.24, 20.0], [mean_popt_1um[0], mean_popt_3um[0], mean_popt_5um[0], mean_popt_7um[0], mean_popt_20um[0]], yerr = [err_popt_1um[0], err_popt_3um[0], err_popt_5um[0], err_popt_7um[0], err_popt_20um[0]], marker='o')
+    ax2.errorbar([0.63, 1.18, 3.37, 5.00, 7.24, 20.0], [mean_popt_06um[0],mean_popt_1um[0], mean_popt_3um[0], mean_popt_5um[0], mean_popt_7um[0], mean_popt_20um[0]], yerr = [err_popt_06um[0],err_popt_1um[0], err_popt_3um[0], err_popt_5um[0], err_popt_7um[0], err_popt_20um[0]], marker='o')
     ax2.set(xlabel='Cargo Diameter $D_C$ [\u03bcm]', ylabel='$\\alpha$')
 
     #fig2.savefig(mypass / "figure" / "alpha.png", bbox_inches = 'tight')
