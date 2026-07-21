@@ -17,7 +17,7 @@ plt.style.use('libs/my_style.mplstyle')
 style_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
 mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
-mypass = Path('/Volumes/data/Sasaki/MTSingleBeads')
+#mypass = Path('/Volumes/data/Sasaki/MTSingleBeads')
 
 def concatMSD(folder, interval_list, scale = 0.11):
     MSD_list = []
@@ -62,7 +62,7 @@ def func(popt_list):
 
 def main():
     msd06um = concatMSD(mypass / "beads06um", [4, 4, 4, 4])
-    msd1um = concatMSD(mypass / "beads1um", [4, 4, 4])
+    msd1um = concatMSD(mypass / "beads1um", [4, 4, 4, 4])
     msd3um = concatMSD(mypass / "beads3um", [4, 4, 4, 4])
     msd5um = concatMSD(mypass / "beads5um", [4, 4, 4, 4])
     msd7um = concatMSD(mypass / "beads7um", [4, 4, 4])
@@ -138,14 +138,16 @@ def main():
 
 
     #fig.savefig(mypass / "figure" / "MSD.png", bbox_inches = 'tight')
-    fig.savefig(mypass / "figure" / "MSD.pdf", bbox_inches = 'tight')
+    #fig.savefig(mypass / "figure" / "MSD.pdf", bbox_inches = 'tight')
+    fig.savefig(mypass / "figure" / "MSD.svg", bbox_inches = 'tight')
 
     fig2, ax2 = plt.subplots()
     ax2.errorbar([0.63, 1.18, 3.37, 5.00, 7.24, 20.0], [mean_popt_06um[0],mean_popt_1um[0], mean_popt_3um[0], mean_popt_5um[0], mean_popt_7um[0], mean_popt_20um[0]], yerr = [err_popt_06um[0],err_popt_1um[0], err_popt_3um[0], err_popt_5um[0], err_popt_7um[0], err_popt_20um[0]], marker='o')
     ax2.set(xlabel='Cargo Diameter $D_C$ [\u03bcm]', ylabel='$\\alpha$')
 
     #fig2.savefig(mypass / "figure" / "alpha.png", bbox_inches = 'tight')
-    fig2.savefig(mypass / "figure" / "alpha.pdf", bbox_inches = 'tight')
+    #fig2.savefig(mypass / "figure" / "alpha.pdf", bbox_inches = 'tight')
+    fig2.savefig(mypass / "figure" / "alpha.svg", bbox_inches = 'tight')
     
 
 if __name__ == "__main__":

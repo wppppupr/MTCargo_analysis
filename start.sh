@@ -1,5 +1,5 @@
 #!/bin/bash
-TARGET_DIR='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads06um/20260716'
+TARGET_DIR='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads1um/20260717'
 
 for FILE in "${TARGET_DIR}"/*.nd2; do
     BASENAME=$(basename "$FILE")
