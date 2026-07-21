@@ -338,7 +338,7 @@ def get_msd_df(path_list, scale=0.11, interval=10, threshold = 0):
 
 def spatial_velocity_correlation(df, lag_time_frames, scale=1, normalize=True):
     """
-    同じフレームにおける粒子間の運動方向の空間相関を計算する関数（全空間での平均）。
+    同じフレームにおける粒子間の運動方向の空間相関を計算し、フレームごとにアンサンブル平均をとる関数。
     
     Args:
         df (pd.DataFrame): 'frame', 'particle', 'x', 'y' を列に持つデータフレーム。
@@ -348,7 +348,7 @@ def spatial_velocity_correlation(df, lag_time_frames, scale=1, normalize=True):
                           False なら内積をそのまま計算。
         
     Returns:
-        float: 全空間（全ペア・全フレーム）での相関の平均値。計算可能なペアが存在しない場合は np.nan。
+        pd.DataFrame: 各フレームにおける空間相関のアンサンブル平均を含むデータフレーム ('frame', 'correlation')。計算可能なペアが存在しない場合は空のデータフレーム。
     """
     disp_list = []
     for particle, group in df.groupby('particle'):
@@ -378,7 +378,7 @@ def spatial_velocity_correlation(df, lag_time_frames, scale=1, normalize=True):
         disp_list.append(particle_df)
         
     if not disp_list:
-        return np.nan
+        return pd.DataFrame(columns=['frame', 'correlation'])
         
     disp_df = pd.concat(disp_list, ignore_index=True)
     
@@ -403,9 +403,13 @@ def spatial_velocity_correlation(df, lag_time_frames, scale=1, normalize=True):
         i, j = np.triu_indices(len(coords), k=1)
         corrs = corr_matrix[i, j]
         
-        correlations.extend(corrs)
+        if len(corrs) > 0:
+            correlations.append({
+                'frame': frame,
+                'correlation': np.mean(corrs)
+            })
+            
+    if not correlations:
+        return pd.DataFrame(columns=['frame', 'correlation'])
         
-    if len(correlations) == 0:
-        return np.nan
-        
-    return np.array(correlations)
+    return pd.DataFrame(correlations)
