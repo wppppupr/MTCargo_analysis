@@ -135,7 +135,7 @@ def plot_all_beads_vacf(root_dir, out_dir):
         ylabel='ACF $\langle \\Delta\\hat{r}_i(t)\\cdot \\Delta\\hat{r}_i(t+\\Delta t) \\rangle$'
     )
 
-    save_path = out / "VACF.pdf"
+    save_path = out / "VACF.svg"
     fig.savefig(save_path, bbox_inches='tight')
     print(f"プロットを保存しました: {save_path}")
 
