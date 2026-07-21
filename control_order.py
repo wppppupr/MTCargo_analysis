@@ -12,8 +12,8 @@ sys.path.append(os.path.abspath(".."))
 
 plt.style.use('libs/my_style.mplstyle')
 
-mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
-#mypass = Path('/Volumes/data/Sasaki/MTsingleBeads')
+#mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
+mypass = Path('/Volumes/data/Sasaki/MTsingleBeads')
 
 input_dir = mypass /'control'
 
@@ -72,7 +72,7 @@ ax.set_ylabel('Nematic order parameter')
 ax.set_xlim(0,11)
 ax.set_ylim(0,1)
 
-fig.savefig(mypass / "figure" / "control_order.pdf", bbox_inches = 'tight')
+fig.savefig(mypass / "figure" / "control_order.svg", bbox_inches = 'tight')
 
 fig2, ax = plt.subplots()
 ax.errorbar([28, 7, 4.67, 3.5, 2.8], means, errs, marker='o')
@@ -81,4 +81,4 @@ ax.set_ylabel('Nematic order parameter')
 ax.set_xlim(0,30)
 ax.set_ylim(0,1)
 
-fig2.savefig(mypass / "figure" / "control_order2.pdf", bbox_inches = 'tight')
+fig2.savefig(mypass / "figure" / "control_order2.svg", bbox_inches = 'tight')
