@@ -79,11 +79,11 @@ def calculate_flow_bead_dot_product_numba(bx_arr, by_arr, b_dx_arr, b_dy_arr, fl
     N = len(bx_arr)
     H, W = flow_u.shape
     
-    mean_dot = np.zeros(N, dtype=np.float64)
-    mean_cos = np.zeros(N, dtype=np.float64)
-    mean_u = np.zeros(N, dtype=np.float64)
-    mean_v = np.zeros(N, dtype=np.float64)
-    cos_stds = np.zeros(N, dtype=np.float64)
+    mean_dot = np.zeros(N, dtype=np.float32)
+    mean_cos = np.zeros(N, dtype=np.float32)
+    mean_u = np.zeros(N, dtype=np.float32)
+    mean_v = np.zeros(N, dtype=np.float32)
+    cos_stds = np.zeros(N, dtype=np.float32)
     
     sigma = float(radius)
     sigma2 = 2.0 * sigma * sigma
@@ -255,10 +255,10 @@ def main():
             if merged.empty:
                 continue
                 
-            bx = merged['x_0'].to_numpy(dtype=np.float64)
-            by = merged['y_0'].to_numpy(dtype=np.float64)
-            b_dx = (merged['x_t'] - merged['x_0']).to_numpy(dtype=np.float64)
-            b_dy = (merged['y_t'] - merged['y_0']).to_numpy(dtype=np.float64)
+            bx = merged['x_0'].to_numpy(dtype=np.float32)
+            by = merged['y_0'].to_numpy(dtype=np.float32)
+            b_dx = (merged['x_t'] - merged['x_0']).to_numpy(dtype=np.float32)
+            b_dy = (merged['y_t'] - merged['y_0']).to_numpy(dtype=np.float32)
             p_ids = merged['particle'].to_numpy()
             
             if channel_first:
