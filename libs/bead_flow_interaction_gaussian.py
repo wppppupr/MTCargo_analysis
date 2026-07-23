@@ -293,11 +293,14 @@ def main():
             # 1フレーム分の全 sigma をまとめて1回の to_csv で書き出し
             if frame_results:
                 one_frame_df = pd.concat(frame_results, ignore_index=True)
+                # 列順を明示的に固定して書き出し時のフォーマット不整合を防止
+                cols = ['frame', 'particle', 'sigma', 'dot_product', 'cos_sim', 'mean_flow_u', 'mean_flow_v', 'cos_std']
                 one_frame_df.to_csv(
                     out_path,
                     mode='a',
                     header=first_write,
-                    index=False
+                    index=False,
+                    columns=cols
                 )
                 first_write = False
         
