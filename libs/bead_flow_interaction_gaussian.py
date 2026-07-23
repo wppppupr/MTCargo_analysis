@@ -4,51 +4,22 @@ import pandas as pd
 import h5py
 from pathlib import Path
 from tqdm import tqdm
+from numba import njit, prange
 
 def calculate_flow_bead_dot_product(bx, by, b_dx, b_dy, flow_u, flow_v, radius, particle_radius=0):
     """
-    ビーズの運動ベクトルと、その近傍の円形領域内のオプティカルフローの内積およびcos類似度を計算する。
-    （内積・cos類似度をピクセルごとに計算してから平均をとる）
-
-    Parameters:
-    -----------
-    bx, by : float
-        ビーズの中心座標 (ピクセル単位)
-    b_dx, b_dy : float
-        ビーズの変位ベクトル (または速度ベクトル)
-    flow_u : 2D np.ndarray
-        オプティカルフローのX成分 (水平方向のフロー, shape: [H, W])
-    flow_v : 2D np.ndarray
-        オプティカルフローのY成分 (垂直方向のフロー, shape: [H, W])
-    radius : float
-        計算対象とする近傍の半径 (ピクセル単位)
-    particle_radius : float
-        除外する粒子自身の半径。この半径以内のピクセルは計算から除外される (ピクセル単位)
-
-    Returns:
-    --------
-    mean_dot : float
-        ピクセルごとの内積の平均値
-    mean_cos : float
-        ピクセルごとのcos類似度の平均値 (-1.0 〜 1.0)
-    mean_u, mean_v : float
-        円内での平均オプティカルフローのX, Y成分
-    cos_std : float
-        cos類似度の標準偏差
+    ビーズの運動ベクトルと、その近傍の円形領域内のオプティカルフローの内積およびcos類似度を計算する（単体テスト用）。
     """
     H, W = flow_u.shape
     
-    # 円を囲むバウンディングボックスを計算 (画像外に出ないようにクリップ)
     x_min = max(0, int(np.floor(bx - 3*radius)))
     x_max = min(W, int(np.ceil(bx + 3*radius)) + 1)
     y_min = max(0, int(np.floor(by - 3*radius)))
     y_max = min(H, int(np.ceil(by + 3*radius)) + 1)
     
-    # バウンディングボックス内のグリッドを生成
     y_idx, x_idx = np.ogrid[y_min:y_max, x_min:x_max]
     
     sigma = float(radius)
-    # 中心(bx, by)からの距離の二乗を計算
     dist_sq = (x_idx - bx)**2 + (y_idx - by)**2
     
     weights = np.exp(-dist_sq / (2 * sigma**2))
@@ -76,7 +47,6 @@ def calculate_flow_bead_dot_product(bx, by, b_dx, b_dy, flow_u, flow_v, radius, 
     else:
         local_cos = np.zeros_like(local_dot)
         
-    # Calculate weighted means, excluding NaNs
     valid = ~np.isnan(local_dot) & ~np.isnan(local_cos) & ~np.isnan(local_u) & ~np.isnan(local_v)
     w_valid = weights[valid]
     w_sum = np.sum(w_valid)
@@ -90,9 +60,8 @@ def calculate_flow_bead_dot_product(bx, by, b_dx, b_dy, flow_u, flow_v, radius, 
     mean_v = np.sum(w_valid * local_v[valid]) / w_sum
     
     cos_var = np.sum(w_valid * (local_cos[valid] - mean_cos)**2) / w_sum
-    cos_std = np.sqrt(cos_var)
+    cos_std = np.sqrt(max(0.0, cos_var))
 
-    # 全てがNaNだった場合のフォールバック
     if np.isnan(mean_dot): mean_dot = 0.0
     if np.isnan(mean_cos): mean_cos = 0.0
     if np.isnan(mean_u): mean_u = 0.0
@@ -100,120 +69,110 @@ def calculate_flow_bead_dot_product(bx, by, b_dx, b_dy, flow_u, flow_v, radius, 
     
     return mean_dot, mean_cos, mean_u, mean_v, cos_std
 
-def calculate_flow_bead_dot_product_broadcast(bx_arr, by_arr, b_dx_arr, b_dy_arr, flow_u, flow_v, radius, particle_radius=0):
+
+@njit(parallel=True)
+def calculate_flow_bead_dot_product_numba(bx_arr, by_arr, b_dx_arr, b_dy_arr, flow_u, flow_v, radius, particle_radius=0.0):
     """
-    ブロードキャストを活用し、ループを一切使わずに全粒子のフロー相互作用を一括計算する。
-    
-    Shapeの動き:
-    - N: 粒子数, H: 画像の高さ, W: 画像の幅
+    Numbaを用いた超高速かつ省メモリなフロー相互作用の一括計算。
+    バウンディングボックス内のみアクセスし、マルチスレッド処理で計算を並列化。
     """
-    bx_arr = np.asarray(bx_arr)[:, np.newaxis, np.newaxis]   # shape: (N, 1, 1)
-    by_arr = np.asarray(by_arr)[:, np.newaxis, np.newaxis]   # shape: (N, 1, 1)
-    b_dx_arr = np.asarray(b_dx_arr)[:, np.newaxis, np.newaxis] # shape: (N, 1, 1)
-    b_dy_arr = np.asarray(b_dy_arr)[:, np.newaxis, np.newaxis] # shape: (N, 1, 1)
-    
+    N = len(bx_arr)
     H, W = flow_u.shape
     
-    # 1. 全ピクセルのXY座標グリッドを作成
-    # flow_u と同じ形状の座標行列 (shape: (H, W))
-    y_grid, x_grid = np.ogrid[0:H, 0:W]
-    x_grid = x_grid.astype(np.float64)
-    y_grid = y_grid.astype(np.float64)
-    
-    # 2. 全粒子から全ピクセルへの距離の二乗を一括計算 (ブロードキャスト)
-    # (N, 1, 1) と (1, H, W) の演算になり、結果は (N, H, W)
-    dist_sq = (x_grid[np.newaxis, :, :] - bx_arr)**2 + (y_grid[np.newaxis, :, :] - by_arr)**2
+    mean_dot = np.zeros(N, dtype=np.float64)
+    mean_cos = np.zeros(N, dtype=np.float64)
+    mean_u = np.zeros(N, dtype=np.float64)
+    mean_v = np.zeros(N, dtype=np.float64)
+    cos_stds = np.zeros(N, dtype=np.float64)
     
     sigma = float(radius)
-    # 3. Gaussian weights instead of mask
-    weights = np.exp(-dist_sq / (2 * sigma**2))
-    if particle_radius > 0:
-        weights = np.where(dist_sq <= particle_radius**2, 0, weights)
+    sigma2 = 2.0 * sigma * sigma
+    pr2 = float(particle_radius * particle_radius)
+    
+    x_mins = np.maximum(0, np.floor(bx_arr - 3*radius)).astype(np.int32)
+    x_maxs = np.minimum(W, np.ceil(bx_arr + 3*radius) + 1).astype(np.int32)
+    y_mins = np.maximum(0, np.floor(by_arr - 3*radius)).astype(np.int32)
+    y_maxs = np.minimum(H, np.ceil(by_arr + 3*radius) + 1).astype(np.int32)
+    
+    for i in prange(N):
+        x = bx_arr[i]
+        y = by_arr[i]
+        dx = b_dx_arr[i]
+        dy = b_dy_arr[i]
         
-    flow_u_ext = flow_u[np.newaxis, :, :]
-    flow_v_ext = flow_v[np.newaxis, :, :]
-    
-    dot_grid = b_dx_arr * flow_u_ext + b_dy_arr * flow_v_ext
-    
-    b_norm = np.sqrt(b_dx_arr**2 + b_dy_arr**2)
-    flow_norm = np.sqrt(flow_u_ext**2 + flow_v_ext**2)
-    denom = b_norm * flow_norm
-    cos_grid = np.divide(dot_grid, denom, out=np.zeros_like(dot_grid), where=denom > 0)
-    
-    # Create mask for NaNs in flow data
-    valid_mask = ~np.isnan(flow_u_ext) & ~np.isnan(flow_v_ext)
-    weights = np.where(valid_mask, weights, 0.0)
-    weights_sum = np.sum(weights, axis=(1, 2))
-    
-    with np.errstate(all='ignore'):
-        mean_dot = np.sum(weights * dot_grid, axis=(1, 2)) / weights_sum
-        mean_cos = np.sum(weights * cos_grid, axis=(1, 2)) / weights_sum
-        mean_u = np.sum(weights * flow_u_ext, axis=(1, 2)) / weights_sum
-        mean_v = np.sum(weights * flow_v_ext, axis=(1, 2)) / weights_sum
+        x_min = x_mins[i]
+        x_max = x_maxs[i]
+        y_min = y_mins[i]
+        y_max = y_maxs[i]
         
-        cos_var = np.sum(weights * (cos_grid - mean_cos[:, np.newaxis, np.newaxis])**2, axis=(1, 2)) / weights_sum
-        cos_std = np.sqrt(cos_var)
+        b_norm = np.sqrt(dx*dx + dy*dy)
         
-    # 全てがNaN（画像外など）だった粒子のフォールバック処理
-    mean_dot = np.isnan(mean_dot, out=mean_dot, where=np.isnan(mean_dot)) # 0にする場合は後述
-    mean_dot = np.where(np.isnan(mean_dot), 0.0, mean_dot)
-    mean_cos = np.where(np.isnan(mean_cos), 0.0, mean_cos)
-    mean_u = np.where(np.isnan(mean_u), 0.0, mean_u)
-    mean_v = np.where(np.isnan(mean_v), 0.0, mean_v)
-    cos_stds = np.where(np.isnan(cos_std), 0.0, cos_std)
-    
+        w_sum = 0.0
+        dot_sum = 0.0
+        cos_sum = 0.0
+        u_sum = 0.0
+        v_sum = 0.0
+        cos_sq_sum = 0.0
+        
+        for yy in range(y_min, y_max):
+            dy_sq = (yy - y) * (yy - y)
+            for xx in range(x_min, x_max):
+                u = flow_u[yy, xx]
+                v = flow_v[yy, xx]
+                
+                if np.isnan(u) or np.isnan(v):
+                    continue
+                    
+                dist_sq = (xx - x)*(xx - x) + dy_sq
+                
+                if particle_radius > 0.0 and dist_sq <= pr2:
+                    continue
+                    
+                w = np.exp(-dist_sq / sigma2)
+                
+                w_sum += w
+                u_sum += w * u
+                v_sum += w * v
+                
+                dot = dx * u + dy * v
+                dot_sum += w * dot
+                
+                if b_norm > 0.0:
+                    flow_norm = np.sqrt(u*u + v*v)
+                    if flow_norm > 0.0:
+                        cos_val = dot / (b_norm * flow_norm)
+                        cos_sum += w * cos_val
+                        cos_sq_sum += w * cos_val * cos_val
+                        
+        if w_sum > 0.0:
+            mean_dot[i] = dot_sum / w_sum
+            mean_u[i] = u_sum / w_sum
+            mean_v[i] = v_sum / w_sum
+            m_cos = cos_sum / w_sum
+            mean_cos[i] = m_cos
+            
+            # 浮動小数点誤差による 0 未満の数値をクリップして NaN を防止
+            cos_var = (cos_sq_sum / w_sum) - (m_cos * m_cos)
+            if cos_var < 0.0:
+                cos_var = 0.0
+            cos_stds[i] = np.sqrt(cos_var)
+
     return mean_dot, mean_cos, mean_u, mean_v, cos_stds
+
 
 def calculate_flow_bead_dot_product_batch(bx_arr, by_arr, b_dx_arr, b_dy_arr, flow_u, flow_v, radius, particle_radius=0):
     """
     複数のビーズについて一括で内積とcos類似度を計算する関数。
-    
-    Parameters:
-    -----------
-    bx_arr, by_arr : array-like
-        ビーズの中心座標配列
-    b_dx_arr, b_dy_arr : array-like
-        ビーズの変位ベクトル配列
-    flow_u, flow_v : 2D np.ndarray
-        オプティカルフローのX成分, Y成分
-    radius : float
-        近傍の半径
-    particle_radius : float
-        除外する粒子自身の半径
-        
-    Returns:
-    --------
-    dot_products : np.ndarray
-        各ビーズにおけるピクセルごとの内積平均の配列
-    cos_sims : np.ndarray
-        各ビーズにおけるピクセルごとのcos類似度平均の配列
-    mean_us, mean_vs : np.ndarray
-        各ビーズ近傍の平均オプティカルフロー成分の配列
     """
-    bx_arr = np.asarray(bx_arr)
-    by_arr = np.asarray(by_arr)
-    b_dx_arr = np.asarray(b_dx_arr)
-    b_dy_arr = np.asarray(b_dy_arr)
+    bx_arr = np.asarray(bx_arr, dtype=np.float64)
+    by_arr = np.asarray(by_arr, dtype=np.float64)
+    b_dx_arr = np.asarray(b_dx_arr, dtype=np.float64)
+    b_dy_arr = np.asarray(b_dy_arr, dtype=np.float64)
     
-    n_beads = len(bx_arr)
-    dot_products = np.zeros(n_beads)
-    cos_sims = np.zeros(n_beads)
-    mean_us = np.zeros(n_beads)
-    mean_vs = np.zeros(n_beads)
-    cos_stds = np.zeros(n_beads)
-    
-    for i in range(n_beads):
-        dot, cos, mu, mv, cos_std = calculate_flow_bead_dot_product(
-            bx_arr[i], by_arr[i], b_dx_arr[i], b_dy_arr[i], 
-            flow_u, flow_v, radius, particle_radius
-        )
-        dot_products[i] = dot
-        cos_sims[i] = cos
-        mean_us[i] = mu
-        mean_vs[i] = mv
-        cos_stds[i] = cos_std
-        
-    return dot_products, cos_sims, mean_us, mean_vs, cos_stds
+    return calculate_flow_bead_dot_product_numba(
+        bx_arr, by_arr, b_dx_arr, b_dy_arr, 
+        flow_u, flow_v, float(radius), float(particle_radius)
+    )
 
 
 def main():
@@ -257,8 +216,18 @@ def main():
     
     if 'particle' not in df_tracks.columns:
         df_tracks['particle'] = np.arange(len(df_tracks))
-        
-    results = []
+    
+    # JITコンパイルのウォームアップ
+    dummy_arr = np.array([10.0], dtype=np.float64)
+    dummy_flow = np.zeros((10, 10), dtype=np.float32)
+    calculate_flow_bead_dot_product_numba(
+        dummy_arr, dummy_arr, dummy_arr, dummy_arr, dummy_flow, dummy_flow, 5.0, 0.0
+    )
+
+    if out_path.exists():
+        out_path.unlink()
+
+    first_write = True
     
     with h5py.File(str(h5_path), 'r') as f:
         dataset_key = list(f.keys())[0]
@@ -274,7 +243,7 @@ def main():
             
         grouped = df_tracks.groupby('frame')
         active_frames = sorted([fr for fr in grouped.groups.keys() if fr < num_frames])
-        
+
         for t in tqdm(active_frames, desc="Processing frames"):
             if t + args.dt not in grouped.groups:
                 continue
@@ -286,43 +255,51 @@ def main():
             if merged.empty:
                 continue
                 
-            bx = merged['x_0'].values
-            by = merged['y_0'].values
-            b_dx = merged['x_t'].values - bx
-            b_dy = merged['y_t'].values - by
-            p_ids = merged['particle'].values
+            bx = merged['x_0'].to_numpy(dtype=np.float64)
+            by = merged['y_0'].to_numpy(dtype=np.float64)
+            b_dx = (merged['x_t'] - merged['x_0']).to_numpy(dtype=np.float64)
+            b_dy = (merged['y_t'] - merged['y_0']).to_numpy(dtype=np.float64)
+            p_ids = merged['particle'].to_numpy()
             
             if channel_first:
-                m_x = flow_data[t, 0, ...].astype(np.float32)
-                m_y = flow_data[t, 1, ...].astype(np.float32)
+                m_x = np.ascontiguousarray(flow_data[t, 0, ...], dtype=np.float32)
+                m_y = np.ascontiguousarray(flow_data[t, 1, ...], dtype=np.float32)
             else:
-                m_x = flow_data[t, ..., 0].astype(np.float32)
-                m_y = flow_data[t, ..., 1].astype(np.float32)
+                m_x = np.ascontiguousarray(flow_data[t, ..., 0], dtype=np.float32)
+                m_y = np.ascontiguousarray(flow_data[t, ..., 1], dtype=np.float32)
                 
+            n_particles = len(p_ids)
+            
+            # 1フレーム分の全 sigma 結果を一時的に保持するリスト
+            frame_results = []
+            
             for rad in radii_list:
-                dot, cos, mu, mv, cos_std = calculate_flow_bead_dot_product_broadcast(
-                    bx, by, b_dx, b_dy, m_x, m_y, rad, args.particle_radius
+                dot, cos, mu, mv, cos_std = calculate_flow_bead_dot_product_numba(
+                    bx, by, b_dx, b_dy, m_x, m_y, float(rad), float(args.particle_radius)
                 )
                 
-                for i, p_id in enumerate(p_ids):
-                    results.append({
-                        'frame': t,
-                        'particle': p_id,
-                        'sigma': rad,
-                        'dot_product': dot[i],
-                        'cos_sim': cos[i],
-                        'mean_flow_u': mu[i],
-                        'mean_flow_v': mv[i],
-                        'cos_std': cos_std[i]
-                    })
+                frame_df = pd.DataFrame({
+                    'frame': np.full(n_particles, t, dtype=np.int32),
+                    'particle': p_ids,
+                    'sigma': np.full(n_particles, rad, dtype=np.float32),
+                    'dot_product': dot,
+                    'cos_sim': cos,
+                    'mean_flow_u': mu,
+                    'mean_flow_v': mv,
+                    'cos_std': cos_std
+                })
+                frame_results.append(frame_df)
 
-    if len(results) > 0:
-        res_df = pd.DataFrame(results)
-        print(f"Saving results to {out_path}...")
-        res_df.to_csv(out_path, index=False)
-        print("Done!")
-    else:
-        print("No interaction data computed (maybe no particles matched dt).")
-
+            # 1フレーム分の全 sigma をまとめて1回の to_csv で書き出し
+            if frame_results:
+                one_frame_df = pd.concat(frame_results, ignore_index=True)
+                one_frame_df.to_csv(
+                    out_path,
+                    mode='a',
+                    header=first_write,
+                    index=False
+                )
+                first_write = False
+        
 if __name__ == "__main__":
     main()
