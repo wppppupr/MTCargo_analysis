@@ -80,7 +80,7 @@ def main():
     alpha = 1
     marker_size = 10
     
-    min_t = 100
+    min_t = 60
     max_t = 300
 
     popt_06um, pcov_06um = fit(msd06um, min_t, max_t)
