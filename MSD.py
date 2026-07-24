@@ -16,8 +16,8 @@ from libs import displacement as dpm
 plt.style.use('libs/my_style.mplstyle')
 style_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
-mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
-#mypass = Path('/Volumes/data/Sasaki/MTSingleBeads')
+#mypass = Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads')
+mypass = Path('/Volumes/data/Sasaki/MTSingleBeads')
 
 def concatMSD(folder, interval_list, scale = 0.11):
     MSD_list = []
@@ -66,7 +66,7 @@ def main():
     msd3um = concatMSD(mypass / "beads3um", [4, 4, 4, 4])
     msd5um = concatMSD(mypass / "beads5um", [4, 4, 4, 4])
     msd7um = concatMSD(mypass / "beads7um", [4, 4, 4])
-    msd20um = concatMSD(mypass / "beads20um", [4, 4, 4, 4])
+    msd20um = concatMSD(mypass / "beads20um", [4, 4, 4])
 
     emsd_06um, err_06um, N_06um = calc_MSD(msd06um)
     emsd_1um, err_1um, N_1um = calc_MSD(msd1um)
@@ -80,8 +80,8 @@ def main():
     alpha = 1
     marker_size = 10
     
-    min_t = 60
-    max_t = 200
+    min_t = 100
+    max_t = 300
 
     popt_06um, pcov_06um = fit(msd06um, min_t, max_t)
     popt_1um, pcov_1um = fit(msd1um, min_t, max_t)
@@ -129,7 +129,7 @@ def main():
 
     ax.set(
         xlim=(4e-0, 1000),
-        ylim=(1e-1, 1e4),
+        ylim=(1e-2, 1e4),
         xscale='log',
         yscale='log',
         xlabel='lag time $\Delta t$ [s]',
