@@ -1,4 +1,21 @@
-#!/bin/bash
+#!/bin/zsh
+
+TARGET_DIR06='/Volumes/data/Sasaki/MTsingleBeads/beads06um/20260716'
+TARGET_DIR1='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads1um/20260717'
+TARGET_DIR3='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads3um/20260708'
+TARGET_DIR5='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads5um/20260715'
+TARGET_DIR7='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads7um/20260608'
+
+for FILE in "${TARGET_DIR06}"/*.nd2; do
+    BASENAME=$(basename "$FILE")
+
+    pixi run python libs/bead_flow_interaction_gaussian.py \
+    "${TARGET_DIR06}/${BASENAME%.nd2}" \
+    --particle_radius 3
+done
+
+<<c
+
 TARGET_DIR='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/beads1um/20260717'
 
 for FILE in "${TARGET_DIR}"/*.nd2; do
@@ -56,3 +73,4 @@ for FILE in "${TARGET_DIR}"/*; do
 done
 
 echo "Done"
+c

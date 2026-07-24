@@ -27,8 +27,8 @@ def parse_args():
                         help='Overlap fraction for window scanning (default: 0.2)')
     parser.add_argument('--eccentricity_thresh', type=float, default=0.2, 
                         help='Threshold for eccentricity to filter orientational order (default: 0.2)')
-    parser.add_argument('--neighborhood_radius', type=int, default=2, 
-                        help='Neighborhood radius for order calculation (default: 2)')
+    parser.add_argument('--neighborhood_radius', type=int, default=5, 
+                        help='Neighborhood radius for order calculation (default: 5)')
     parser.add_argument('--n_jobs', type=int, default=-1, 
                         help='Number of parallel jobs to run. -1 means using all cores (default: -1)')
     parser.add_argument('--chunk_size', type=int, default=20, 
