@@ -122,6 +122,7 @@ def main():
                 m_ux[~np.isfinite(m_ux)] = 0
                 m_uy[~np.isfinite(m_uy)] = 0
 
+            """
             if args.particle_radius > 0:
                 particle_mask = np.zeros((rows, cols), dtype=bool)
                 particle_mask[y_idx, x_idx] = True
@@ -130,6 +131,24 @@ def main():
                 struct = x_grid**2 + y_grid**2 <= r**2
                 particle_mask = binary_dilation(particle_mask, structure=struct)
                 valid_mask = (~particle_mask).astype(np.float32)
+                m_ux_masked = m_ux * valid_mask
+                m_uy_masked = m_uy * valid_mask
+            else:
+                valid_mask = None
+            """
+            if args.particle_radius > 0:
+                # 1. バックグラウンド（値=1.0）のマスクを uint8 で作成
+                # (cv2 の描画機能を使うため 8-bit 画像にします)
+                mask_uint8 = np.ones((rows, cols), dtype=np.uint8)
+                r = int(args.particle_radius)
+
+                # 2. 各粒子の位置に、半径 r の円を 0 (黒) で塗りつぶし描画
+                # cv2.circle は C++ 内部処理のため超高速・省メモリです
+                for x_p, y_p in zip(x_idx, y_idx):
+                    cv2.circle(mask_uint8, (int(x_p), int(y_p)), r, 0, thickness=-1)
+
+                # 3. float32 に変換 (0.0 がマスク領域、1.0 が有効領域)
+                valid_mask = mask_uint8.astype(np.float32)
                 m_ux_masked = m_ux * valid_mask
                 m_uy_masked = m_uy * valid_mask
             else:
