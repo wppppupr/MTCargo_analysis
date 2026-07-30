@@ -6,6 +6,8 @@ version = "0.1.0"
 
 [tasks]
 
+RDF = "sh -c 'for dir in /Volumes/data/Sasaki/MTsingleBeads/beads3um/*/*; do echo \"Processing $(basename \\\"$dir\\\")...\"; python libs/RDF.py \"$dir\"; done'"
+
 [dependencies]
 python = "3.11.*"
 numpy = ">=2.3.5,<3"

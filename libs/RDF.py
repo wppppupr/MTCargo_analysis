@@ -2,19 +2,16 @@ import numpy as np
 import zarr
 import os
 import pandas as pd
-# =============================================================================
-# 設定
-# =============================================================================
-TARGET_PATH = r'/Volumes/My Passport/Sasaki/MTsingleBeads/20260121/beads_trans_crop_crop'
+import argparse
+import cv2
 
-# RDFの計算設定
-MAX_RC = 50  # 粒子系の何倍まで計算するか
+from tqdm import tqdm
 
 # =============================================================================
 # 関数定義
 # =============================================================================
 
-def calculate_RDF(image, centers, max_r):
+def calculate_RDF(image, centers, max_r, mask_r=None):
     """
     For文を一切使わず、かつ局所領域（ROI）のみを計算する最速・最適化版。
     (TypeError修正済み: max_rを強制的にintに変換します)
@@ -94,53 +91,73 @@ def calculate_RDF(image, centers, max_r):
         
     profiles[counts == 0] = 0
 
-    global_mean_intensity = np.mean(image)
-    g_r = profiles/global_mean_intensity
+    if mask_r is not None and mask_r > 0:
+        mask_r_int = int(mask_r)
+        mask_uint8 = np.ones(image.shape, dtype=np.uint8)
+        for x_p, y_p in np.round(centers).astype(int):
+            cv2.circle(mask_uint8, (int(x_p), int(y_p)), mask_r_int, 0, thickness=-1)
+        valid_pixels = image[mask_uint8 == 1]
+        if len(valid_pixels) > 0:
+            mean_intensity = np.mean(valid_pixels)
+        else:
+            mean_intensity = np.mean(image)
+    else:
+        mean_intensity = np.mean(image)
+
+    g_r = profiles / mean_intensity
     
     return g_r
 
-def get_RDFs(image_seq, tracks, max_r):
+def get_RDFs(image_seq, tracks, max_r, mask_r=None):
     g_r_list = []
     frames = np.arange(len(image_seq))
-    for frame in frames:
+    for frame in tqdm(frames):
         image = image_seq[frame]
         track = tracks[tracks['frame'] == frame]
         x = track['x']
         y = track['y']
         pos = np.array([x, y]).T
 
-        g_r = calculate_RDF(image, pos, max_r)
+        g_r = calculate_RDF(image, pos, max_r, mask_r)
         g_r_list.extend(g_r)
 
     return np.array(g_r_list)
 
-if __name__ == "__main__":
+def main():
+    parser = argparse.ArgumentParser(description='Calculate RDF.')
+    parser.add_argument('base_path', type=str, help='Path to the directory containing MTs.zarr and beads_tracks.csv')
+    parser.add_argument('--max_rc', type=int, default=10, help='Maximum R_c to calculate (default: 10)')
+    parser.add_argument('--scale', type=float, default=0.11, help='Scale um/px (default: 0.11)')
+    parser.add_argument('--cargo_radius', type=float, default=0.59, help='Cargo radius um (default: 0.59)')
+    parser.add_argument('--mask_radius', type=float, default=None, help='Radius (in px) around particles to mask out for bulk intensity. Defaults to cargo_radius/scale * 3.')
+    args = parser.parse_args()
 
-    g_r_path = os.path.join(TARGET_PATH, 'RDF.zarr')
-    g_r_red_path = os.path.join(TARGET_PATH, 'RDF_red.zarr')
+    target_path = args.base_path
+    g_r_path = os.path.join(target_path, 'RDF.zarr')
 
-    scale = 0.11 # um/px
-    cargo_radius = 0.59 # um
+    r_c = args.cargo_radius / args.scale
+    mask_r = args.mask_radius if args.mask_radius is not None else r_c * 3
 
-    r_c = cargo_radius/scale
+    print(f'calculate RDF for {target_path}')
 
-    MTs_red_path = os.path.join(TARGET_PATH, "MTs_red.zarr")
-    MTs_red_zarr = zarr.open_array(MTs_red_path, mode = 'r')
+    MTs_path = os.path.join(target_path, "GFP.zarr")
+    if not os.path.exists(MTs_path):
+        print(f"Error: {MTs_path} not found.")
+        return
 
-    MTs_path = os.path.join(TARGET_PATH, "MTs.zarr")
-    MTszarr = zarr.open_array(MTs_path, mode = 'r')
+    track_path = os.path.join(target_path, "beads_tracks.csv")
+    if not os.path.exists(track_path):
+        print(f"Error: {track_path} not found.")
+        return
 
-    track_path = os.path.join(TARGET_PATH, "beads_tracks.csv")
+    MTszarr = zarr.open_array(MTs_path, mode='r')
     tracks = pd.read_csv(track_path)
 
-    print('Red')
-    red = get_RDFs(MTs_red_zarr[:], tracks, max_r=r_c*MAX_RC)
-    red_zarr = zarr.open(g_r_red_path, mode='w', shape=red.shape, dtype=red.dtype)
-    red_zarr[:] = red
-
-    print("Green")
-
-    g_r = get_RDFs(MTszarr[:], tracks, max_r=r_c*MAX_RC)
+    g_r = get_RDFs(MTszarr[:], tracks, max_r=r_c*args.max_rc, mask_r=mask_r)
     g_r_zarr = zarr.open(g_r_path, mode='w', shape=g_r.shape, dtype=g_r.dtype)
     g_r_zarr[:] = g_r
     
+    print('done')
+
+if __name__ == "__main__":
+    main()
