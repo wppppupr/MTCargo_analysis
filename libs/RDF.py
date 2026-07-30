@@ -136,7 +136,7 @@ def main():
     g_r_path = os.path.join(target_path, 'RDF.zarr')
 
     r_c = args.cargo_radius / args.scale
-    mask_r = args.mask_radius if args.mask_radius is not None else r_c * 3
+    mask_r = args.mask_radius if args.mask_radius is not None else r_c * 7
 
     print(f'calculate RDF for {target_path}')
 
