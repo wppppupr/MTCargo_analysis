@@ -6,6 +6,9 @@ import os
 import argparse
 from pathlib import Path
 
+def ring_gaussian(r, H, r_0, w):
+    return - H * np.exp(- (r - r_0)**2 / (2.0 * w**2))
+
 def get_experiment_rdfs(base_path):
     """
     指定されたパスパターンにマッチする各ディレクトリのRDFを読み込み、
@@ -26,7 +29,7 @@ def get_experiment_rdfs(base_path):
                 
     return np.array(exp_means)
 
-def plot_RDF(base_path, ax=None, diameter=0.63, color='C0', marker="^", scale=0.11):
+def plot_RDF(base_path, ax=None, diameter=0.63, color='C0', marker="^", scale=0.11, xlim=(0, 40)):
     exp_means = get_experiment_rdfs(base_path)
     
     if len(exp_means) > 0:
@@ -53,6 +56,7 @@ def plot_RDF(base_path, ax=None, diameter=0.63, color='C0', marker="^", scale=0.
         ax.set_xlabel('Distance [μm]')
         ax.set_ylabel('RDF $g(r)$')
         ax.set_title('Radial Distribution Function')
+        ax.set_xlim(xlim)
         ax.legend()
 
         if show_plot:
@@ -60,7 +64,7 @@ def plot_RDF(base_path, ax=None, diameter=0.63, color='C0', marker="^", scale=0.
     else:
         print(f"有効な RDF.zarr が見つかりませんでした: {base_path}")
 
-def plot_potential(base_path, ax=None, diameter=0.63, color='C0', marker="^", scale=0.11):
+def plot_potential(base_path, ax=None, diameter=0.63, color='C0', marker="^", scale=0.11, xlim=(0, 40)):
     exp_means = get_experiment_rdfs(base_path)
     
     if len(exp_means) > 0:
@@ -91,10 +95,10 @@ def plot_potential(base_path, ax=None, diameter=0.63, color='C0', marker="^", sc
         ax.axhline(0.0, color='gray', linestyle='--', linewidth=1.5)
         
         ax.set_xlabel('Distance $r$ [μm]')
-        ax.set_ylabel('Effective Potential $U_\mathrm{eff}(r)$')
+        ax.set_ylabel('$-\ln g(r)$')
         #ax.set_title('Effective Potential')
+        ax.set_xlim(xlim)
         ax.legend()
-        ax.set_xlim(0, 20)
 
         if show_plot:
             plt.show()
@@ -123,48 +127,50 @@ def main():
 
     if args.plot_all:
         beads = [
-            (0.6, "/Volumes/data/Sasaki/MTsingleBeads/beads06um/*/*", "C0", "^"),
-            (1.0, "/Volumes/data/Sasaki/MTsingleBeads/beads1um/*/*", "C1", "o"),
-            (3.0, "/Volumes/data/Sasaki/MTsingleBeads/beads3um/*/*", "C2", "d"),
+            (0.63, "/Volumes/data/Sasaki/MTsingleBeads/beads06um/*/*", "C0", "^"),
+            (1.18, "/Volumes/data/Sasaki/MTsingleBeads/beads1um/*/*", "C1", "o"),
+            (3.37, "/Volumes/data/Sasaki/MTsingleBeads/beads3um/*/*", "C2", "d"),
             (5.0, "/Volumes/data/Sasaki/MTsingleBeads/beads5um/*/*", "C3", 10),
-            (7.0, "/Volumes/data/Sasaki/MTsingleBeads/beads7um/*/*", "C4", 11),
-            #(20.0, "/Volumes/data/Sasaki/MTsingleBeads/beads20um/*/*", "C5", "s"),
+            (7.24, "/Volumes/data/Sasaki/MTsingleBeads/beads7um/*/*", "C4", 11),
+            (20.0, "/Volumes/data/Sasaki/MTsingleBeads/beads20um/*/*", "C5", "s"),
         ]
         
-        # すべてのRDFを1つのグラフにプロット
-        fig_rdf, ax_rdf = plt.subplots()
-        for diameter, path, color, marker in beads:
-            plot_RDF(path, ax=ax_rdf, diameter=diameter, color=color, marker=marker, scale=args.scale)
-        rdf_out = os.path.join(args.output_dir, 'RDF_all_small.png')
-        fig_rdf.savefig(rdf_out, bbox_inches='tight')
-        plt.close(fig_rdf)
-        print(f"Saved combined RDF plot to {rdf_out}")
-        
-        # すべてのポテンシャルを1つのグラフにプロット
-        fig_pot, ax_pot = plt.subplots()
-        for diameter, path, color, marker in beads:
-            plot_potential(path, ax=ax_pot, diameter=diameter, color=color, marker=marker, scale=args.scale)
-        pot_out = os.path.join(args.output_dir, 'Potential_all_small.png')
-        fig_pot.savefig(pot_out, bbox_inches='tight')
-        plt.close(fig_pot)
-        print(f"Saved combined Potential plot to {pot_out}")
+        for xlim in [(0, 40), (0, 20)]:
+            # すべてのRDFを1つのグラフにプロット
+            fig_rdf, ax_rdf = plt.subplots()
+            for diameter, path, color, marker in beads:
+                plot_RDF(path, ax=ax_rdf, diameter=diameter, color=color, marker=marker, scale=args.scale, xlim=xlim)
+            rdf_out = os.path.join(args.output_dir, f'RDF_all_xlim{xlim[1]}.svg')
+            fig_rdf.savefig(rdf_out, bbox_inches='tight')
+            plt.close(fig_rdf)
+            print(f"Saved combined RDF plot to {rdf_out}")
+            
+            # すべてのポテンシャルを1つのグラフにプロット
+            fig_pot, ax_pot = plt.subplots()
+            for diameter, path, color, marker in beads:
+                plot_potential(path, ax=ax_pot, diameter=diameter, color=color, marker=marker, scale=args.scale, xlim=xlim)
+            pot_out = os.path.join(args.output_dir, f'Potential_all_xlim{xlim[1]}.svg')
+            fig_pot.savefig(pot_out, bbox_inches='tight')
+            plt.close(fig_pot)
+            print(f"Saved combined Potential plot to {pot_out}")
         
     elif args.base_path:
-        # RDFの保存
-        fig_rdf, ax_rdf = plt.subplots()
-        plot_RDF(args.base_path, ax=ax_rdf, diameter=args.diameter, color=args.color, marker=args.marker, scale=args.scale)
-        rdf_out = os.path.join(args.output_dir, f'RDF_{args.diameter}um.svg')
-        fig_rdf.savefig(rdf_out, bbox_inches='tight')
-        plt.close(fig_rdf)
-        print(f"Saved RDF plot to {rdf_out}")
-        
-        # ポテンシャルの保存
-        fig_pot, ax_pot = plt.subplots()
-        plot_potential(args.base_path, ax=ax_pot, diameter=args.diameter, color=args.color, marker=args.marker, scale=args.scale)
-        pot_out = os.path.join(args.output_dir, f'Potential_{args.diameter}um.svg')
-        fig_pot.savefig(pot_out, bbox_inches='tight')
-        plt.close(fig_pot)
-        print(f"Saved Potential plot to {pot_out}")
+        for xlim in [(0, 40), (0, 20)]:
+            # RDFの保存
+            fig_rdf, ax_rdf = plt.subplots()
+            plot_RDF(args.base_path, ax=ax_rdf, diameter=args.diameter, color=args.color, marker=args.marker, scale=args.scale, xlim=xlim)
+            rdf_out = os.path.join(args.output_dir, f'RDF_{args.diameter}um_xlim{xlim[1]}.svg')
+            fig_rdf.savefig(rdf_out, bbox_inches='tight')
+            plt.close(fig_rdf)
+            print(f"Saved RDF plot to {rdf_out}")
+            
+            # ポテンシャルの保存
+            fig_pot, ax_pot = plt.subplots()
+            plot_potential(args.base_path, ax=ax_pot, diameter=args.diameter, color=args.color, marker=args.marker, scale=args.scale, xlim=xlim)
+            pot_out = os.path.join(args.output_dir, f'Potential_{args.diameter}um_xlim{xlim[1]}.svg')
+            fig_pot.savefig(pot_out, bbox_inches='tight')
+            plt.close(fig_pot)
+            print(f"Saved Potential plot to {pot_out}")
     else:
         print("エラー: base_pathを指定するか、--plot_all オプションを使用してください。")
 
