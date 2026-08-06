@@ -132,7 +132,7 @@ def plot_all_beads_vacf(root_dir, out_dir):
         xlim=(0, 30),
         ylim=(-1, 1),
         xlabel='lag time $\Delta t$ [s]',
-        ylabel='ACF $\langle \\Delta\\hat{r}_i(t)\\cdot \\Delta\\hat{r}_i(t+\\Delta t) \\rangle$'
+        ylabel='ACF $\langle \\Delta\\hat{\\boldsymbol{r}}_i(t)\\cdot \\Delta\\hat{\\boldsymbol{r}}_i(t+\\Delta t) \\rangle$'
     )
 
     save_path = out / "VACF.svg"
