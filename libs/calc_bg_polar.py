@@ -4,11 +4,22 @@ import pandas as pd
 import h5py
 import xarray as xr
 import os
+import sys
 import shutil
 from pathlib import Path
 from tqdm import tqdm
-import cv2
-from concurrent.futures import ThreadPoolExecutor
+
+current_dir = Path(__file__).resolve().parent
+if str(current_dir) not in sys.path:
+    sys.path.insert(0, str(current_dir))
+if str(current_dir.parent) not in sys.path:
+    sys.path.insert(0, str(current_dir.parent))
+
+try:
+    from libs.fft_convolution import FFTConvolver
+except ImportError:
+    from fft_convolution import FFTConvolver
+
 
 def main():
     parser = argparse.ArgumentParser(description='Calculate local polar order for an arbitrary ROI.')
@@ -19,6 +30,8 @@ def main():
     parser.add_argument('--tracks_csv', type=str, default='beads_tracks.csv', help='Trackpy csv file name')
     parser.add_argument('--windows', type=str, nargs='+', default=['5:100:5', '100:500:50'], 
                         help='Window sizes. Accepts space/comma separated numbers, or start:stop:step (e.g. 10 50 100, or 10:200:10)')
+    parser.add_argument('--device', type=str, default=None, choices=['cuda', 'cpu', 'torch_cpu', 'scipy'],
+                        help='Compute backend (cuda/cpu/scipy). Default: auto-detect GPU.')
     args = parser.parse_args()
 
     base_path = Path(args.base_path)
@@ -74,7 +87,6 @@ def main():
                 raise ValueError("Error: Track CSV is required to automatically find an empty ROI.")
             
             print("Automatically searching for the safest particle-free ROI...")
-            # Compute a global 2D mask of all particle positions over time
             y_all = np.clip(np.round(df_tracks['y'].values).astype(int), 0, rows - 1)
             x_all = np.clip(np.round(df_tracks['x'].values).astype(int), 0, cols - 1)
             particle_mask = np.zeros((rows, cols), dtype=bool)
@@ -93,7 +105,6 @@ def main():
             y_idx = np.clip(args.roi_y, 0, rows - 1)
             x_idx = np.clip(args.roi_x, 0, cols - 1)
 
-            # Check for particle overlap for manual ROI
             if df_tracks is not None:
                 in_roi = df_tracks[
                     (df_tracks['x'] >= x_idx - half_w) & (df_tracks['x'] <= x_idx + half_w) &
@@ -111,15 +122,25 @@ def main():
 
         polar_order_array = np.full((len(local_sizes), num_frames), np.nan, dtype=np.float32)
 
-        # --- 事前に距離マップを計算しておく（mainのループ外で1回実行） ---
-        y_all = np.clip(np.round(df_tracks['y'].values).astype(int), 0, rows - 1)
-        x_all = np.clip(np.round(df_tracks['x'].values).astype(int), 0, cols - 1)
-        particle_mask = np.zeros((rows, cols), dtype=bool)
-        particle_mask[y_all, x_all] = True
-        from scipy.ndimage import distance_transform_edt
-        dist_map = distance_transform_edt(~particle_mask)
+        # 事前に距離マップと安全マスクを計算
+        if df_tracks is not None:
+            y_all = np.clip(np.round(df_tracks['y'].values).astype(int), 0, rows - 1)
+            x_all = np.clip(np.round(df_tracks['x'].values).astype(int), 0, cols - 1)
+            particle_mask = np.zeros((rows, cols), dtype=bool)
+            particle_mask[y_all, x_all] = True
+            from scipy.ndimage import distance_transform_edt
+            dist_map = distance_transform_edt(~particle_mask)
+            safe_masks = [(dist_map > (s + 5)) for s in local_sizes]
+        else:
+            safe_masks = [np.ones((rows, cols), dtype=bool) for _ in local_sizes]
 
-        def process_frame(t):
+        # FFTConvolver の初期化
+        print(f"Initializing Fast FFT Convolver ({len(local_sizes)} window sizes, device={args.device or 'auto'})...")
+        convolver = FFTConvolver(shape=(rows, cols), sizes=local_sizes, kernel_type='disk', device=args.device)
+        print(f"Using backend: {convolver.device_type}")
+
+        print(f"Calculating background polar order for {num_frames} frames...")
+        for t in tqdm(range(num_frames)):
             if channel_first:
                 m_x = flow_data[t, 0, ...].astype(np.float32)
                 m_y = flow_data[t, 1, ...].astype(np.float32)
@@ -129,49 +150,13 @@ def main():
             
             v_mag = np.hypot(m_x, m_y)
             with np.errstate(divide='ignore', invalid='ignore'):
-                m_ux = m_x / v_mag
-                m_uy = m_y / v_mag
-                # Fill NaNs with 0 for vector addition
-                m_ux[~np.isfinite(m_ux)] = 0
-                m_uy[~np.isfinite(m_uy)] = 0
+                m_ux = np.where(v_mag > 0, m_x / v_mag, 0.0).astype(np.float32)
+                m_uy = np.where(v_mag > 0, m_y / v_mag, 0.0).astype(np.float32)
 
-            p_vals = np.empty((len(local_sizes),), dtype=np.float32)
-            
-            for w_idx, size in enumerate(local_sizes):
-                # 1. 局所ポーラー度フィールド全体を計算
-                kernel_size = 2 * size + 1
-                kernel = np.zeros((kernel_size, kernel_size), dtype=np.float32)
-                center = size
-                ky, kx = np.ogrid[:kernel_size, :kernel_size]
-                kmask = (kx - center)**2 + (ky - center)**2 <= size**2
-                kernel[kmask] = 1.0
-                kernel /= kernel.sum()
-
-                u_avg = cv2.filter2D(m_ux, -1, kernel, borderType=cv2.BORDER_REFLECT)
-                v_avg = cv2.filter2D(m_uy, -1, kernel, borderType=cv2.BORDER_REFLECT)
-                p_field = np.hypot(u_avg, v_avg, dtype=np.float32)
-
-                # 2. 「半径 size/2 以内に粒子がいない」安全なピクセルをすべて特定
-                safe_mask = dist_map > (size + 5) # 5pxのマージン
-                
-                # 3. 安全な領域の平均値をとる（これがアンサンブル平均）
-                if np.any(safe_mask):
-                    p_vals[w_idx] = np.mean(p_field[safe_mask])
-                else:
-                    p_vals[w_idx] = np.nan
-
-            return t, p_vals
-
-        print(f"Calculating for ROI ({x_idx}, {y_idx}) with window sizes: {local_sizes}...")
-        workers = min(32, (os.cpu_count() or 1) + 4)
-        active_frames = list(range(num_frames))
-        
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            for t, p_vals in tqdm(executor.map(process_frame, active_frames), total=num_frames):
-                polar_order_array[:, t] = p_vals
+            p_vals = convolver.convolve_and_sample_bg_polar(m_ux=m_ux, m_uy=m_uy, safe_masks=safe_masks)
+            polar_order_array[:, t] = p_vals
 
     print("\nConsolidating data into xarray...")
-    
     ds_roi = xr.Dataset(
         data_vars={
             'polar_order': xr.DataArray(
@@ -188,14 +173,14 @@ def main():
     ds_roi.attrs['roi_y'] = int(y_idx)
     ds_roi.attrs['window sizes'] = local_sizes
 
-    out_roi = base_path / f"local_polar_bg.zarr"
+    out_roi = base_path / "local_polar_bg.zarr"
 
     if out_roi.exists():
         shutil.rmtree(out_roi, ignore_errors=True)
     
     ds_roi.to_zarr(str(out_roi), mode='w', consolidated=False)
-    
     print(f"Success! Data saved to {out_roi}")
+
 
 if __name__ == "__main__":
     main()

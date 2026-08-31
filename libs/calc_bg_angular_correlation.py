@@ -4,11 +4,22 @@ import pandas as pd
 import h5py
 import xarray as xr
 import os
+import sys
 import shutil
 from pathlib import Path
 from tqdm import tqdm
-import cv2
-from concurrent.futures import ThreadPoolExecutor
+
+current_dir = Path(__file__).resolve().parent
+if str(current_dir) not in sys.path:
+    sys.path.insert(0, str(current_dir))
+if str(current_dir.parent) not in sys.path:
+    sys.path.insert(0, str(current_dir.parent))
+
+try:
+    from libs.fft_convolution import FFTConvolver
+except ImportError:
+    from fft_convolution import FFTConvolver
+
 
 def parse_distances(distance_args):
     """
@@ -30,52 +41,6 @@ def parse_distances(distance_args):
                 sizes.add(int(p))
     return sorted(list(sizes))
 
-def create_kernel(r, kernel_type='ring', shell_width=2.0):
-    """
-    Create a spatial convolution kernel for a given distance/radius r.
-    """
-    if r == 0:
-        return np.ones((1, 1), dtype=np.float32)
-
-    half_w = float(shell_width) / 2.0
-
-    if kernel_type == 'ring':
-        max_r = int(np.ceil(r + half_w))
-        ksize = 2 * max_r + 1
-        center = max_r
-        ky, kx = np.ogrid[:ksize, :ksize]
-        dist = np.hypot(kx - center, ky - center)
-        kmask = (dist >= (r - half_w)) & (dist <= (r + half_w))
-        kernel = np.zeros((ksize, ksize), dtype=np.float32)
-        if np.any(kmask):
-            kernel[kmask] = 1.0
-        else:
-            closest_idx = np.unravel_index(np.argmin(np.abs(dist - r)), dist.shape)
-            kernel[closest_idx] = 1.0
-    elif kernel_type == 'disk':
-        max_r = int(np.ceil(r))
-        ksize = 2 * max_r + 1
-        center = max_r
-        ky, kx = np.ogrid[:ksize, :ksize]
-        dist = np.hypot(kx - center, ky - center)
-        kmask = dist <= r
-        kernel = np.zeros((ksize, ksize), dtype=np.float32)
-        kernel[kmask] = 1.0
-    elif kernel_type == 'gaussian':
-        sigma = float(r)
-        max_r = int(np.ceil(3 * sigma))
-        ksize = 2 * max_r + 1
-        center = max_r
-        ky, kx = np.ogrid[:ksize, :ksize]
-        dist_sq = (kx - center)**2 + (ky - center)**2
-        kernel = np.exp(-dist_sq / (2.0 * sigma**2)).astype(np.float32)
-    else:
-        raise ValueError(f"Unknown kernel_type: {kernel_type}. Choose from 'ring', 'disk', 'gaussian'.")
-
-    k_sum = kernel.sum()
-    if k_sum > 0:
-        kernel /= k_sum
-    return kernel
 
 def main():
     parser = argparse.ArgumentParser(description='Calculate angular spatial correlation for background / ROI.')
@@ -90,6 +55,8 @@ def main():
     parser.add_argument('--kernel_type', type=str, default='ring', choices=['ring', 'disk', 'gaussian'],
                         help='Kernel type: "ring" (annular shell, default), "disk" (circular window), or "gaussian".')
     parser.add_argument('--out_name', type=str, default='angular_correlation_bg.zarr', help='Output zarr directory name')
+    parser.add_argument('--device', type=str, default=None, choices=['cuda', 'cpu', 'torch_cpu', 'scipy'],
+                        help='Compute backend (cuda/cpu/scipy). Default: auto-detect GPU.')
     args = parser.parse_args()
 
     base_path = Path(args.base_path)
@@ -100,19 +67,15 @@ def main():
         print(f"Error: HDF5 file not found at {h5_path}")
         return
 
-    # Parse distance list
     distances = parse_distances(args.distances)
     print(f"Distances to compute: {distances}")
 
-    # Read particle tracks if they exist for overlap checking
     df_tracks = None
     if csv_path.exists():
         print(f"Loading tracks from {csv_path} for overlap checking...")
         df_tracks = pd.read_csv(csv_path)
     else:
         print(f"Warning: Track file not found at {csv_path}. Particle overlap checking will be skipped.")
-
-    kernels = [create_kernel(d, kernel_type=args.kernel_type, shell_width=args.shell_width) for d in distances]
 
     with h5py.File(str(h5_path), 'r') as f:
         dataset_key = list(f.keys())[0]
@@ -151,10 +114,9 @@ def main():
             roi_y, roi_x = np.unravel_index(dist_map.argmax(), dist_map.shape)
             print(f"Automatically selected ROI center at ({roi_x}, {roi_y}) with a safe radius of {max_available:.1f} px to the nearest particle.")
         else:
-            roi_y = np.clip(args.roi_y, 0, rows - 1)
-            roi_x = np.clip(args.roi_x, 0, cols - 1)
+            roi_y = int(np.clip(args.roi_y, 0, rows - 1))
+            roi_x = int(np.clip(args.roi_x, 0, cols - 1))
 
-            # Check for particle overlap for manual ROI
             if df_tracks is not None:
                 in_roi = df_tracks[
                     (df_tracks['x'] >= roi_x - half_w) & (df_tracks['x'] <= roi_x + half_w) &
@@ -172,7 +134,13 @@ def main():
 
         corr_bg_array = np.full((len(distances), num_frames), np.nan, dtype=np.float32)
 
-        def process_frame(t):
+        # FFTConvolver 初期化
+        print(f"Initializing Fast FFT Convolver ({len(distances)} distances, kernel={args.kernel_type}, device={args.device or 'auto'})...")
+        convolver = FFTConvolver(shape=(rows, cols), sizes=distances, kernel_type=args.kernel_type, shell_width=args.shell_width, device=args.device)
+        print(f"Using backend: {convolver.device_type}")
+
+        print(f"Calculating background angular spatial correlation across {num_frames} frames...")
+        for t in tqdm(range(num_frames)):
             if channel_first:
                 m_x = flow_data[t, 0, ...].astype(np.float32)
                 m_y = flow_data[t, 1, ...].astype(np.float32)
@@ -185,28 +153,8 @@ def main():
                 m_ux = np.where(v_mag > 0, m_x / v_mag, 0.0).astype(np.float32)
                 m_uy = np.where(v_mag > 0, m_y / v_mag, 0.0).astype(np.float32)
 
-            # Center flow direction at ROI center
-            center_ux = m_ux[roi_y, roi_x]
-            center_uy = m_uy[roi_y, roi_x]
-
-            c_vals = np.empty((len(distances),), dtype=np.float32)
-
-            for d_idx, kernel in enumerate(kernels):
-                u_avg = cv2.filter2D(m_ux, -1, kernel, borderType=cv2.BORDER_REFLECT)
-                v_avg = cv2.filter2D(m_uy, -1, kernel, borderType=cv2.BORDER_REFLECT)
-
-                # Correlation at ROI center: <u(roi) . u(roi + r)>
-                avg_ux_at_roi = u_avg[roi_y, roi_x]
-                avg_uy_at_roi = v_avg[roi_y, roi_x]
-                c_vals[d_idx] = center_ux * avg_ux_at_roi + center_uy * avg_uy_at_roi
-
-            return t, c_vals
-
-        workers = min(32, (os.cpu_count() or 1) + 4)
-        print(f"Calculating background angular spatial correlation across {num_frames} frames...")
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            for t, c_vals in tqdm(executor.map(process_frame, range(num_frames)), total=num_frames):
-                corr_bg_array[:, t] = c_vals
+            c_vals = convolver.convolve_and_sample_bg_angular_correlation(m_ux=m_ux, m_uy=m_uy, roi_y=roi_y, roi_x=roi_x)
+            corr_bg_array[:, t] = c_vals
 
     print("\nConsolidating background data into xarray...")
     ds_bg = xr.Dataset(
@@ -231,6 +179,7 @@ def main():
 
     ds_bg.to_zarr(str(out_bg), mode='w', consolidated=False)
     print(f"Success! Background angular correlation saved to {out_bg}")
+
 
 if __name__ == "__main__":
     main()

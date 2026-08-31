@@ -1,3 +1,4 @@
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -55,12 +56,19 @@ def load_condition_correlations(root_path, folder_name, particle_zarr="angular_c
     bgs = []
     beads = []
 
-    pattern = str(root_path / folder_name / "*" / "*")
-    for input_dir in sorted(glob.glob(pattern)):
-        input_dir = Path(input_dir)
-        if os.path.isfile(input_dir):
-            continue
+    # Find experiment directories (depth 1 or 2)
+    candidate_dirs = []
+    base = root_path / folder_name
+    if base.exists():
+        for p in base.glob("*/*"):
+            if p.is_dir() and ((p / particle_zarr).exists() or (p / bg_zarr).exists()):
+                candidate_dirs.append(p)
+        if not candidate_dirs:
+            for p in base.glob("*"):
+                if p.is_dir() and ((p / particle_zarr).exists() or (p / bg_zarr).exists()):
+                    candidate_dirs.append(p)
 
+    for input_dir in sorted(candidate_dirs):
         p_path = input_dir / particle_zarr
         bg_path = input_dir / bg_zarr
 
@@ -158,3 +166,75 @@ def fit_correlation_length(distances_um, mean_corr, max_fit_dist=None):
     except Exception as e:
         print(f"Fit failed: {e}")
         return None, None
+
+def main():
+    parser = argparse.ArgumentParser(description="Analyze and plot angular spatial correlation across bead conditions.")
+    parser.add_argument('--root_dir', type=str, default='/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads', help='Root directory')
+    parser.add_argument('--conditions', type=str, nargs='+', default=['beads06um', 'beads1um', 'beads3um', 'beads5um', 'beads7um', 'beads20um'],
+                        help='Bead conditions to plot')
+    parser.add_argument('--save_fig', type=str, default='angular_correlation_summary.png', help='Save figure path')
+    args = parser.parse_args()
+
+    root_path = Path(args.root_dir)
+    if not root_path.exists():
+        root_path = Path('/Volumes/data/Sasaki/MTsingleBeads')
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    ax_flow, ax_bead, ax_bg = axes
+
+    results = []
+
+    for condition in args.conditions:
+        particles, bgs, beads = load_condition_correlations(root_path, condition)
+        if not particles and not bgs:
+            print(f"Skipping {condition}: no correlation data found.")
+            continue
+
+        print(f"\nCondition: {condition} (particles: {len(particles)}, bg: {len(bgs)}, beads: {len(beads)})")
+
+        # 1. Flow around particle
+        if particles:
+            df_p = make_correlation_df(particles, var_name='flow_corr')
+            dist_um, mean_c, _ = plot_angular_correlation(df_p, var_name='flow_corr', ax=ax_flow, label=condition)
+            xi_p, _ = fit_correlation_length(dist_um, mean_c, max_fit_dist=30.0)
+            if xi_p is not None:
+                print(f"  -> Flow Correlation Length xi = {xi_p:.2f} um")
+                results.append({'condition': condition, 'type': 'flow_particle', 'xi_um': xi_p})
+
+        # 2. Bead movement direction vs flow
+        if beads:
+            df_b = make_correlation_df(beads, var_name='bead_corr')
+            dist_um, mean_c, _ = plot_angular_correlation(df_b, var_name='bead_corr', ax=ax_bead, label=condition)
+            xi_b, _ = fit_correlation_length(dist_um, mean_c, max_fit_dist=30.0)
+            if xi_b is not None:
+                print(f"  -> Bead-Flow Correlation Length xi = {xi_b:.2f} um")
+                results.append({'condition': condition, 'type': 'bead_flow', 'xi_um': xi_b})
+
+        # 3. Background ROI
+        if bgs:
+            df_bg = make_correlation_df(bgs, var_name='bg_corr')
+            dist_um, mean_c, _ = plot_angular_correlation(df_bg, var_name='bg_corr', ax=ax_bg, label=condition)
+            xi_bg, _ = fit_correlation_length(dist_um, mean_c, max_fit_dist=30.0)
+            if xi_bg is not None:
+                print(f"  -> BG Correlation Length xi = {xi_bg:.2f} um")
+                results.append({'condition': condition, 'type': 'background', 'xi_um': xi_bg})
+
+    ax_flow.set_title(r"Flow Direction Correlation $\langle \hat{\mathbf{u}}_{\mathrm{flow}}(0) \cdot \hat{\mathbf{u}}_{\mathrm{flow}}(r) \rangle$")
+    ax_flow.legend()
+    ax_bead.set_title(r"Bead Velocity Correlation $\langle \hat{\mathbf{u}}_{\mathrm{bead}} \cdot \hat{\mathbf{u}}_{\mathrm{flow}}(r) \rangle$")
+    ax_bead.legend()
+    ax_bg.set_title(r"Background Flow Correlation $\langle \hat{\mathbf{u}}_{\mathrm{bg}}(0) \cdot \hat{\mathbf{u}}_{\mathrm{bg}}(r) \rangle$")
+    ax_bg.legend()
+
+    plt.tight_layout()
+    out_fig = Path(args.save_fig)
+    plt.savefig(out_fig, dpi=300)
+    print(f"\n[SUCCESS] Summary plot saved to {out_fig.resolve()}")
+
+    if results:
+        df_res = pd.DataFrame(results)
+        print("\n--- Correlation Length Summary ---")
+        print(df_res.to_string(index=False))
+
+if __name__ == "__main__":
+    main()
