@@ -7,6 +7,29 @@ version = "0.1.0"
 [tasks]
 RDF = "sh -c 'for dir in /Volumes/data/Sasaki/MTsingleBeads/beads20um/*/*; do echo \"Processing $(basename \\\"$dir\\\")...\"; python libs/RDF.py \"$dir\" --cargo_radius 10; done'"
 
+# Polar order tasks
+polar = "python run_batch_analysis.py --mode polar"
+polar_all = "python run_batch_analysis.py --mode polar --beads all"
+polar_06um = "python run_batch_analysis.py --mode polar --beads beads06um"
+polar_1um = "python run_batch_analysis.py --mode polar --beads beads1um"
+polar_3um = "python run_batch_analysis.py --mode polar --beads beads3um"
+polar_5um = "python run_batch_analysis.py --mode polar --beads beads5um"
+polar_7um = "python run_batch_analysis.py --mode polar --beads beads7um"
+polar_20um = "python run_batch_analysis.py --mode polar --beads beads20um"
+
+# Angular spatial correlation tasks
+corr = "python run_batch_analysis.py --mode corr"
+corr_all = "python run_batch_analysis.py --mode corr --beads all"
+corr_06um = "python run_batch_analysis.py --mode corr --beads beads06um"
+corr_1um = "python run_batch_analysis.py --mode corr --beads beads1um"
+corr_3um = "python run_batch_analysis.py --mode corr --beads beads3um"
+corr_5um = "python run_batch_analysis.py --mode corr --beads beads5um"
+corr_7um = "python run_batch_analysis.py --mode corr --beads beads7um"
+corr_20um = "python run_batch_analysis.py --mode corr --beads beads20um"
+
+# Combined analysis task (both polar order & correlation)
+analyze_all = "python run_batch_analysis.py --mode all --beads all"
+
 [dependencies]
 python = "3.11.*"
 numpy = ">=2.3.5,<3"

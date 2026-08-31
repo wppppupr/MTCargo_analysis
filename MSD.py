@@ -56,11 +56,12 @@ def concat_dimensionless_MSD(folder, interval_list, Rc, scale = 0.11):
         else:
             v0 = 1.0
             
-        Tc = Rc / v0
+        d_MT = 0.025
+        Tc = d_MT / v0
         emsd = IMSD.groupby('lag time').mean()['MSD']
         
         MSD_df["dim_lag_time"] = emsd.index / Tc
-        MSD_df["dim_MSD"] = emsd.values / (Rc**2)
+        MSD_df["dim_MSD"] = emsd.values / (d_MT**2)
         MSD_df["exp"] = num
         
         df_exp = pd.DataFrame(MSD_df)
@@ -260,7 +261,7 @@ def main():
     ax3.plot(dim_elag_20um, dim_emsd_20um, marker='s', label=f'20.0 \u03bcm', alpha=alpha, markersize=marker_size, color=style_colors[5])
     ax3.fill_between(dim_elag_20um, dim_emsd_20um - dim_err_20um, dim_emsd_20um + dim_err_20um, edgecolor=style_colors[5], facecolor=mcolors.to_rgba(style_colors[5], alpha=0.2))
     
-    t_start, t_end = 10, 35
+    t_start, t_end = 100, 400
     
     max_A2 = 0
     min_A1 = np.inf
