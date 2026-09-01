@@ -12,6 +12,7 @@ env/
 *.npy
 *.png
 *.pdf
+*.svg
 
 # --- Data & Config ---
 data/
@@ -20,3 +21,6 @@ data/
 !.pixi/config.toml
 
 log.txt
+
+*.csv
+*.log

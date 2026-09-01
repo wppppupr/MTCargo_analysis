@@ -30,6 +30,11 @@ corr_20um = "python run_batch_analysis.py --mode corr --beads beads20um"
 # Combined analysis task (both polar order & correlation)
 analyze_all = "python run_batch_analysis.py --mode all --beads all"
 
+# Plotting & summary tasks
+plot_corr = "python angular_correlation.py"
+plot_polar = "python local_polar.py"
+msd = "python MSD.py"
+
 [dependencies]
 python = "3.11.*"
 numpy = ">=2.3.5,<3"

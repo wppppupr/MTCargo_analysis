@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import h5py
 import xarray as xr
+import zarr
 import os
 import sys
 import shutil
@@ -58,91 +59,138 @@ def compute_bead_unit_velocities(df_tracks):
     df['bead_ux'] = np.nan
     df['bead_uy'] = np.nan
 
-    grouped = df.groupby('particle')
-    dx_list, dy_list = [], []
-    
-    for _, group in grouped:
-        x = group['x'].values
-        y = group['y'].values
-        n = len(group)
-        if n == 1:
-            dx = np.zeros(1, dtype=np.float32)
-            dy = np.zeros(1, dtype=np.float32)
-        else:
-            dx = np.zeros(n, dtype=np.float32)
-            dy = np.zeros(n, dtype=np.float32)
-            dx[0] = x[1] - x[0]
-            dy[0] = y[1] - y[0]
-            dx[-1] = x[-1] - x[-2]
-            dy[-1] = y[-1] - y[-2]
-            if n > 2:
-                dx[1:-1] = (x[2:] - x[:-2]) / 2.0
-                dy[1:-1] = (y[2:] - y[:-2]) / 2.0
-                
-        dx_list.append(dx)
-        dy_list.append(dy)
-
-    if len(dx_list) > 0:
-        df['dx'] = np.concatenate(dx_list)
-        df['dy'] = np.concatenate(dy_list)
-        norm = np.hypot(df['dx'].values, df['dy'].values)
+    for p_id, group in df.groupby('particle'):
+        idxs = group.index.values
+        if len(idxs) < 2:
+            continue
+        
+        dx = np.diff(group['x'].values)
+        dy = np.diff(group['y'].values)
+        mag = np.hypot(dx, dy)
+        
         with np.errstate(divide='ignore', invalid='ignore'):
-            df['bead_ux'] = np.where(norm > 0, df['dx'].values / norm, 0.0).astype(np.float32)
-            df['bead_uy'] = np.where(norm > 0, df['dy'].values / norm, 0.0).astype(np.float32)
+            ux = np.where(mag > 0, dx / mag, 0.0)
+            uy = np.where(mag > 0, dy / mag, 0.0)
+        
+        # Forward diff for t to t+1
+        df.loc[idxs[:-1], 'dx'] = dx.astype(np.float32)
+        df.loc[idxs[:-1], 'dy'] = dy.astype(np.float32)
+        df.loc[idxs[:-1], 'bead_ux'] = ux.astype(np.float32)
+        df.loc[idxs[:-1], 'bead_uy'] = uy.astype(np.float32)
 
     return df
 
 
+def load_nematic_thetas(base_path, num_frames, flow_data=None, channel_first=True):
+    """
+    Load or compute the global nematic director angle theta(t) for each frame.
+    1. If MTs_im_theta.zarr exists, compute global nematic angle using tensor average:
+       0.5 * arctan2(nanmean(sin(2*theta)), nanmean(cos(2*theta)))
+    2. Fallback: compute from optical flow field orientation (2-tensor average).
+    """
+    theta_path = base_path / "MTs_im_theta.zarr"
+    thetas = np.zeros(num_frames, dtype=np.float32)
+
+    if theta_path.exists():
+        try:
+            im_theta_zarr = zarr.open_array(str(theta_path), mode='r')
+            mts_frames = min(im_theta_zarr.shape[0], num_frames)
+            for t in range(mts_frames):
+                th_frame = im_theta_zarr[t]
+                s2 = np.nanmean(np.sin(2.0 * th_frame))
+                c2 = np.nanmean(np.cos(2.0 * th_frame))
+                if np.isnan(s2) or np.isnan(c2) or (s2 == 0 and c2 == 0):
+                    thetas[t] = float(np.nanmean(th_frame)) if not np.isnan(np.nanmean(th_frame)) else 0.0
+                else:
+                    thetas[t] = 0.5 * np.arctan2(s2, c2)
+            if mts_frames < num_frames:
+                thetas[mts_frames:] = thetas[mts_frames - 1]
+            print(f"Loaded global nematic angles from {theta_path.name} (mean theta = {np.mean(thetas):.3f} rad)")
+            return thetas
+        except Exception as e:
+            print(f"[WARNING] Failed to load MTs_im_theta.zarr: {e}. Falling back to flow nematic axis.")
+
+    # Fallback to flow data
+    if flow_data is not None:
+        print("Computing nematic angles from optical flow field orientation...")
+        for t in range(num_frames):
+            if channel_first:
+                mx = flow_data[t, 0, ...]
+                my = flow_data[t, 1, ...]
+            else:
+                mx = flow_data[t, ..., 0]
+                my = flow_data[t, ..., 1]
+            mag = np.hypot(mx, my)
+            valid = mag > 1e-4
+            if np.any(valid):
+                phi = np.arctan2(my[valid], mx[valid])
+                s2 = np.mean(np.sin(2.0 * phi))
+                c2 = np.mean(np.cos(2.0 * phi))
+                thetas[t] = 0.5 * np.arctan2(s2, c2)
+            else:
+                thetas[t] = 0.0
+
+    return thetas
+
+
 def main():
-    parser = argparse.ArgumentParser(description='Calculate angular spatial correlation of optical flow around particles.')
-    parser.add_argument('base_path', type=str, help='Path to the directory containing hdf5 and csv')
-    parser.add_argument('--tracks_csv', type=str, default='beads_tracks.csv', help='Trackpy csv file name')
-    parser.add_argument('--h5_file', type=str, default='GFP_flows.h5', help='H5 file name')
-    parser.add_argument('--distances', '--windows', dest='distances', type=str, nargs='+', default=['2:100:2', '100:500:20'], 
-                        help='Distance ranges / radii in pixels. Accepts space/comma separated numbers, or start:stop:step (e.g. 5:100:5)')
-    parser.add_argument('--shell_width', type=float, default=2.0, help='Width of the annular shell for ring kernel (pixels).')
+    parser = argparse.ArgumentParser(description="Calculate GPU-accelerated 2D-FFT angular spatial correlation around beads.")
+    parser.add_argument('base_path', type=str, help='Path to directory containing beads_tracks.csv and GFP_flows.h5')
+    parser.add_argument('--distances', nargs='+', default=['2:100:2', '120:500:20'],
+                        help='Shell distances r (pixels) (default: 2:100:2 120:500:20)')
     parser.add_argument('--kernel_type', type=str, default='ring', choices=['ring', 'disk', 'gaussian'],
-                        help='Kernel type: "ring" (annular shell, default), "disk" (circular window), or "gaussian".')
-    parser.add_argument('--roi_bbox', type=int, nargs=4, default=None, metavar=('XMIN', 'XMAX', 'YMIN', 'YMAX'),
-                        help='Bounding box for flow ROI (xmin xmax ymin ymax)')
-    parser.add_argument('--particle_radius', type=int, default=0, help='Radius (in pixels) around particles to mask out (0 to disable masking).')
-    parser.add_argument('--out_name', type=str, default='angular_correlation_w.zarr', help='Output zarr directory name')
-    parser.add_argument('--device', type=str, default=None, choices=['cuda', 'cpu', 'torch_cpu', 'scipy'],
-                        help='Compute backend (cuda/cpu/scipy). Default: auto-detect GPU.')
+                        help="Kernel type: 'ring' (concentric shell), 'disk', or 'gaussian'")
+    parser.add_argument('--shell_width', type=float, default=2.0,
+                        help="Radial shell width dr (pixels) for 'ring' kernel (default: 2.0)")
+    parser.add_argument('--particle_radius', type=int, default=0,
+                        help='Radius around bead center to mask out flow (pixels, default: 0)')
+    parser.add_argument('--roi_bbox', type=int, nargs=4, default=None,
+                        help='Optional ROI bbox [xmin, xmax, ymin, ymax] for background flow correlation')
+    parser.add_argument('--device', type=str, default=None,
+                        help="Execution device: 'cuda', 'scipy', or None (auto)")
+    parser.add_argument('--out_name', type=str, default='angular_correlation_w.zarr',
+                        help='Output Zarr dataset filename (default: angular_correlation_w.zarr)')
     args = parser.parse_args()
 
     base_path = Path(args.base_path)
-    csv_path = base_path / args.tracks_csv
-    h5_path = base_path / args.h5_file
+    csv_path = base_path / 'beads_tracks.csv'
+    flow_path = base_path / 'GFP_flows.h5'
 
-    if not csv_path.exists() or not h5_path.exists():
-        print(f"Error: Required files not found.\n CSV: {csv_path} (exists: {csv_path.exists()})\n H5: {h5_path} (exists: {h5_path.exists()})")
-        return
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Missing {csv_path}")
+    if not flow_path.exists():
+        raise FileNotFoundError(f"Missing {flow_path}")
 
     distances = parse_distances(args.distances)
     print(f"Distances to compute: {distances}")
 
-    # 1. Load tracking data and compute bead velocities
+    # 1. データの読み込み
     print(f"Loading tracks from {csv_path}...")
     df_tracks = pd.read_csv(csv_path)
     df_tracks = compute_bead_unit_velocities(df_tracks)
     grouped = df_tracks.groupby('frame')
 
-    with h5py.File(str(h5_path), 'r') as f:
-        dataset_key = list(f.keys())[0]
-        flow_data = f[dataset_key]
+    with h5py.File(str(flow_path), 'r') as f:
+        k = list(f.keys())[0]
+        flow_data = f[k]
         shape = flow_data.shape
+        num_frames = shape[0]
         print(f"Flow data shape: {shape}")
 
-        num_frames = shape[0]
-        if shape[-1] == 2:
-            rows, cols = shape[1], shape[2]
+        if shape[1] == 2:
+            channel_first = True
+            rows, cols = shape[2], shape[3]
+        elif shape[3] == 2:
             channel_first = False
+            rows, cols = shape[1], shape[2]
         else:
             rows, cols = shape[2], shape[3]
             channel_first = True
 
         active_frames = sorted([f for f in grouped.groups.keys() if f < num_frames])
+
+        # Load global nematic director angle theta(t) for 1st & 2nd principal component decomposition
+        thetas = load_nematic_thetas(base_path, num_frames, flow_data=flow_data, channel_first=channel_first)
 
         if args.roi_bbox is not None:
             roi_xmin, roi_xmax, roi_ymin, roi_ymax = args.roi_bbox
@@ -153,13 +201,29 @@ def main():
 
             roi_slice = (slice(roi_ymin, roi_ymax + 1), slice(roi_xmin, roi_xmax + 1))
             corr_roi_array = np.full((len(distances), num_frames), np.nan, dtype=np.float32)
+            corr_roi_par_array = np.full((len(distances), num_frames), np.nan, dtype=np.float32)
+            corr_roi_perp_array = np.full((len(distances), num_frames), np.nan, dtype=np.float32)
         else:
             roi_slice = None
             corr_roi_array = None
+            corr_roi_par_array = None
+            corr_roi_perp_array = None
 
         ds_particles = df_tracks.set_index(['frame', 'particle']).to_xarray()
-        corr_flow_array = np.full((len(distances), len(ds_particles.frame), len(ds_particles.particle)), np.nan, dtype=np.float32)
-        corr_bead_array = np.full((len(distances), len(ds_particles.frame), len(ds_particles.particle)), np.nan, dtype=np.float32)
+        
+        num_d = len(distances)
+        num_fr = len(ds_particles.frame)
+        num_p = len(ds_particles.particle)
+
+        # Flow angular correlation arrays (Total, 1st PC / Parallel, 2nd PC / Perpendicular)
+        corr_flow_array = np.full((num_d, num_fr, num_p), np.nan, dtype=np.float32)
+        corr_flow_par_array = np.full((num_d, num_fr, num_p), np.nan, dtype=np.float32)
+        corr_flow_perp_array = np.full((num_d, num_fr, num_p), np.nan, dtype=np.float32)
+
+        # Bead-flow correlation arrays (Total, 1st PC / Parallel, 2nd PC / Perpendicular)
+        corr_bead_array = np.full((num_d, num_fr, num_p), np.nan, dtype=np.float32)
+        corr_bead_par_array = np.full((num_d, num_fr, num_p), np.nan, dtype=np.float32)
+        corr_bead_perp_array = np.full((num_d, num_fr, num_p), np.nan, dtype=np.float32)
 
         frame_to_idx = {f: i for i, f in enumerate(ds_particles.frame.values)}
         particle_to_idx = {p: i for i, p in enumerate(ds_particles.particle.values)}
@@ -170,7 +234,7 @@ def main():
         print(f"Using backend: {convolver.device_type}")
 
         # 3. 実行ループ
-        print(f"Calculating angular spatial correlation for {len(active_frames)} frames...")
+        print(f"Calculating angular spatial correlation (Total, 1st PC Parallel, 2nd PC Perpendicular) for {len(active_frames)} frames...")
         for t in tqdm(active_frames):
             frame_indices = grouped.groups[t]
             subset = df_tracks.loc[frame_indices]
@@ -208,20 +272,30 @@ def main():
             else:
                 valid_mask = None
 
-            p_corr_flow, p_corr_bead, roi_corr_vals = convolver.convolve_and_sample_angular_correlation(
+            th_t = thetas[t] if t < len(thetas) else 0.0
+
+            res = convolver.convolve_and_sample_angular_correlation(
                 m_ux=m_ux, m_uy=m_uy, valid_mask=valid_mask,
                 y_idx=y_idx, x_idx=x_idx,
                 center_flow_ux=center_flow_ux, center_flow_uy=center_flow_uy,
-                b_ux=b_ux, b_uy=b_uy, roi_slice=roi_slice
+                b_ux=b_ux, b_uy=b_uy, theta=th_t, roi_slice=roi_slice
             )
 
             f_i = frame_to_idx[t]
             p_indices = [particle_to_idx[p] for p in p_ids]
-            corr_flow_array[:, f_i, p_indices] = p_corr_flow
-            corr_bead_array[:, f_i, p_indices] = p_corr_bead
+
+            corr_flow_array[:, f_i, p_indices] = res['flow_total']
+            corr_flow_par_array[:, f_i, p_indices] = res['flow_par']
+            corr_flow_perp_array[:, f_i, p_indices] = res['flow_perp']
+
+            corr_bead_array[:, f_i, p_indices] = res['bead_total']
+            corr_bead_par_array[:, f_i, p_indices] = res['bead_par']
+            corr_bead_perp_array[:, f_i, p_indices] = res['bead_perp']
 
             if roi_slice is not None:
-                corr_roi_array[:, t] = roi_corr_vals
+                corr_roi_array[:, t] = res['roi_total']
+                corr_roi_par_array[:, t] = res['roi_par']
+                corr_roi_perp_array[:, t] = res['roi_perp']
 
     # 4. Consolidate into xarray and save to Zarr
     print("\nConsolidating particle correlation data into xarray...")
@@ -230,13 +304,44 @@ def main():
         dims=['distance', 'frame', 'particle'],
         coords={'distance': distances, 'frame': ds_particles.frame, 'particle': ds_particles.particle}
     )
+    ds_particles['angular_correlation_parallel'] = xr.DataArray(
+        corr_flow_par_array,
+        dims=['distance', 'frame', 'particle'],
+        coords={'distance': distances, 'frame': ds_particles.frame, 'particle': ds_particles.particle}
+    )
+    ds_particles['angular_correlation_perpendicular'] = xr.DataArray(
+        corr_flow_perp_array,
+        dims=['distance', 'frame', 'particle'],
+        coords={'distance': distances, 'frame': ds_particles.frame, 'particle': ds_particles.particle}
+    )
+
     ds_particles['bead_correlation'] = xr.DataArray(
         corr_bead_array,
         dims=['distance', 'frame', 'particle'],
         coords={'distance': distances, 'frame': ds_particles.frame, 'particle': ds_particles.particle}
     )
+    ds_particles['bead_correlation_parallel'] = xr.DataArray(
+        corr_bead_par_array,
+        dims=['distance', 'frame', 'particle'],
+        coords={'distance': distances, 'frame': ds_particles.frame, 'particle': ds_particles.particle}
+    )
+    ds_particles['bead_correlation_perpendicular'] = xr.DataArray(
+        corr_bead_perp_array,
+        dims=['distance', 'frame', 'particle'],
+        coords={'distance': distances, 'frame': ds_particles.frame, 'particle': ds_particles.particle}
+    )
 
-    ds_particles.attrs['description'] = 'Angular spatial correlation analysis: Particles'
+    theta_nematic_padded = np.full(len(ds_particles.frame), np.nan, dtype=np.float32)
+    n_copy = min(len(thetas), len(ds_particles.frame))
+    theta_nematic_padded[:n_copy] = thetas[:n_copy]
+
+    ds_particles['theta_nematic'] = xr.DataArray(
+        theta_nematic_padded,
+        dims=['frame'],
+        coords={'frame': ds_particles.frame}
+    )
+
+    ds_particles.attrs['description'] = 'Angular spatial correlation analysis: Particles (Total, Parallel/1st PC, Perpendicular/2nd PC)'
     ds_particles.attrs['distances'] = distances
     ds_particles.attrs['kernel_type'] = args.kernel_type
     ds_particles.attrs['shell_width'] = args.shell_width
@@ -257,6 +362,21 @@ def main():
                     corr_roi_array,
                     dims=['distance', 'frame'],
                     coords={'distance': distances, 'frame': np.arange(num_frames)}
+                ),
+                'angular_correlation_parallel': xr.DataArray(
+                    corr_roi_par_array,
+                    dims=['distance', 'frame'],
+                    coords={'distance': distances, 'frame': np.arange(num_frames)}
+                ),
+                'angular_correlation_perpendicular': xr.DataArray(
+                    corr_roi_perp_array,
+                    dims=['distance', 'frame'],
+                    coords={'distance': distances, 'frame': np.arange(num_frames)}
+                ),
+                'theta_nematic': xr.DataArray(
+                    thetas,
+                    dims=['frame'],
+                    coords={'frame': np.arange(num_frames)}
                 )
             }
         )

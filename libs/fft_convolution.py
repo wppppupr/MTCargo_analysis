@@ -247,14 +247,30 @@ class FFTConvolver:
     def convolve_and_sample_angular_correlation(
         self, m_ux, m_uy, valid_mask=None,
         y_idx=None, x_idx=None, center_flow_ux=None, center_flow_uy=None,
-        b_ux=None, b_uy=None, roi_slice=None
+        b_ux=None, b_uy=None, theta=0.0, roi_slice=None
     ):
+        """
+        Convolve and sample angular spatial correlation with decomposition into
+        1st principal component (Parallel to nematic axis theta) and
+        2nd principal component (Perpendicular to nematic axis).
+        """
         num_sizes = len(self.sizes)
         num_p = len(y_idx) if y_idx is not None else 0
 
         p_corr_flow = np.empty((num_sizes, num_p), dtype=np.float32) if num_p > 0 else None
+        p_corr_flow_par = np.empty((num_sizes, num_p), dtype=np.float32) if num_p > 0 else None
+        p_corr_flow_perp = np.empty((num_sizes, num_p), dtype=np.float32) if num_p > 0 else None
+
         p_corr_bead = np.empty((num_sizes, num_p), dtype=np.float32) if num_p > 0 else None
+        p_corr_bead_par = np.empty((num_sizes, num_p), dtype=np.float32) if num_p > 0 else None
+        p_corr_bead_perp = np.empty((num_sizes, num_p), dtype=np.float32) if num_p > 0 else None
+
         roi_corr_vals = np.empty((num_sizes,), dtype=np.float32) if roi_slice is not None else None
+        roi_corr_par = np.empty((num_sizes,), dtype=np.float32) if roi_slice is not None else None
+        roi_corr_perp = np.empty((num_sizes,), dtype=np.float32) if roi_slice is not None else None
+
+        cos_th = float(np.cos(theta))
+        sin_th = float(np.sin(theta))
 
         if self.device_type == 'cuda':
             try:
@@ -270,6 +286,9 @@ class FFTConvolver:
                     else:
                         fft_mask = None
 
+                    t_cos = torch.tensor(cos_th, dtype=torch.float32, device=self.device)
+                    t_sin = torch.tensor(sin_th, dtype=torch.float32, device=self.device)
+
                     if num_p > 0:
                         t_y = torch.from_numpy(y_idx).to(self.device, non_blocking=True)
                         t_x = torch.from_numpy(x_idx).to(self.device, non_blocking=True)
@@ -277,6 +296,13 @@ class FFTConvolver:
                         t_c_uy = torch.from_numpy(center_flow_uy).to(self.device, non_blocking=True)
                         t_b_ux = torch.from_numpy(b_ux).to(self.device, non_blocking=True)
                         t_b_uy = torch.from_numpy(b_uy).to(self.device, non_blocking=True)
+
+                        # Project center flow and bead directions onto parallel and perpendicular axes
+                        c_flow_par = t_c_ux * t_cos + t_c_uy * t_sin
+                        c_flow_perp = -t_c_ux * t_sin + t_c_uy * t_cos
+
+                        b_par = t_b_ux * t_cos + t_b_uy * t_sin
+                        b_perp = -t_b_ux * t_sin + t_b_uy * t_cos
 
                     for idx, k_fft_cpu in enumerate(self.kernel_ffts_torch):
                         k_fft = k_fft_cpu.to(self.device, non_blocking=True)
@@ -290,23 +316,59 @@ class FFTConvolver:
                                 denom = torch.where(mask_p > 1e-6, mask_p, torch.tensor(1.0, device=self.device))
                                 avg_ux_p = u_conv[t_y, t_x] / denom
                                 avg_uy_p = v_conv[t_y, t_x] / denom
+
+                                avg_u_par = avg_ux_p * t_cos + avg_uy_p * t_sin
+                                avg_u_perp = -avg_ux_p * t_sin + avg_uy_p * t_cos
+
                                 p_corr_flow[idx, :] = (t_c_ux * avg_ux_p + t_c_uy * avg_uy_p).cpu().numpy()
+                                p_corr_flow_par[idx, :] = (c_flow_par * avg_u_par).cpu().numpy()
+                                p_corr_flow_perp[idx, :] = (c_flow_perp * avg_u_perp).cpu().numpy()
+
                                 p_corr_bead[idx, :] = (t_b_ux * avg_ux_p + t_b_uy * avg_uy_p).cpu().numpy()
+                                p_corr_bead_par[idx, :] = (b_par * avg_u_par).cpu().numpy()
+                                p_corr_bead_perp[idx, :] = (b_perp * avg_u_perp).cpu().numpy()
+
                             if roi_slice is not None:
                                 inv_m = torch.where(v_mask > 1e-6, 1.0 / v_mask, 0.0)
-                                corr_map = d_ux * (u_conv * inv_m) + d_uy * (v_conv * inv_m)
+                                u_conv_m = u_conv * inv_m
+                                v_conv_m = v_conv * inv_m
+                                corr_map = d_ux * u_conv_m + d_uy * v_conv_m
+                                corr_map_par = (d_ux * t_cos + d_uy * t_sin) * (u_conv_m * t_cos + v_conv_m * t_sin)
+                                corr_map_perp = (-d_ux * t_sin + d_uy * t_cos) * (-u_conv_m * t_sin + v_conv_m * t_cos)
+
                                 roi_corr_vals[idx] = float(torch.nanmean(corr_map[roi_slice[0], roi_slice[1]]).cpu().numpy())
+                                roi_corr_par[idx] = float(torch.nanmean(corr_map_par[roi_slice[0], roi_slice[1]]).cpu().numpy())
+                                roi_corr_perp[idx] = float(torch.nanmean(corr_map_perp[roi_slice[0], roi_slice[1]]).cpu().numpy())
                         else:
                             if num_p > 0:
                                 avg_ux_p = u_conv[t_y, t_x]
                                 avg_uy_p = v_conv[t_y, t_x]
+
+                                avg_u_par = avg_ux_p * t_cos + avg_uy_p * t_sin
+                                avg_u_perp = -avg_ux_p * t_sin + avg_uy_p * t_cos
+
                                 p_corr_flow[idx, :] = (t_c_ux * avg_ux_p + t_c_uy * avg_uy_p).cpu().numpy()
+                                p_corr_flow_par[idx, :] = (c_flow_par * avg_u_par).cpu().numpy()
+                                p_corr_flow_perp[idx, :] = (c_flow_perp * avg_u_perp).cpu().numpy()
+
                                 p_corr_bead[idx, :] = (t_b_ux * avg_ux_p + t_b_uy * avg_uy_p).cpu().numpy()
+                                p_corr_bead_par[idx, :] = (b_par * avg_u_par).cpu().numpy()
+                                p_corr_bead_perp[idx, :] = (b_perp * avg_u_perp).cpu().numpy()
+
                             if roi_slice is not None:
                                 corr_map = d_ux * u_conv + d_uy * v_conv
-                                roi_corr_vals[idx] = float(torch.nanmean(corr_map[roi_slice[0], roi_slice[1]]).cpu().numpy())
+                                corr_map_par = (d_ux * t_cos + d_uy * t_sin) * (u_conv * t_cos + v_conv * t_sin)
+                                corr_map_perp = (-d_ux * t_sin + d_uy * t_cos) * (-u_conv * t_sin + v_conv * t_cos)
 
-                return p_corr_flow, p_corr_bead, roi_corr_vals
+                                roi_corr_vals[idx] = float(torch.nanmean(corr_map[roi_slice[0], roi_slice[1]]).cpu().numpy())
+                                roi_corr_par[idx] = float(torch.nanmean(corr_map_par[roi_slice[0], roi_slice[1]]).cpu().numpy())
+                                roi_corr_perp[idx] = float(torch.nanmean(corr_map_perp[roi_slice[0], roi_slice[1]]).cpu().numpy())
+
+                return {
+                    'flow_total': p_corr_flow, 'flow_par': p_corr_flow_par, 'flow_perp': p_corr_flow_perp,
+                    'bead_total': p_corr_bead, 'bead_par': p_corr_bead_par, 'bead_perp': p_corr_bead_perp,
+                    'roi_total': roi_corr_vals, 'roi_par': roi_corr_par, 'roi_perp': roi_corr_perp
+                }
             except torch.OutOfMemoryError:
                 warnings.warn("GPU Out of Memory. Falling back to multi-threaded CPU.")
                 torch.cuda.empty_cache()
@@ -316,6 +378,13 @@ class FFTConvolver:
         fft_ux = scipy.fft.rfft2(m_ux, workers=4)
         fft_uy = scipy.fft.rfft2(m_uy, workers=4)
         fft_mask = scipy.fft.rfft2(valid_mask, workers=4) if valid_mask is not None else None
+
+        if num_p > 0:
+            c_flow_par = center_flow_ux * cos_th + center_flow_uy * sin_th
+            c_flow_perp = -center_flow_ux * sin_th + center_flow_uy * cos_th
+
+            b_par = b_ux * cos_th + b_uy * sin_th
+            b_perp = -b_ux * sin_th + b_uy * cos_th
 
         for idx, k_fft in enumerate(self.kernel_ffts_np):
             u_conv = scipy.fft.irfft2(fft_ux * k_fft, s=(self.H, self.W), workers=4)
@@ -328,31 +397,75 @@ class FFTConvolver:
                     denom = np.where(mask_p > 1e-6, mask_p, 1.0)
                     avg_ux_p = u_conv[y_idx, x_idx] / denom
                     avg_uy_p = v_conv[y_idx, x_idx] / denom
+
+                    avg_u_par = avg_ux_p * cos_th + avg_uy_p * sin_th
+                    avg_u_perp = -avg_ux_p * sin_th + avg_uy_p * cos_th
+
                     p_corr_flow[idx, :] = center_flow_ux * avg_ux_p + center_flow_uy * avg_uy_p
+                    p_corr_flow_par[idx, :] = c_flow_par * avg_u_par
+                    p_corr_flow_perp[idx, :] = c_flow_perp * avg_u_perp
+
                     p_corr_bead[idx, :] = b_ux * avg_ux_p + b_uy * avg_uy_p
+                    p_corr_bead_par[idx, :] = b_par * avg_u_par
+                    p_corr_bead_perp[idx, :] = b_perp * avg_u_perp
+
                 if roi_slice is not None:
                     with np.errstate(divide='ignore', invalid='ignore'):
                         inv_m = np.where(v_mask > 1e-6, 1.0 / v_mask, 0.0)
-                    corr_map = m_ux * (u_conv * inv_m) + m_uy * (v_conv * inv_m)
+                    u_conv_m = u_conv * inv_m
+                    v_conv_m = v_conv * inv_m
+                    corr_map = m_ux * u_conv_m + m_uy * v_conv_m
+                    corr_map_par = (m_ux * cos_th + m_uy * sin_th) * (u_conv_m * cos_th + v_conv_m * sin_th)
+                    corr_map_perp = (-m_ux * sin_th + m_uy * cos_th) * (-u_conv_m * sin_th + v_conv_m * cos_th)
+
                     roi_corr_vals[idx] = np.nanmean(corr_map[roi_slice[0], roi_slice[1]])
+                    roi_corr_par[idx] = np.nanmean(corr_map_par[roi_slice[0], roi_slice[1]])
+                    roi_corr_perp[idx] = np.nanmean(corr_map_perp[roi_slice[0], roi_slice[1]])
             else:
                 if num_p > 0:
                     avg_ux_p = u_conv[y_idx, x_idx]
                     avg_uy_p = v_conv[y_idx, x_idx]
+
+                    avg_u_par = avg_ux_p * cos_th + avg_uy_p * sin_th
+                    avg_u_perp = -avg_ux_p * sin_th + avg_uy_p * cos_th
+
                     p_corr_flow[idx, :] = center_flow_ux * avg_ux_p + center_flow_uy * avg_uy_p
+                    p_corr_flow_par[idx, :] = c_flow_par * avg_u_par
+                    p_corr_flow_perp[idx, :] = c_flow_perp * avg_u_perp
+
                     p_corr_bead[idx, :] = b_ux * avg_ux_p + b_uy * avg_uy_p
+                    p_corr_bead_par[idx, :] = b_par * avg_u_par
+                    p_corr_bead_perp[idx, :] = b_perp * avg_u_perp
+
                 if roi_slice is not None:
                     corr_map = m_ux * u_conv + m_uy * v_conv
+                    corr_map_par = (m_ux * cos_th + m_uy * sin_th) * (u_conv * cos_th + v_conv * sin_th)
+                    corr_map_perp = (-m_ux * sin_th + m_uy * cos_th) * (-u_conv * sin_th + v_conv * cos_th)
+
                     roi_corr_vals[idx] = np.nanmean(corr_map[roi_slice[0], roi_slice[1]])
+                    roi_corr_par[idx] = np.nanmean(corr_map_par[roi_slice[0], roi_slice[1]])
+                    roi_corr_perp[idx] = np.nanmean(corr_map_perp[roi_slice[0], roi_slice[1]])
 
-        return p_corr_flow, p_corr_bead, roi_corr_vals
+        return {
+            'flow_total': p_corr_flow, 'flow_par': p_corr_flow_par, 'flow_perp': p_corr_flow_perp,
+            'bead_total': p_corr_bead, 'bead_par': p_corr_bead_par, 'bead_perp': p_corr_bead_perp,
+            'roi_total': roi_corr_vals, 'roi_par': roi_corr_par, 'roi_perp': roi_corr_perp
+        }
 
-    def convolve_and_sample_bg_angular_correlation(self, m_ux, m_uy, roi_y, roi_x):
+    def convolve_and_sample_bg_angular_correlation(self, m_ux, m_uy, roi_y, roi_x, theta=0.0):
         num_sizes = len(self.sizes)
         c_vals = np.empty((num_sizes,), dtype=np.float32)
+        c_vals_par = np.empty((num_sizes,), dtype=np.float32)
+        c_vals_perp = np.empty((num_sizes,), dtype=np.float32)
 
         center_ux = float(m_ux[roi_y, roi_x])
         center_uy = float(m_uy[roi_y, roi_x])
+
+        cos_th = float(np.cos(theta))
+        sin_th = float(np.sin(theta))
+
+        c_par = center_ux * cos_th + center_uy * sin_th
+        c_perp = -center_ux * sin_th + center_uy * cos_th
 
         if self.device_type == 'cuda':
             try:
@@ -369,8 +482,19 @@ class FFTConvolver:
 
                         avg_ux = float(u_conv[roi_y, roi_x].cpu().numpy())
                         avg_uy = float(v_conv[roi_y, roi_x].cpu().numpy())
+
+                        avg_u_par = avg_ux * cos_th + avg_uy * sin_th
+                        avg_u_perp = -avg_ux * sin_th + avg_uy * cos_th
+
                         c_vals[idx] = center_ux * avg_ux + center_uy * avg_uy
-                return c_vals
+                        c_vals_par[idx] = c_par * avg_u_par
+                        c_vals_perp[idx] = c_perp * avg_u_perp
+
+                return {
+                    'bg_total': c_vals,
+                    'bg_par': c_vals_par,
+                    'bg_perp': c_vals_perp
+                }
             except torch.OutOfMemoryError:
                 warnings.warn("GPU Out of Memory. Falling back to multi-threaded CPU.")
                 torch.cuda.empty_cache()
@@ -385,6 +509,16 @@ class FFTConvolver:
 
             avg_ux = u_conv[roi_y, roi_x]
             avg_uy = v_conv[roi_y, roi_x]
-            c_vals[idx] = center_ux * avg_ux + center_uy * avg_uy
 
-        return c_vals
+            avg_u_par = avg_ux * cos_th + avg_uy * sin_th
+            avg_u_perp = -avg_ux * sin_th + avg_uy * cos_th
+
+            c_vals[idx] = center_ux * avg_ux + center_uy * avg_uy
+            c_vals_par[idx] = c_par * avg_u_par
+            c_vals_perp[idx] = c_perp * avg_u_perp
+
+        return {
+            'bg_total': c_vals,
+            'bg_par': c_vals_par,
+            'bg_perp': c_vals_perp
+        }
