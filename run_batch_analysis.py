@@ -15,11 +15,20 @@ BEADS_CONFIG = {
 }
 
 POSSIBLE_ROOTS = [
+    Path('/Volumes/data-1/Sasaki/MTsingleBeads'),
+    Path('/Volumes/data-1/sasaki/MTsingleBeads'),
     Path('/Volumes/data/Sasaki/MTsingleBeads'),
+    Path('/Volumes/data/sasaki/MTsingleBeads'),
     Path('/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads'),
+    Path('/mnt/NAS-Ebanaru/sasaki/MTSingleBeads'),
 ]
 
 def find_default_root():
+    for r in POSSIBLE_ROOTS:
+        if r.exists():
+            for b in ['beads1um', 'beads06um', 'beads3um', 'beads5um', 'beads7um', 'beads20um']:
+                if (r / b).exists() and len(list((r / b).glob('*/*beads_tracks.csv'))) > 0:
+                    return r
     for r in POSSIBLE_ROOTS:
         if r.exists():
             return r
