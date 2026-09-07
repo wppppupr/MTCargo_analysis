@@ -305,3 +305,125 @@ def fit_exponential(bin_centers, pdf_values, initial_tau=None):
         }
     except Exception:
         return {'tau': np.nan, 'tau_err': np.nan, 'a': np.nan, 'r_squared': np.nan}
+
+
+def fit_exponential_ccdf(durations, min_val=None, fit_mode='log', fix_amplitude_one=True):
+    """
+    持続時間リストから CCDF P(T >= t) を計算し、指数関数 C(t) = exp(-t / tau) をフィッティングする。
+
+    Parameters:
+    -----------
+    durations : array-like
+        持続時間リスト [s]
+    min_val : float, optional
+        最小時間閾値 [s]
+    fit_mode : str, default 'log'
+        'log' (ゼロ切片対数線形回帰) または 'linear' (非線形最小二乗)
+    fix_amplitude_one : bool, default True
+        True の場合、C(t) = exp(-t/tau) (A=1 固定) としてフィッティング
+
+    Returns:
+    --------
+    dict:
+        {'tau': float, 'tau_err': float, 'a': float, 'r_squared': float, 't_data': np.ndarray, 'ccdf_data': np.ndarray, 't_fit': np.ndarray, 'ccdf_fit': np.ndarray}
+    """
+    arr = np.asarray(durations, dtype=float)
+    arr = arr[np.isfinite(arr) & (arr > 0)]
+    if min_val is not None:
+        arr = arr[arr >= min_val]
+
+    n = len(arr)
+    if n < 2:
+        mean_val = float(np.mean(arr)) if n > 0 else np.nan
+        return {
+            'tau': mean_val, 'tau_err': mean_val / np.sqrt(max(1, n)) if not np.isnan(mean_val) else np.nan,
+            'a': 1.0, 'r_squared': np.nan,
+            't_data': np.array([]), 'ccdf_data': np.array([]),
+            't_fit': np.array([]), 'ccdf_fit': np.array([]),
+        }
+
+    sorted_d = np.sort(arr)
+    unique_t, counts_at_t = np.unique(sorted_d, return_counts=True)
+    cum_counts = np.cumsum(counts_at_t)
+    ccdf_vals = (n - cum_counts + counts_at_t) / float(n)
+
+    valid = (ccdf_vals > 0) & np.isfinite(ccdf_vals) & (unique_t > 0)
+    x = unique_t[valid]
+    y = ccdf_vals[valid]
+
+    mean_val = float(np.mean(arr))
+    try:
+        if fit_mode == 'log':
+            log_y = np.log(y)
+            w = np.sqrt(y * n)
+            if fix_amplitude_one:
+                denom = np.sum((w * x)**2)
+                numer = np.sum((w**2) * x * log_y)
+                slope = float(numer / denom) if denom > 0 else float(-1.0 / mean_val)
+                intercept = 0.0
+                a = 1.0
+                if slope < 0:
+                    tau = float(-1.0 / slope)
+                    pred_log_y = slope * x
+                    residuals = log_y - pred_log_y
+                    df_resid = max(1, len(x) - 1)
+                    s_sq = np.sum(w * (residuals**2)) / (np.sum(w) * (df_resid / len(x)) + 1e-12)
+                    se_slope = np.sqrt(s_sq / (denom + 1e-12))
+                    tau_err = float((tau**2) * se_slope) if np.isfinite(se_slope) else float(tau / np.sqrt(n))
+                else:
+                    tau = mean_val
+                    tau_err = float(mean_val / np.sqrt(n))
+            else:
+                poly, cov = np.polyfit(x, log_y, deg=1, w=w, cov=True)
+                slope, intercept = poly[0], poly[1]
+                if slope < 0:
+                    tau = float(-1.0 / slope)
+                    tau_err = float((tau**2) * np.sqrt(cov[0, 0])) if cov is not None else float(mean_val / np.sqrt(n))
+                    a = float(np.exp(intercept))
+                else:
+                    tau = mean_val
+                    tau_err = float(mean_val / np.sqrt(n))
+                    a = 1.0
+
+            pred_log_y = intercept + slope * x
+            ss_res = np.sum(w * (log_y - pred_log_y)**2)
+            ss_tot = np.sum(w * (log_y - np.average(log_y, weights=w))**2)
+            r2 = float(1.0 - ss_res / (ss_tot + 1e-12)) if ss_tot > 0 else np.nan
+        else:
+            if fix_amplitude_one:
+                def exp_ccdf_pure(t, tau_p):
+                    return np.exp(-t / tau_p)
+                popt, pcov = curve_fit(exp_ccdf_pure, x, y, p0=[mean_val], bounds=([1e-3], [1e5]), maxfev=5000)
+                tau, a = float(popt[0]), 1.0
+                tau_err = float(np.sqrt(pcov[0, 0])) if np.isfinite(pcov[0, 0]) else float(mean_val / np.sqrt(n))
+                residuals = y - exp_ccdf_pure(x, tau)
+            else:
+                def exp_ccdf(t, tau_p, a_p):
+                    return a_p * np.exp(-t / tau_p)
+                popt, pcov = curve_fit(exp_ccdf, x, y, p0=[mean_val, 1.0], bounds=([1e-3, 0.1], [1e5, 5.0]), maxfev=5000)
+                tau, a = float(popt[0]), float(popt[1])
+                tau_err = float(np.sqrt(pcov[0, 0])) if np.isfinite(pcov[0, 0]) else float(mean_val / np.sqrt(n))
+                residuals = y - exp_ccdf(x, tau, a)
+            r2 = float(1.0 - np.sum(residuals**2) / (np.sum((y - np.mean(y))**2) + 1e-12))
+
+        t_fit = np.linspace(0, np.max(x) * 1.15, 150)
+        ccdf_fit = np.exp(-t_fit / tau) if fix_amplitude_one else a * np.exp(-t_fit / tau)
+
+        return {
+            'tau': tau,
+            'tau_err': tau_err,
+            'a': 1.0 if fix_amplitude_one else a,
+            'r_squared': r2,
+            't_data': x,
+            'ccdf_data': y,
+            't_fit': t_fit,
+            'ccdf_fit': ccdf_fit,
+        }
+    except Exception:
+        return {
+            'tau': mean_val, 'tau_err': float(mean_val / np.sqrt(n)),
+            'a': 1.0, 'r_squared': np.nan,
+            't_data': x, 'ccdf_data': y,
+            't_fit': np.linspace(0, np.max(arr), 100),
+            'ccdf_fit': np.exp(-np.linspace(0, np.max(arr), 100) / mean_val),
+        }

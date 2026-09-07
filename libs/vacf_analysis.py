@@ -519,6 +519,8 @@ def main():
                         help="Y-axis scale for plots (default: 'linear').")
     parser.add_argument('--fit', action='store_true', default=False,
                         help="Fit autocorrelation curves with model f(t) = (1 - A) * exp(-t / xi) + A.")
+    parser.add_argument('--green_kubo', action='store_true', default=False,
+                        help="Also run Green-Kubo effective diffusion analysis and compare with HMM RTP theoretical model.")
 
     args = parser.parse_args()
 
@@ -547,6 +549,17 @@ def main():
         fit=args.fit
     )
 
+    if args.green_kubo:
+        from libs.effective_diffusion import run_effective_diffusion_analysis
+        run_effective_diffusion_analysis(
+            root_dir=root_dir,
+            out_dir=Path(args.out_dir).parent / 'effective_diffusion' if args.out_dir else None,
+            max_timeshift_frames=args.max_lag,
+            frame_interval=args.frame_interval,
+            scale=args.scale
+        )
+
 
 if __name__ == "__main__":
     main()
+

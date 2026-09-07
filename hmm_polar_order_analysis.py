@@ -109,6 +109,61 @@ def safe_save_csv(df: pd.DataFrame, target_path: Path, max_retries: int = 5):
             time.sleep(0.5)
 
 
+def normalize_bead_name(raw_name: str) -> Optional[str]:
+    """
+    入力文字列（例: 'beads06um', 'bead06um', '06um', '0.6um', '0.6', '1um', '1', etc.）を
+    BEADS_INFO の標準名 ('beads06um' 等) に正規化する。
+    """
+    s = raw_name.strip().lower()
+    mapping = {
+        'beads06um': 'beads06um', 'bead06um': 'beads06um', '06um': 'beads06um', '0.6um': 'beads06um', '0.6': 'beads06um', '06': 'beads06um',
+        'beads1um': 'beads1um', 'bead1um': 'beads1um', '1um': 'beads1um', '1.0um': 'beads1um', '1.18um': 'beads1um', '1': 'beads1um',
+        'beads3um': 'beads3um', 'bead3um': 'beads3um', '3um': 'beads3um', '3.0um': 'beads3um', '3.37um': 'beads3um', '3': 'beads3um',
+        'beads5um': 'beads5um', 'bead5um': 'beads5um', '5um': 'beads5um', '5.0um': 'beads5um', '5': 'beads5um',
+        'beads7um': 'beads7um', 'bead7um': 'beads7um', '7um': 'beads7um', '7.0um': 'beads7um', '7.24um': 'beads7um', '7': 'beads7um',
+        'beads20um': 'beads20um', 'bead20um': 'beads20um', '20um': 'beads20um', '20.0um': 'beads20um', '20': 'beads20um',
+    }
+    return mapping.get(s, None)
+
+
+def parse_target_beads(beads_args: Union[str, List[str]], beads_info: List[dict] = BEADS_INFO) -> List[dict]:
+    """
+    argparse の引数（リストまたはカンマ/スペース区切りの文字列）から対象ビーズ情報のリストを抽出・構築する。
+    """
+    if isinstance(beads_args, str):
+        raw_list = [beads_args]
+    else:
+        raw_list = list(beads_args)
+
+    tokens = []
+    for item in raw_list:
+        parts = item.replace(',', ' ').split()
+        tokens.extend(parts)
+
+    if not tokens or 'all' in [t.lower() for t in tokens]:
+        return beads_info
+
+    selected_names = set()
+    for token in tokens:
+        norm = normalize_bead_name(token)
+        if norm:
+            selected_names.add(norm)
+        else:
+            found = False
+            for b in beads_info:
+                if b['name'].lower() == token.lower():
+                    selected_names.add(b['name'])
+                    found = True
+                    break
+            if not found:
+                print(f"[WARNING] Unrecognized bead specification: '{token}'. Available: {[b['name'] for b in beads_info]}")
+
+    target = [b for b in beads_info if b['name'] in selected_names]
+    if not target:
+        raise ValueError(f"No valid beads matched from input: {beads_args}. Available: {[b['name'] for b in beads_info]}")
+    return target
+
+
 # =========================================================================
 # 可視化関数群
 # =========================================================================
@@ -120,9 +175,12 @@ def plot_local_polar_6panel(
     max_window: float = 60.0,
 ):
     """
-    全ビーズサイズ（6パネル）におけるモード別局所ポーラーオーダー Phi(R) vs R をプロットする。
+    選択ビーズサイズにおけるモード別局所ポーラーオーダー Phi(R) vs R をプロットする（動的グリッドレイアウト）。
     """
-    fig, axes = plt.subplots(2, 3, figsize=(15, 9.5))
+    n_beads = len(beads_info)
+    ncols = min(n_beads, 3)
+    nrows = int(np.ceil(n_beads / ncols)) if ncols > 0 else 1
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5.0 * ncols, 4.8 * nrows), squeeze=False)
     axes = axes.flatten()
 
     for idx, binfo in enumerate(beads_info):
@@ -147,10 +205,15 @@ def plot_local_polar_6panel(
         )
 
         ax.set_xlim(0, max_window)
-        if idx < 3:
+        row_idx = idx // ncols
+        col_idx = idx % ncols
+        if row_idx < nrows - 1:
             ax.set_xlabel("")
-        if idx % 3 != 0:
+        if col_idx != 0:
             ax.set_ylabel("")
+
+    for i in range(n_beads, len(axes)):
+        axes[i].axis('off')
 
     plt.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -374,7 +437,7 @@ def main():
     )
     parser.add_argument('--root_dir', type=str, default=None, help="Root directory containing beads data.")
     parser.add_argument('--output_dir', type=str, default='figures/hmm_polar_order', help="Output directory for figures & CSVs.")
-    parser.add_argument('--beads', type=str, default='all', help="Target bead condition ('all' or 'beads1um' etc.)")
+    parser.add_argument('--beads', type=str, nargs='+', default=['all'], help="Target bead conditions (e.g. 'all', 'beads1um', 'beads06um beads1um beads3um', 'bead06um, bead1um, bead3um').")
     parser.add_argument('--tau', type=int, default=1, help="Lag time step for velocity calculation.")
     parser.add_argument('--scale', type=float, default=0.11, help="Spatial scale (um/pixel).")
     parser.add_argument('--frame_interval', type=float, default=4.0, help="Time interval between frames (s).")
@@ -383,25 +446,25 @@ def main():
     args = parser.parse_args()
 
     root_dir = Path(args.root_dir) if args.root_dir else find_default_root()
-    output_dir = Path(args.output_dir)
+    out_arg = Path(args.output_dir)
+    output_dir = out_arg if out_arg.is_absolute() else (root_dir / out_arg)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        target_bead_infos = parse_target_beads(args.beads, BEADS_INFO)
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        return
 
     print("=================================================================")
     print(" HMM Mode-Dependent MT Local Polar Order Analysis")
     print("=================================================================")
     print(f"Data Root Directory: {root_dir}")
     print(f"Output Directory:    {output_dir}")
+    print(f"Target Beads:        {[b['name'] for b in target_bead_infos]}")
     print(f"Lag time tau:        {args.tau} ({args.tau * args.frame_interval:.1f} s)")
     print(f"Scale:               {args.scale} um/pixel")
     print("=================================================================\n")
-
-    if args.beads == "all":
-        target_bead_infos = BEADS_INFO
-    else:
-        target_bead_infos = [b for b in BEADS_INFO if b['name'] == args.beads]
-        if not target_bead_infos:
-            print(f"[ERROR] Unknown bead name '{args.beads}'. Available: {[b['name'] for b in BEADS_INFO]}")
-            return
 
     results_by_bead = {}
     all_binned_records = []
@@ -510,21 +573,21 @@ def main():
 
     print("\n=== Generating Figures ===")
 
-    # Figure 1: 6パネル Phi(R) プロット
+    # Figure 1: 局所ポーラーオーダープロット
     fig1_path = output_dir / "hmm_local_polar_order_6panel.svg"
-    plot_local_polar_6panel(results_by_bead, BEADS_INFO, fig1_path, max_window=args.max_window)
+    plot_local_polar_6panel(results_by_bead, target_bead_infos, fig1_path, max_window=args.max_window)
 
     # Figure 2: モード別 4パネル比較プロット
     fig2_path = output_dir / "polar_order_mode_comparison_4panel.svg"
-    plot_polar_mode_comparison_4panel(results_by_bead, BEADS_INFO, fig2_path, max_window=args.max_window)
+    plot_polar_mode_comparison_4panel(results_by_bead, target_bead_infos, fig2_path, max_window=args.max_window)
 
     # Figure 3: 代表スケールでの Phi vs 粒子径
     fig3_path = output_dir / "polar_order_vs_diameter_scales.svg"
-    plot_polar_order_vs_diameter_scales(df_all_curves, BEADS_INFO, fig3_path, target_scales_um=[10.0, 25.0, 50.0])
+    plot_polar_order_vs_diameter_scales(df_all_curves, target_bead_infos, fig3_path, target_scales_um=[10.0, 25.0, 50.0])
 
     # Figure 4: ポーラーオーダー増強差 Delta Phi vs R
     fig4_path = output_dir / "polar_order_enhancement_diff_vs_diameter.svg"
-    plot_polar_order_enhancement_diff(results_by_bead, BEADS_INFO, fig4_path, max_window=args.max_window)
+    plot_polar_order_enhancement_diff(results_by_bead, target_bead_infos, fig4_path, max_window=args.max_window)
 
     print("\n=== Saving CSV Summaries ===")
     csv_curves_path = output_dir / "polar_order_binned_curves.csv"
