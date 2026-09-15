@@ -198,7 +198,7 @@ def plot_trajectory_segmentation(
     output_path: Path,
     n_components: int = 2,
 ):
-    fig, axes = plt.subplots(2, 3, figsize=(15, 9))
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
     axes = axes.flatten()
 
     for idx, binfo in enumerate(BEADS_INFO):
@@ -218,7 +218,22 @@ def plot_trajectory_segmentation(
             ax.set_title(f"{dia:.2f} $\\mu$m (No data)")
             continue
 
-        part_counts = df_obs['particle'].value_counts()
+        # 特定実験ディレクトリのトラックを優先して使用 (0.63 um -> beads06um001, 3.37 um -> beads3um003)
+        target_exp = None
+        if bname == 'beads06um':
+            target_exp = '06um001'
+        elif bname == 'beads3um':
+            target_exp = '3um003'
+
+        if target_exp and 'exp_dir' in df_obs.columns:
+            sub_exp = df_obs[df_obs['exp_dir'].str.contains(target_exp, case=False, na=False)]
+            if not sub_exp.empty:
+                part_counts = sub_exp['particle'].value_counts()
+            else:
+                part_counts = df_obs['particle'].value_counts()
+        else:
+            part_counts = df_obs['particle'].value_counts()
+
         top_particles = part_counts.head(4).index.tolist()
 
         for pid in top_particles:
@@ -242,30 +257,43 @@ def plot_trajectory_segmentation(
                     [x_pts[i], x_pts[i+1]],
                     [y_pts[i], y_pts[i+1]],
                     color=scolor,
-                    lw=2.0,
+                    lw=2.2,
                     alpha=0.85,
                     solid_capstyle='round',
+                    zorder=3,
                 )
-            ax.plot(x_pts[0], y_pts[0], marker='o', markersize=4, color='black', alpha=0.7)
+            ax.plot(x_pts[0], y_pts[0], marker='o', markersize=4.5, color='black', alpha=0.85, zorder=5)
+            ax.plot(x_pts[-1], y_pts[-1], marker='s', markersize=4.0, color='black', alpha=0.85, zorder=5)
 
-        ax.set_title(f"$d = {dia:.2f}\\,\\mu\\mathrm{{m}}$", fontsize=12, fontweight='bold')
-        ax.set_aspect('equal', adjustable='datalim')
-        ax.grid(True, linestyle='--', alpha=0.4)
+        ax.set_title(f"$d = {dia:.2f}\\,\\mu\\mathrm{{m}}$", fontsize=13, fontweight='bold', pad=8)
+        ax.set_xlim(0, 285)
+        ax.set_ylim(0, 240)
+        ax.set_aspect('equal', adjustable='box')
+        ax.set_xticks([0, 50, 100, 150, 200, 250])
+        ax.set_yticks([0, 50, 100, 150, 200])
+        ax.tick_params(labelsize=10)
+        ax.grid(True, linestyle='--', alpha=0.35, color='gray')
         if idx >= 3:
             ax.set_xlabel(r"$x$ [$\mu\mathrm{m}$]", fontsize=11)
         if idx % 3 == 0:
             ax.set_ylabel(r"$y$ [$\mu\mathrm{m}$]", fontsize=11)
 
     legend_elements = [
-        plt.Line2D([0], [0], color=STATE_COLORS.get(s, f"C{s}"), lw=3, label=STATE_NAMES.get(n_components, {}).get(s, f"State {s}"))
+        plt.Line2D([0], [0], color=STATE_COLORS.get(s, f"C{s}"), lw=2.5, label=STATE_NAMES.get(n_components, {}).get(s, f"State {s}"))
         for s in range(n_components)
     ]
-    fig.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 0.98), ncol=n_components, frameon=True, fontsize=11)
-    fig.suptitle("HMM Decoded Trajectory Segmentation (Representative Tracks)", fontsize=14, fontweight='bold', y=1.02)
+    legend_elements.extend([
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='black', markersize=5, label="Start"),
+        plt.Line2D([0], [0], marker='s', color='w', markerfacecolor='black', markersize=5, label="End"),
+    ])
+    fig.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 0.99), ncol=n_components + 2, frameon=True, fontsize=10.5)
+    fig.suptitle("HMM Decoded Trajectory Segmentation (Representative Tracks)", fontsize=14, fontweight='bold', y=1.025)
     fig.tight_layout()
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches='tight')
+    png_path = output_path.with_suffix('.png')
+    fig.savefig(png_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"[SAVED] {output_path}", flush=True)
 

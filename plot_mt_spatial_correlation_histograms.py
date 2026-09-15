@@ -4,16 +4,30 @@
 plot_mt_spatial_correlation_histograms.py
 =========================================
 微小管（Microtubules / MT）アクティブフロー場の空間配向相関のヒストグラムを
-さまざまな大きさの r (例: r = 2, 16, 32 um) でプロット・解析するスクリプト。
+さまざまな大きさの r (例: r = 2, 16, 32 um) で高速かつ高精度にプロット・解析するスクリプト。
 
-計算内容:
-- 微小管フロー単位ベクトル u_flow(x) の空間相関:
-    cos(theta_ij) = u_flow(x) · u_flow(x + r)  in [-1, 1]
-    相対運動角度 Delta theta_ij = arccos(u_flow(x) · u_flow(x + r))  in [0, 180 deg]
+主な最適化 & 特徴:
+1. 24方向固定サンプリング (24 Fixed Angle Directions):
+   元解析との統計的一貫性を保つため、angles = np.linspace(0, 2*pi, 24, endpoint=False)
+   の各方向ごとにランダム点サンプリングを実施（巨大配列スライス・コピーを完全排除）。
+2. Adaptive Sampling による最低サンプル数保証:
+   境界落ちや無効点によるサンプル不足を防ぐ while ループ再試行（max_trials=5）。
+3. list.extend() の排除:
+   NumPy 配列の append & 最後に np.concatenate() による高速結合。
+4. HDF5 読み込み最適化:
+   ds[t, 0, ::stride, ::stride] で必要データのみを直接スライス読み込み。
+5. ProcessPoolExecutor による実験単位の並列化:
+   マルチコア CPU による並列 I/O & サンプリング処理。
+6. np.random.default_rng(seed) による高速乱数 & 再現性保証。
+7. ステージ別プロファイル計測 (I/O, Normalization, Sampling, Histogram, Plotting) & cProfile サポート。
 """
 
 import argparse
+import concurrent.futures
+import cProfile
+import io
 import os
+import pstats
 import sys
 import time
 from pathlib import Path
@@ -92,114 +106,221 @@ def find_experiment_dirs(root_dir: Path, bead_name: str) -> List[Path]:
 
 
 # =========================================================================
-# 微小管フロー場の空間配向相関サンプリング
+# 単一実験の並列処理ワーカー関数
 # =========================================================================
-def sample_mt_flow_correlations(
+
+def process_single_experiment_flow(
+    h5_path_str: str,
+    r_targets: List[float],
+    scale: float = 0.11,
+    stride: int = 4,
+    target_pairs_per_r: int = 12000,  # 24 directions x 500 pairs
+    n_directions: int = 24,
+    seed: int = 42,
+    max_trials: int = 5,
+) -> Tuple[Dict[float, np.ndarray], Dict[str, float], Dict[str, int]]:
+    """
+    1つの実験 HDF5 ファイルからオプティカルフローを読み込み、
+    24方向固定サンプリング & Adaptive Sampling により各 r の内積分布を計算する。
+
+    Returns:
+    --------
+    corr_by_r : Dict[float, np.ndarray]
+    timings : Dict[str, float] (io, norm, sampling)
+    stats_info : Dict[str, int] (requested, collected)
+    """
+    h5_path = Path(h5_path_str)
+    step_scale = scale * stride  # 0.11 * 4 = 0.44 um/pixel
+    rng = np.random.default_rng(seed)
+
+    timings = {'io': 0.0, 'norm': 0.0, 'sampling': 0.0}
+    stats_info = {'requested': len(r_targets) * target_pairs_per_r, 'collected': 0}
+    corr_by_r = {r: np.empty(0, dtype=np.float32) for r in r_targets}
+
+    if not h5_path.exists():
+        return corr_by_r, timings, stats_info
+
+    # 1. HDF5 最適化読み込み (中央フレームの fx, fy のみをストライドスライス取得)
+    t0 = time.perf_counter()
+    try:
+        with h5py.File(str(h5_path), 'r', locking=False) as f:
+            dataset_key = 'flows' if 'flows' in f else list(f.keys())[0]
+            flow_ds = f[dataset_key]
+            T = flow_ds.shape[0]
+            target_frame = int(T * 0.5)
+
+            # ストライド付きで直接読み込み (メモリ消費を 1/16 に削減)
+            fx = flow_ds[target_frame, 0, ::stride, ::stride].astype(np.float32)
+            fy = flow_ds[target_frame, 1, ::stride, ::stride].astype(np.float32)
+    except Exception as e:
+        return corr_by_r, timings, stats_info
+    timings['io'] = time.perf_counter() - t0
+
+    # 2. ベクトル正規化 & 有効点抽出
+    t0 = time.perf_counter()
+    mag = np.hypot(fx, fy)
+    valid = (mag > 1e-3) & np.isfinite(fx) & np.isfinite(fy)
+
+    ux = np.zeros_like(fx)
+    uy = np.zeros_like(fy)
+    ux[valid] = fx[valid] / np.maximum(mag[valid], 1e-6)
+    uy[valid] = fy[valid] / np.maximum(mag[valid], 1e-6)
+
+    valid_y, valid_x = np.nonzero(valid)
+    n_valid = len(valid_y)
+    H, W = ux.shape
+    timings['norm'] = time.perf_counter() - t0
+
+    if n_valid == 0:
+        return corr_by_r, timings, stats_info
+
+    # 3. 24方向固定サンプリング & Adaptive Sampling
+    t0 = time.perf_counter()
+    angles = np.linspace(0, 2 * np.pi, n_directions, endpoint=False)
+    pairs_per_dir = int(np.ceil(target_pairs_per_r / n_directions))
+
+    for r_val in r_targets:
+        r_pix = r_val / step_scale
+        r_dots_list = []
+
+        for phi in angles:
+            dy = int(round(r_pix * np.sin(phi)))
+            dx = int(round(r_pix * np.cos(phi)))
+
+            collected_dir = []
+            n_collected = 0
+            trial = 0
+
+            # Adaptive sampling: 目標点数に達するまで最大 max_trials 回サンプリング
+            while n_collected < pairs_per_dir and trial < max_trials:
+                trial += 1
+                needed = pairs_per_dir - n_collected
+                # 境界落ちや無効点落ちを見越して 1.3倍サンプリング
+                batch_size = max(10, int(needed * 1.3))
+
+                idx = rng.integers(0, n_valid, size=batch_size)
+                y1 = valid_y[idx]
+                x1 = valid_x[idx]
+
+                y2 = y1 + dy
+                x2 = x1 + dx
+
+                in_bounds = (y2 >= 0) & (y2 < H) & (x2 >= 0) & (x2 < W)
+                y2_safe = np.clip(y2, 0, H - 1)
+                x2_safe = np.clip(x2, 0, W - 1)
+
+                pair_valid = in_bounds & valid[y2_safe, x2_safe]
+                valid_count = np.count_nonzero(pair_valid)
+
+                if valid_count > 0:
+                    y1_v = y1[pair_valid][:needed]
+                    x1_v = x1[pair_valid][:needed]
+                    y2_v = y2[pair_valid][:needed]
+                    x2_v = x2[pair_valid][:needed]
+
+                    dots = ux[y1_v, x1_v] * ux[y2_v, x2_v] + uy[y1_v, x1_v] * uy[y2_v, x2_v]
+                    collected_dir.append(dots)
+                    n_collected += len(dots)
+
+            if collected_dir:
+                r_dots_list.append(np.concatenate(collected_dir))
+
+        if r_dots_list:
+            combined_dots = np.concatenate(r_dots_list)
+            corr_by_r[r_val] = combined_dots
+            stats_info['collected'] += len(combined_dots)
+
+    timings['sampling'] = time.perf_counter() - t0
+    return corr_by_r, timings, stats_info
+
+
+# =========================================================================
+# 並列実行制御関数
+# =========================================================================
+
+def sample_mt_flow_parallel(
     exp_dirs: List[Path],
     r_targets: List[float],
     scale: float = 0.11,
     stride: int = 4,
-    max_pairs_per_r: int = 30000,
-) -> Dict[float, np.ndarray]:
+    target_pairs_per_r: int = 12000,
+    n_directions: int = 24,
+    max_workers: Optional[int] = None,
+    base_seed: int = 42,
+) -> Tuple[Dict[float, np.ndarray], Dict[str, float]]:
     """
-    各実験の GFP_flows.h5 から代表フレームのオプティカルフロー場を取得し、
-    距離 r における cos(Delta theta) の分布を計算する。
+    全実験を ProcessPoolExecutor で並列処理し、結果を集約する。
     """
-    step_scale = scale * stride  # um/pixel in downsampled grid (0.11 * 4 = 0.44 um/pixel)
-    corr_by_r = {r: [] for r in r_targets}
+    if max_workers is None:
+        max_workers = min(8, os.cpu_count() or 4)
 
-    for edir in exp_dirs:
+    corr_by_r_chunks = {r: [] for r in r_targets}
+    total_timings = {'io': 0.0, 'norm': 0.0, 'sampling': 0.0}
+
+    tasks = []
+    for exp_idx, edir in enumerate(exp_dirs):
         h5_path = edir / "GFP_flows.h5"
         if not h5_path.exists():
             continue
+        tasks.append((str(h5_path), base_seed + exp_idx))
 
-        try:
-            with h5py.File(str(h5_path), 'r', locking=False) as f:
-                dataset_key = 'flows' if 'flows' in f else list(f.keys())[0]
-                flow_ds = f[dataset_key]
-                T = flow_ds.shape[0]
-                # 中盤の代表フレーム (T/2) を取得
-                target_frame = int(T * 0.5)
+    if not tasks:
+        return {r: np.empty(0, dtype=np.float32) for r in r_targets}, total_timings
 
-                full_f = flow_ds[target_frame]  # shape (2, 2160, 2560)
-                fx = full_f[0, ::stride, ::stride].astype(np.float32)
-                fy = full_f[1, ::stride, ::stride].astype(np.float32)
+    # 並列ワーカーの実行
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        future_to_exp = {
+            executor.submit(
+                process_single_experiment_flow,
+                h5_str,
+                r_targets,
+                scale,
+                stride,
+                target_pairs_per_r,
+                n_directions,
+                seed,
+            ): h5_str for h5_str, seed in tasks
+        }
 
-                mag = np.hypot(fx, fy)
-                valid = (mag > 1e-3) & np.isfinite(fx) & np.isfinite(fy)
-
-                ux = np.zeros_like(fx)
-                uy = np.zeros_like(fy)
-                ux[valid] = fx[valid] / np.maximum(mag[valid], 1e-6)
-                uy[valid] = fy[valid] / np.maximum(mag[valid], 1e-6)
-
-                H, W = ux.shape
-
+        for future in concurrent.futures.as_completed(future_to_exp):
+            h5_str = future_to_exp[future]
+            try:
+                corr_res, t_res, s_res = future.result()
                 for r_val in r_targets:
-                    r_pix = r_val / step_scale
-                    n_angles = 24
-                    angles = np.linspace(0, 2 * np.pi, n_angles, endpoint=False)
+                    if len(corr_res[r_val]) > 0:
+                        corr_by_r_chunks[r_val].append(corr_res[r_val])
+                for k in total_timings:
+                    total_timings[k] += t_res[k]
+            except Exception as e:
+                print(f"[WARNING] Experiment failed: {h5_str} ({e})", flush=True)
 
-                    for phi in angles:
-                        dy = int(round(r_pix * np.sin(phi)))
-                        dx = int(round(r_pix * np.cos(phi)))
-
-                        if dy >= 0:
-                            y1_s, y1_e = 0, H - dy
-                            y2_s, y2_e = dy, H
-                        else:
-                            y1_s, y1_e = -dy, H
-                            y2_s, y2_e = 0, H + dy
-
-                        if dx >= 0:
-                            x1_s, x1_e = 0, W - dx
-                            x2_s, x2_e = dx, W
-                        else:
-                            x1_s, x1_e = -dx, W
-                            x2_s, x2_e = 0, W + dx
-
-                        v1 = valid[y1_s:y1_e, x1_s:x1_e]
-                        v2 = valid[y2_s:y2_e, x2_s:x2_e]
-                        pv = v1 & v2
-
-                        if np.any(pv):
-                            u1x = ux[y1_s:y1_e, x1_s:x1_e][pv]
-                            u1y = uy[y1_s:y1_e, x1_s:x1_e][pv]
-                            u2x = ux[y2_s:y2_e, x2_s:x2_e][pv]
-                            u2y = uy[y2_s:y2_e, x2_s:x2_e][pv]
-
-                            dots = u1x * u2x + u1y * u2y
-                            if len(dots) > 500:
-                                dots = np.random.choice(dots, 500, replace=False)
-                            corr_by_r[r_val].extend(dots)
-
-        except Exception as e:
-            continue
-
-    result = {}
-    for r_val, arr in corr_by_r.items():
-        if len(arr) > max_pairs_per_r:
-            result[r_val] = np.random.choice(arr, max_pairs_per_r, replace=False)
+    # np.concatenate による一括統合 (list.extend を排除)
+    final_corr_by_r = {}
+    for r_val in r_targets:
+        if corr_by_r_chunks[r_val]:
+            final_corr_by_r[r_val] = np.concatenate(corr_by_r_chunks[r_val])
         else:
-            result[r_val] = np.array(arr)
-    return result
+            final_corr_by_r[r_val] = np.empty(0, dtype=np.float32)
+
+    return final_corr_by_r, total_timings
 
 
 # =========================================================================
-# 可視化関数
+# 可視化関数群
 # =========================================================================
 
 def plot_focused_mt_flow_histograms(
     flow_corr_by_r: Dict[float, np.ndarray],
     r_targets: List[float],
     output_dir: Path,
-):
+) -> float:
     """
-    微小管フロー場の空間配向相関ヒストグラム (2パネル: cos(Delta theta) & Delta theta [deg])。
+    微小管フロー場の空間配向相関ヒストグラム (cos(theta_ij) の単一パネル)。
     """
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
+    t0 = time.perf_counter()
+    fig, ax1 = plt.subplots(1, 1, figsize=(7.5, 5.5))
 
-    # パネル1: cos(Delta theta)
+    # cos(Delta theta) ヒストグラム
     bins_cos = np.linspace(-1.0, 1.0, 31)
     x_theory = np.linspace(-0.99, 0.99, 300)
     p_theory_cos = 1.0 / (np.pi * np.sqrt(1.0 - x_theory**2))
@@ -231,46 +352,11 @@ def plot_focused_mt_flow_histograms(
     ax1.set_ylim(bottom=0)
     ax1.set_xlabel(r"Microtubule Flow Direction Correlation $\cos(\theta_{ij}) = \hat{\mathbf{u}}_i \cdot \hat{\mathbf{u}}_j$", fontsize=11)
     ax1.set_ylabel("Probability Density Function (PDF)", fontsize=11)
-    ax1.set_title(r"(a) Distribution of Flow Dot Products $\cos(\theta_{ij})$", fontsize=12, fontweight='bold')
+    r_str = ", ".join([f"{r:.0f}" for r in r_targets])
+    ax1.set_title(f"Microtubule Flow Spatial Orientational Correlation ($r = {r_str}\\,\\mu\\mathrm{{m}}$)", fontsize=12, fontweight='bold')
     ax1.grid(True, linestyle='--', alpha=0.4)
-    ax1.legend(fontsize=9, loc='upper center', framealpha=0.9)
+    ax1.legend(fontsize=9.5, loc='upper center', framealpha=0.9)
 
-    # パネル2: 相対角度 Delta theta [deg]
-    bins_ang = np.linspace(0, 180, 25)
-    p_theory_ang = np.ones(50) / 180.0
-    ax2.plot(np.linspace(0, 180, 50), p_theory_ang, 'k--', lw=1.5, alpha=0.6, label="Isotropic / Random (Theory)")
-
-    for r_idx, r_val in enumerate(r_targets):
-        color = R_COLORS[r_idx % len(R_COLORS)]
-        vals = flow_corr_by_r.get(r_val, np.array([]))
-        if len(vals) < 10:
-            continue
-
-        cos_clipped = np.clip(vals, -1.0, 1.0)
-        angles_deg = np.degrees(np.arccos(cos_clipped))
-        counts, edges = np.histogram(angles_deg, bins=bins_ang, density=True)
-        centers = 0.5 * (edges[:-1] + edges[1:])
-        mean_ang = np.mean(angles_deg)
-
-        ax2.plot(
-            centers, counts,
-            drawstyle='steps-mid',
-            color=color,
-            lw=2.5,
-            label=f"$r = {r_val:.0f}\\,\\mu\\mathrm{{m}}$ ($N={len(vals):,}$, $\\langle \\Delta\\theta \\rangle = {mean_ang:.1f}^\\circ$)",
-            alpha=0.9,
-        )
-        ax2.fill_between(centers, counts, step='mid', color=color, alpha=0.15)
-
-    ax2.set_xlim(0, 180)
-    ax2.set_ylim(bottom=0)
-    ax2.set_xlabel(r"Relative Flow Direction Angle $\Delta \theta_{ij}$ [deg]", fontsize=11)
-    ax2.set_ylabel("Probability Density Function (PDF)", fontsize=11)
-    ax2.set_title(r"(b) Distribution of Relative Angles $\Delta \theta_{ij}$", fontsize=12, fontweight='bold')
-    ax2.grid(True, linestyle='--', alpha=0.4)
-    ax2.legend(fontsize=9, loc='upper right', framealpha=0.9)
-
-    plt.suptitle(r"Microtubule Flow Spatial Orientational Correlation Distributions ($r = 2, 16, 32\,\mu\mathrm{m}$)", fontsize=13, fontweight='bold', y=0.98)
     plt.tight_layout()
 
     out_base = output_dir / "mt_flow_spatial_correlation_histograms_focused_r"
@@ -278,6 +364,7 @@ def plot_focused_mt_flow_histograms(
     fig.savefig(f"{out_base}.png", dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"  Saved {out_base}.svg / .png", flush=True)
+    return time.perf_counter() - t0
 
 
 def plot_mt_flow_by_condition_grid(
@@ -285,10 +372,11 @@ def plot_mt_flow_by_condition_grid(
     flow_pooled_by_r: Dict[float, np.ndarray],
     r_targets: List[float],
     output_dir: Path,
-):
+) -> float:
     """
     ビーズ条件ごとの微小管フロー空間相関ヒストグラム (8パネルグリッド)。
     """
+    t0 = time.perf_counter()
     fig, axes = plt.subplots(2, 4, figsize=(18, 8.5))
     axes = axes.flatten()
 
@@ -405,16 +493,18 @@ def plot_mt_flow_by_condition_grid(
     fig.savefig(f"{out_base}.png", dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"  Saved {out_base}.svg / .png", flush=True)
+    return time.perf_counter() - t0
 
 
 def save_mt_histogram_summary_csv(
     flow_corr_by_r: Dict[float, np.ndarray],
     r_targets: List[float],
     output_dir: Path,
-):
+) -> float:
     """
     微小管フロー空間相関ヒストグラムの頻度・統計サマリー CSV を保存。
     """
+    t0 = time.perf_counter()
     bins_cos = np.linspace(-1.0, 1.0, 21)
     bin_centers = 0.5 * (bins_cos[:-1] + bins_cos[1:])
 
@@ -443,17 +533,14 @@ def save_mt_histogram_summary_csv(
     csv_path = output_dir / "mt_spatial_correlation_histogram_summary.csv"
     df_csv.to_csv(csv_path, index=False)
     print(f"  Saved MT histogram summary CSV: {csv_path}", flush=True)
+    return time.perf_counter() - t0
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Plot Microtubule (MT) active flow spatial orientational correlation histograms at specified distances r."
-    )
-    parser.add_argument('--root_dir', type=str, default=None, help="Root directory containing beads data.")
-    parser.add_argument('--output_dir', type=str, default='figure/spatial_correlation', help="Output directory for figures.")
-    parser.add_argument('--r_list', type=float, nargs='+', default=[2.0, 16.0, 32.0], help="Target distances r in um.")
-    args = parser.parse_args()
+# =========================================================================
+# パイプライン実行 & タイミング計測
+# =========================================================================
 
+def run_pipeline(args):
     root_dir = Path(args.root_dir) if args.root_dir else find_default_root()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -464,10 +551,22 @@ def main():
     print(f"Data Root Directory: {root_dir}", flush=True)
     print(f"Output Directory:    {output_dir}", flush=True)
     print(f"Target r distances:  {args.r_list} um", flush=True)
+    print(f"Parallel Workers:    {args.max_workers or min(8, os.cpu_count() or 4)}", flush=True)
     print("=================================================================\n", flush=True)
 
     flow_corr_by_bead_r = {}
     all_flow_pairs = {r: [] for r in args.r_list}
+
+    timings = {
+        "HDF5 read time (CPU total)": 0.0,
+        "Normalization time (CPU total)": 0.0,
+        "Sampling time (CPU total)": 0.0,
+        "Histogram & PDF time": 0.0,
+        "Figure save time": 0.0,
+        "Total pipeline wall time": 0.0,
+    }
+
+    t_wall_start = time.perf_counter()
 
     for binfo in BEADS_INFO:
         bname = binfo['name']
@@ -478,29 +577,88 @@ def main():
             print(f"  [WARNING] No experiment dirs found for {bname}", flush=True)
             continue
 
-        print(f"  Found {len(edirs)} experiment directories. Sampling optical flows...", flush=True)
-        f_data = sample_mt_flow_correlations(edirs, args.r_list)
+        print(f"  Found {len(edirs)} experiment directories. Running parallel sampling...", flush=True)
+        t0 = time.perf_counter()
+        f_data, t_data = sample_mt_flow_parallel(
+            edirs,
+            args.r_list,
+            max_workers=args.max_workers,
+            base_seed=args.seed,
+        )
         flow_corr_by_bead_r[bname] = f_data
-        for r_val, arr in f_data.items():
-            all_flow_pairs[r_val].extend(arr)
-            mean_c = np.mean(arr) if len(arr) > 0 else np.nan
-            print(f"    Flow r={r_val:.0f} um: N={len(arr):,}, mean_cos={mean_c:+.3f}", flush=True)
+        dt_cond = time.perf_counter() - t0
 
-    flow_pooled_by_r = {r: np.array(arr) for r, arr in all_flow_pairs.items()}
+        timings["HDF5 read time (CPU total)"] += t_data["io"]
+        timings["Normalization time (CPU total)"] += t_data["norm"]
+        timings["Sampling time (CPU total)"] += t_data["sampling"]
+
+        for r_val, arr in f_data.items():
+            if len(arr) > 0:
+                all_flow_pairs[r_val].append(arr)
+                mean_c = np.mean(arr)
+                print(f"    Flow r={r_val:.0f} um: N={len(arr):,}, mean_cos={mean_c:+.3f}", flush=True)
+        print(f"  Completed {bname} in {dt_cond:.2f}s (Wall time)", flush=True)
+
+    # 全条件のプール
+    t_hist_0 = time.perf_counter()
+    flow_pooled_by_r = {}
+    for r_val in args.r_list:
+        if all_flow_pairs[r_val]:
+            flow_pooled_by_r[r_val] = np.concatenate(all_flow_pairs[r_val])
+        else:
+            flow_pooled_by_r[r_val] = np.empty(0, dtype=np.float32)
+    timings["Histogram & PDF time"] += (time.perf_counter() - t_hist_0)
 
     print("\n--- Generating Plots ---", flush=True)
     # 1. フロー相関 2パネルフォーカスプロット (cos & angle)
-    plot_focused_mt_flow_histograms(flow_pooled_by_r, args.r_list, output_dir)
+    t_plot1 = plot_focused_mt_flow_histograms(flow_pooled_by_r, args.r_list, output_dir)
+    timings["Figure save time"] += t_plot1
 
     # 2. 条件別 8パネルグリッド (フロー相関)
-    plot_mt_flow_by_condition_grid(flow_corr_by_bead_r, flow_pooled_by_r, args.r_list, output_dir)
+    t_plot2 = plot_mt_flow_by_condition_grid(flow_corr_by_bead_r, flow_pooled_by_r, args.r_list, output_dir)
+    timings["Figure save time"] += t_plot2
 
     # 3. サマリー CSV 出力
-    save_mt_histogram_summary_csv(flow_pooled_by_r, args.r_list, output_dir)
+    t_csv = save_mt_histogram_summary_csv(flow_pooled_by_r, args.r_list, output_dir)
+    timings["Figure save time"] += t_csv
+
+    timings["Total pipeline wall time"] = time.perf_counter() - t_wall_start
 
     print("\n=================================================================", flush=True)
-    print(" All MT flow spatial correlation histogram plots completed successfully!", flush=True)
+    print(" Execution Time & Performance Breakdown", flush=True)
     print("=================================================================", flush=True)
+    for k, v in timings.items():
+        print(f"  {k:<35}: {v:8.3f} s", flush=True)
+    print("=================================================================", flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Plot Microtubule (MT) active flow spatial orientational correlation histograms at specified distances r."
+    )
+    parser.add_argument('--root_dir', type=str, default=None, help="Root directory containing beads data.")
+    parser.add_argument('--output_dir', type=str, default='figure/spatial_correlation', help="Output directory for figures.")
+    parser.add_argument('--r_list', type=float, nargs='+', default=[2.0, 8.0, 32.0], help="Target distances r in um.")
+    parser.add_argument('--max_workers', type=int, default=None, help="Maximum worker processes for parallel I/O & sampling.")
+    parser.add_argument('--seed', type=int, default=42, help="Base random seed for reproducibility.")
+    parser.add_argument('--profile', action='store_true', help="Enable detailed cProfile profiling report.")
+    args = parser.parse_args()
+
+    if args.profile:
+        profiler = cProfile.Profile()
+        profiler.enable()
+        run_pipeline(args)
+        profiler.disable()
+
+        s = io.StringIO()
+        ps = pstats.Stats(profiler, stream=s).sort_stats('tottime')
+        ps.print_stats(20)
+        print("\n=================================================================", flush=True)
+        print(" cProfile Function-Level Profile Report (Top 20 by internal time)", flush=True)
+        print("=================================================================", flush=True)
+        print(s.getvalue(), flush=True)
+    else:
+        run_pipeline(args)
 
 
 if __name__ == "__main__":

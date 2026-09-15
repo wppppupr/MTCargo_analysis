@@ -380,36 +380,27 @@ def compute_rtp_theoretical_diffusion(
                 mean_cos_run = float(sub_angle.iloc[0]['mean_cos'])
 
         # Orientation 自己相関時間として「積分時間」tau_oacf_int を優先採用
-        # ※ 0.63 um 粒子については tau_OACF = inf (1/tau_OACF = 0) とみなし tau_eff = tau_dwell とする
-        if np.isclose(d_um, 0.63, atol=0.05):
-            tau_oacf = np.inf
-            tau_eff_theo = tau_run_theo
-            tau_eff_ccdf = tau_run_ccdf
-            tau_eff_fit = tau_run_fit
-            tau_eff_emp = tau_run_emp
-            tau_eff_exp_fit = tau_run_theo
+        if np.isfinite(tau_oacf_int) and tau_oacf_int > 0:
+            tau_oacf = tau_oacf_int
+        elif np.isfinite(tau_oacf_fit) and tau_oacf_fit > 0:
+            tau_oacf = tau_oacf_fit
+        elif mean_cos_run > 0 and mean_cos_run < 1:
+            tau_oacf = -4.0 / np.log(mean_cos_run)  # dt=4s
         else:
-            if np.isfinite(tau_oacf_int) and tau_oacf_int > 0:
-                tau_oacf = tau_oacf_int
-            elif np.isfinite(tau_oacf_fit) and tau_oacf_fit > 0:
-                tau_oacf = tau_oacf_fit
-            elif mean_cos_run > 0 and mean_cos_run < 1:
-                tau_oacf = -4.0 / np.log(mean_cos_run)  # dt=4s
-            else:
-                tau_oacf = tau_run_theo
+            tau_oacf = tau_run_theo
 
-            # 4. 有効緩和時間 tau_eff = 1 / (1/tau_OACF,int + 1/tau_dwell) の算出
-            # 1 / tau_eff = 1 / tau_OACF + 1 / tau_dwell
-            tau_eff_theo = 1.0 / (1.0 / tau_oacf + 1.0 / tau_run_theo)
-            tau_eff_ccdf = 1.0 / (1.0 / tau_oacf + 1.0 / tau_run_ccdf)
-            tau_eff_fit = 1.0 / (1.0 / tau_oacf + 1.0 / tau_run_fit)
-            tau_eff_emp = 1.0 / (1.0 / tau_oacf + 1.0 / tau_run_emp)
+        # 4. 有効緩和時間 tau_eff = 1 / (1/tau_OACF,int + 1/tau_dwell) の算出
+        # 1 / tau_eff = 1 / tau_OACF + 1 / tau_dwell
+        tau_eff_theo = 1.0 / (1.0 / tau_oacf + 1.0 / tau_run_theo)
+        tau_eff_ccdf = 1.0 / (1.0 / tau_oacf + 1.0 / tau_run_ccdf)
+        tau_eff_fit = 1.0 / (1.0 / tau_oacf + 1.0 / tau_run_fit)
+        tau_eff_emp = 1.0 / (1.0 / tau_oacf + 1.0 / tau_run_emp)
 
-            # 指数フィット型 OACF を用いた場合の tau_eff_fit (参考用)
-            if np.isfinite(tau_oacf_fit) and tau_oacf_fit > 0:
-                tau_eff_exp_fit = 1.0 / (1.0 / tau_oacf_fit + 1.0 / tau_run_theo)
-            else:
-                tau_eff_exp_fit = tau_eff_theo
+        # 指数フィット型 OACF を用いた場合の tau_eff_fit (参考用)
+        if np.isfinite(tau_oacf_fit) and tau_oacf_fit > 0:
+            tau_eff_exp_fit = 1.0 / (1.0 / tau_oacf_fit + 1.0 / tau_run_theo)
+        else:
+            tau_eff_exp_fit = tau_eff_theo
 
         # Run MSD フィッティングから得られた持続時間 tau_Run,MSD (参考比較用)
         tau_run_msd = np.nan
@@ -1076,25 +1067,51 @@ def plot_tau_eff_vs_diameter(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    d = df_combined['diameter_um'].to_numpy()
-    tau_eff = df_combined['tau_eff_theo_s'].to_numpy()
-    tau_dwell = df_combined['tau_run_theo_s'].to_numpy()
-    tau_oacf = df_combined['tau_oacf_int_s'].to_numpy() if 'tau_oacf_int_s' in df_combined.columns else df_combined['tau_oacf_s'].to_numpy()
+    d_all = df_combined['diameter_um'].to_numpy()
+    tau_eff_all = df_combined['tau_eff_theo_s'].to_numpy()
+    tau_dwell_all = df_combined['tau_run_theo_s'].to_numpy()
+    tau_oacf_all = df_combined['tau_oacf_int_s'].to_numpy() if 'tau_oacf_int_s' in df_combined.columns else df_combined['tau_oacf_s'].to_numpy()
+
+    # 5, 7, 20 um を除外して 0.63, 1.18, 3.37 um のみ抽出 (Dc <= 3.5 um)
+    mask_3 = d_all <= 3.5
+    d = d_all[mask_3]
+    tau_eff = tau_eff_all[mask_3]
+    tau_dwell = tau_dwell_all[mask_3]
+    tau_oacf = tau_oacf_all[mask_3]
 
     fig, ax = plt.subplots(figsize=(7.5, 5.6))
 
-    # 1. tau_OACF,int (Orientation 自己相関積分時間)
-    finite_oacf = np.isfinite(tau_oacf) & (tau_oacf > 0)
+    # 理論曲線: tau_OACF(Dc) = tau_0 * exp(-2 * Dc / (3 * R_0)), R0 = 2.7774 um (3R0 = 8.3321 um)
+    R0_vel = 2.7774
+    d_dense_tau = np.linspace(0.0, 25.0, 300)
+    valid_oacf = np.isfinite(tau_oacf) & (tau_oacf > 0)
+    if np.any(valid_oacf):
+        ln_t0_vals = np.log(tau_oacf[valid_oacf]) + (2.0 / (3.0 * R0_vel)) * d[valid_oacf]
+        ln_t0_fit = float(np.mean(ln_t0_vals))
+        t0_fit = float(np.exp(ln_t0_fit))
+    else:
+        t0_fit = 14.00
+
+    tau_theo_curve = t0_fit * np.exp(-2.0 * d_dense_tau / (3.0 * R0_vel))
     ax.plot(
-        d[finite_oacf], tau_oacf[finite_oacf],
-        marker='o',
-        color='#2b83ba',
-        linewidth=1.8,
-        linestyle=':',
-        markersize=7.5,
-        label=r'$\tau_{\mathrm{OACF, int}}$ (Orientation Integral Time)',
-        zorder=3
+        d_dense_tau, tau_theo_curve,
+        color='#1f78b4', linestyle='-', linewidth=2.0,
+        label=rf'Theory: $\tau_{{\mathrm{{OACF}}}}(d) = \tau_0 \exp\left(-\frac{{2 d}}{{3 R_0}}\right)$' + '\n' + rf'  ($\tau_0 = {t0_fit:.2f}\,\mathrm{{s}},\ R_0 = {R0_vel:.2f}\,\mu\mathrm{{m}}$)',
+        zorder=2
     )
+
+    # 1. tau_OACF,int (Orientation 自己相関積分時間)
+    if np.any(valid_oacf):
+        ax.plot(
+            d[valid_oacf], tau_oacf[valid_oacf],
+            marker='o',
+            color='#2b83ba',
+            linewidth=1.8,
+            linestyle=':',
+            markersize=8.0,
+            label=r'$\tau_{\mathrm{OACF, int}}$ (Orientation Integral Time)',
+            zorder=3
+        )
 
     # 2. tau_dwell (Run 状態滞在時間)
     ax.plot(
@@ -1103,7 +1120,7 @@ def plot_tau_eff_vs_diameter(
         color='#4dac26',
         linewidth=1.8,
         linestyle='--',
-        markersize=7.5,
+        markersize=8.0,
         label=r'$\tau_{\mathrm{dwell}}$ (Run Dwell Time: $\tau_{\mathrm{run}}$)',
         zorder=4
     )
@@ -1120,42 +1137,31 @@ def plot_tau_eff_vs_diameter(
         zorder=5
     )
 
-    # 各 tau_eff 点に数値アノテーション & 0.63 um 注釈
-    for i_d, (x_val, y_val, t_o) in enumerate(zip(d, tau_eff, tau_oacf)):
-        if not np.isfinite(t_o):
-            ax.annotate(
-                r'$\tau_{\mathrm{OACF}} = \infty$' + '\n' + r'($\tau_{\mathrm{eff}} = \tau_{\mathrm{dwell}}$)',
-                xy=(x_val, y_val),
-                xytext=(x_val * 1.15, y_val * 1.35),
-                arrowprops=dict(arrowstyle="->", color='#2b83ba', lw=1.2),
-                fontsize=8.5,
-                fontweight='bold',
-                color='#2b83ba',
-                bbox=dict(boxstyle='round,pad=0.2', facecolor='white', edgecolor='#2b83ba', alpha=0.9)
-            )
+    # 各 tau_eff 点に数値アノテーション
+    for i_d, (x_val, y_val) in enumerate(zip(d, tau_eff)):
         ax.annotate(
             f"{y_val:.2f}s",
             (x_val, y_val),
             textcoords="offset points",
-            xytext=(0, -16 if i_d == 0 else 10),
+            xytext=(0, 10),
             ha='center',
-            fontsize=8.5,
+            fontsize=9.0,
             fontweight='bold',
             color='#d7191c',
-            bbox=dict(boxstyle='round,pad=0.2', facecolor='white', edgecolor='#d7191c', alpha=0.85)
+            bbox=dict(boxstyle='round,pad=0.2', facecolor='white', edgecolor='#d7191c', alpha=0.9)
         )
 
-    ax.set_xscale('log')
     ax.set_yscale('log')
-    ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
-    ax.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
-    ax.set_xticklabels(['0.63', '1.18', '3.37', '5.0', '7.24', '20'])
-    ax.set_xlim(0.45, 28.0)
-    ax.set_ylim(0.5, 450.0)
+    ax.set_xlim(0, 25.0)
+    ax.set_ylim(0.02, 250.0)
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(5.0))
+    ax.xaxis.set_minor_locator(ticker.MultipleLocator(1.0))
+    ax.yaxis.set_major_locator(ticker.FixedLocator([0.05, 0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200]))
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda y, _: f"{y:g}"))
 
     ax.set_xlabel(r'Particle Diameter $d$ [$\mu\mathrm{m}$]', fontsize=12, fontweight='bold')
     ax.set_ylabel(r'Effective Timescale $\tau$ [s]', fontsize=12, fontweight='bold')
-    ax.set_title(r'Effective Persistence Time $\tau_{\mathrm{eff}}$ vs Particle Diameter', fontsize=12, fontweight='bold', pad=10)
+    ax.set_title(r'Effective Persistence Time $\tau_{\mathrm{eff}}$ vs Particle Diameter' + '\n' + rf'($\tau_0 = {t0_fit:.2f}\,\mathrm{{s}},\ R_0 = {R0_vel:.2f}\,\mu\mathrm{{m}},\ x \in [0, 25]\,\mu\mathrm{{m}}$)', fontsize=12, fontweight='bold', pad=10)
     ax.grid(True, which='both', linestyle='--', alpha=0.4)
     ax.legend(frameon=True, fontsize=8.5, loc='upper right', framealpha=0.92)
 

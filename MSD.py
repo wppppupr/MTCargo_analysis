@@ -296,19 +296,12 @@ def load_rtp_parameters(
                     tau_oacf_int = val_int
                 
         # tau_eff の決定: 1 / tau_eff = 1 / tau_OACF,int + 1 / tau_dwell
-        # ※ 0.63 um 粒子については tau_OACF = inf (1/tau_OACF = 0) とみなし tau_eff = tau_dwell とする
-        if np.isclose(d_um, 0.63, atol=0.05) or b_name == "beads06um":
-            tau_oacf_int = np.inf
-            if np.isfinite(tau_dwell) and tau_dwell > 0:
-                tau_eff = tau_dwell
-                D_active = 0.5 * f_run * (v_R ** 2) * tau_eff
-                model_type = "2-State RTP"
-            else:
-                tau_eff = np.nan
-                D_active = 0.0
-                model_type = "Pure Diffusion (4D0t)"
-        elif np.isfinite(tau_oacf_int) and tau_oacf_int > 0 and np.isfinite(tau_dwell) and tau_dwell > 0:
+        if np.isfinite(tau_oacf_int) and tau_oacf_int > 0 and np.isfinite(tau_dwell) and tau_dwell > 0:
             tau_eff = 1.0 / (1.0 / tau_oacf_int + 1.0 / tau_dwell)
+            D_active = 0.5 * f_run * (v_R ** 2) * tau_eff
+            model_type = "2-State RTP"
+        elif np.isfinite(tau_dwell) and tau_dwell > 0:
+            tau_eff = tau_dwell
             D_active = 0.5 * f_run * (v_R ** 2) * tau_eff
             model_type = "2-State RTP"
         else:
@@ -979,71 +972,91 @@ def main():
 
     # ---------------------------------------------------------
     # 図: 緩和時間 tau_OACF, tau_dwell, tau_eff vs 粒子径 D_C
+    # (5, 7, 20 um の点は除外し、0.63, 1.18, 3.37 um のみプロット)
     # ---------------------------------------------------------
     fig_tau, ax_tau = plt.subplots(figsize=(8.0, 5.8))
     tau_dwell_vals = df_rtp_summary["tau_Run_dwell_s"].to_numpy()
     tau_oacf_vals = df_rtp_summary["tau_OACF_int_s"].to_numpy()
     tau_eff_vals = df_rtp_summary["tau_eff_s"].to_numpy()
 
-    # 1. tau_OACF (Orientation 自己相関時間 / 積分時間)
-    finite_oacf_idx = np.isfinite(tau_oacf_vals) & (tau_oacf_vals > 0)
+    # 5, 7, 20 um を除外するマスク (Dc <= 3.5 um)
+    mask_3beads = d_vals <= 3.5
+    d_sub = d_vals[mask_3beads]
+    tau_dwell_sub = tau_dwell_vals[mask_3beads]
+    tau_oacf_sub = tau_oacf_vals[mask_3beads]
+    tau_eff_sub = tau_eff_vals[mask_3beads]
+
+    # 理論曲線: tau_OACF(Dc) = tau_0 * exp(-2 * Dc / (3 * R_0))
+    # R0 = 2.7774 um (3R0 = 8.3321 um, plot_run_velocity.py フィッティングより固定)
+    R0_vel = 2.7774
+    d_dense_tau = np.linspace(0.0, 25.0, 300)
+    
+    # 3点の実測値から ln(y) 空間で tau_0 をフィッティング
+    valid_oacf_sub = np.isfinite(tau_oacf_sub) & (tau_oacf_sub > 0)
+    if np.any(valid_oacf_sub):
+        ln_tau_0_vals = np.log(tau_oacf_sub[valid_oacf_sub]) + (2.0 / (3.0 * R0_vel)) * d_sub[valid_oacf_sub]
+        ln_t0_fit = float(np.mean(ln_tau_0_vals))
+        t0_fit = float(np.exp(ln_t0_fit))
+    else:
+        t0_fit = 14.00
+
+    tau_theo_curve = t0_fit * np.exp(-2.0 * d_dense_tau / (3.0 * R0_vel))
     ax_tau.plot(
-        d_vals[finite_oacf_idx], tau_oacf_vals[finite_oacf_idx],
-        marker='o', color='#2b83ba', linewidth=2.0, linestyle=':', markersize=8.0,
-        label=r'$\tau_{\mathrm{OACF}}$ (Orientation correlation time)', zorder=4
+        d_dense_tau, tau_theo_curve,
+        color='#1f78b4', linestyle='-', linewidth=2.2,
+        label=rf'Theory: $\tau_{{\mathrm{{OACF}}}}(D_C) = \tau_0 \exp\left(-\frac{{2 D_C}}{{3 R_0}}\right)$' + '\n' + rf'  ($\tau_0 = {t0_fit:.2f}\,\mathrm{{s}},\ R_0 = {R0_vel:.2f}\,\mu\mathrm{{m}}$)',
+        zorder=3
     )
+
+    # 1. tau_OACF (Orientation 自己相関時間 / 積分時間)
+    if np.any(valid_oacf_sub):
+        ax_tau.plot(
+            d_sub[valid_oacf_sub], tau_oacf_sub[valid_oacf_sub],
+            marker='o', color='#2b83ba', linewidth=1.8, linestyle=':', markersize=8.5,
+            label=r'$\tau_{\mathrm{OACF}}$ (Measured Orientation time)', zorder=4
+        )
 
     # 2. tau_dwell (Run 状態滞在時間 / 走行持続時間)
     ax_tau.plot(
-        d_vals, tau_dwell_vals,
-        marker='^', color='#4dac26', linewidth=2.0, linestyle='--', markersize=8.0,
+        d_sub, tau_dwell_sub,
+        marker='^', color='#4dac26', linewidth=1.8, linestyle='--', markersize=8.5,
         label=r'$\tau_{\mathrm{dwell}}$ (Run dwell time: $\tau_{\mathrm{run}}$)', zorder=5
     )
 
     # 3. tau_eff (有効緩和時間 1/tau_eff = 1/tau_OACF + 1/tau_dwell)
     ax_tau.plot(
-        d_vals, tau_eff_vals,
+        d_sub, tau_eff_sub,
         marker='s', color='#d7191c', linewidth=2.5, linestyle='-', markersize=9.0,
         label=r'$\tau_{\mathrm{eff}} = \left(\tau_{\mathrm{OACF}}^{-1} + \tau_{\mathrm{dwell}}^{-1}\right)^{-1}$', zorder=6
     )
 
-    # 0.63 um で tau_OACF = inf であることのアノテーション
-    for i_d, (d_val, t_eff, t_dwell, t_oacf) in enumerate(zip(d_vals, tau_eff_vals, tau_dwell_vals, tau_oacf_vals)):
-        if not np.isfinite(t_oacf):
-            ax_tau.annotate(
-                r'$\tau_{\mathrm{OACF}} = \infty$' + '\n' + r'($\tau_{\mathrm{eff}} = \tau_{\mathrm{dwell}}$)',
-                xy=(d_val, t_eff),
-                xytext=(d_val * 1.15, t_eff * 1.35),
-                arrowprops=dict(arrowstyle="->", color='#2b83ba', lw=1.2),
-                fontsize=8.5, fontweight='bold', color='#2b83ba',
-                bbox=dict(boxstyle='round,pad=0.2', facecolor='white', edgecolor='#2b83ba', alpha=0.9)
-            )
-        # tau_eff の数値注釈
+    # tau_eff の数値注釈
+    for i_d, (d_val, t_eff) in enumerate(zip(d_sub, tau_eff_sub)):
         ax_tau.annotate(
             f"{t_eff:.2f}s",
             (d_val, t_eff),
             textcoords="offset points",
-            xytext=(0, -16 if i_d == 0 else 8),
+            xytext=(0, 10),
             ha='center',
-            fontsize=8.5,
+            fontsize=9.0,
             fontweight='bold',
             color='#d7191c',
-            bbox=dict(boxstyle='round,pad=0.15', facecolor='white', edgecolor='#d7191c', alpha=0.85)
+            bbox=dict(boxstyle='round,pad=0.2', facecolor='white', edgecolor='#d7191c', alpha=0.9)
         )
 
-    ax_tau.set_xscale('log')
     ax_tau.set_yscale('log')
-    ax_tau.xaxis.set_major_formatter(ticker.ScalarFormatter())
-    ax_tau.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
-    ax_tau.set_xticklabels(['0.63', '1.18', '3.37', '5.0', '7.24', '20'])
-    ax_tau.set_xlim(0.45, 28.0)
-    ax_tau.set_ylim(0.5, 200.0)
+    ax_tau.set_xlim(0, 25.0)
+    ax_tau.set_ylim(0.02, 250.0)
+    ax_tau.xaxis.set_major_locator(ticker.MultipleLocator(5.0))
+    ax_tau.xaxis.set_minor_locator(ticker.MultipleLocator(1.0))
+    ax_tau.yaxis.set_major_locator(ticker.FixedLocator([0.05, 0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200]))
+    ax_tau.yaxis.set_major_formatter(ticker.FuncFormatter(lambda y, _: f"{y:g}"))
 
     ax_tau.set_xlabel(r'Particle Diameter $D_C$ [$\mu\mathrm{m}$]', fontsize=12, fontweight='bold')
     ax_tau.set_ylabel(r'Timescale $\tau$ [s]', fontsize=12, fontweight='bold')
-    ax_tau.set_title(r'Relaxation Times $\tau_{\mathrm{OACF}}, \tau_{\mathrm{dwell}}, \tau_{\mathrm{eff}}$ vs Particle Diameter', fontsize=12, fontweight='bold', pad=10)
+    ax_tau.set_title(r'Relaxation Times $\tau_{\mathrm{OACF}}, \tau_{\mathrm{dwell}}, \tau_{\mathrm{eff}}$ vs Particle Diameter' + '\n' + rf'($\tau_0 = {t0_fit:.2f}\,\mathrm{{s}},\ R_0 = {R0_vel:.2f}\,\mu\mathrm{{m}},\ x \in [0, 25]\,\mu\mathrm{{m}}$)', fontsize=12, fontweight='bold', pad=10)
     ax_tau.grid(True, which='both', linestyle='--', alpha=0.4)
-    ax_tau.legend(frameon=True, fontsize=9.5, loc='upper right', framealpha=0.92)
+    ax_tau.legend(frameon=True, fontsize=9.0, loc='upper right', framealpha=0.92)
 
     save_figure_to_all(fig_tau, "relaxation_times_vs_diameter", out_dirs)
     save_figure_to_all(fig_tau, "tau_eff_vs_diameter", out_dirs)

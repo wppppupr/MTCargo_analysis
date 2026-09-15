@@ -58,7 +58,10 @@ def extract_hmm_features(
     if not required_cols.issubset(df_tracks.columns):
         raise ValueError(f"DataFrame must contain columns: {required_cols}")
 
-    df_sorted = df_tracks[['particle', 'frame', 'x', 'y']].sort_values(by=['particle', 'frame']).copy()
+    cols = ['particle', 'frame', 'x', 'y']
+    if 'exp_dir' in df_tracks.columns:
+        cols.append('exp_dir')
+    df_sorted = df_tracks[cols].sort_values(by=['particle', 'frame']).copy()
 
     obs_records = []
     lengths = []
