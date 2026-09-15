@@ -1048,9 +1048,9 @@ def plot_spatial_heterogeneity_summary(
     scale: float = 0.11,
     condition_name: str = "",
     save_path: Optional[Union[str, Path]] = None,
-    track_color: str = 'white',
-    track_alpha: float = 0.55,
-    track_lw: float = 0.8,
+    track_color: str = '#FF007F',
+    track_alpha: float = 0.75,
+    track_lw: float = 0.9,
 ) -> plt.Figure:
     """
     1つの実験または条件に対して、局所相関長マップと相関長分布・空間NGPをまとめた
@@ -1089,7 +1089,7 @@ def plot_spatial_heterogeneity_summary(
             ax_a.set_xlabel(r'$x\ [\mu\mathrm{m}]$', fontsize=12)
             ax_a.set_ylabel(r'$y\ [\mu\mathrm{m}]$', fontsize=12)
 
-            # 軌跡データのオーバーレイ描画
+            # 軌跡データのオーバーレイ描画 (Viridis と高コントラストなマゼンタ + 視認性を高める微細アウトライン)
             if tracks_data is not None:
                 if isinstance(tracks_data, (str, Path)):
                     t_path = Path(tracks_data)
@@ -1115,11 +1115,15 @@ def plot_spatial_heterogeneity_summary(
                                 ty = group['y'].values * scale
                                 lines.append(np.column_stack([tx, ty]))
                         if lines:
-                            lc = LineCollection(lines, colors=track_color, alpha=track_alpha, linewidths=track_lw, zorder=3)
-                            ax_a.add_collection(lc)
+                            # 視認性向上のための薄い黒縁取り (アウトライン)
+                            lc_outline = LineCollection(lines, colors='black', alpha=0.35, linewidths=track_lw + 0.8, zorder=3)
+                            ax_a.add_collection(lc_outline)
+                            # 前面の鮮やかな軌跡線
+                            lc_fg = LineCollection(lines, colors=track_color, alpha=track_alpha, linewidths=track_lw, zorder=4)
+                            ax_a.add_collection(lc_fg)
                             has_tracks = True
                     else:
-                        ax_a.plot(df_t['x'] * scale, df_t['y'] * scale, '.', color=track_color, alpha=track_alpha, ms=1.0, zorder=3)
+                        ax_a.plot(df_t['x'] * scale, df_t['y'] * scale, '.', color=track_color, alpha=track_alpha, ms=1.5, zorder=4)
                         has_tracks = True
 
             ax_a.set_xlim(extent[0], extent[1])
@@ -1128,8 +1132,8 @@ def plot_spatial_heterogeneity_summary(
             title_a = r'(a) Local Correlation Length Map $\xi(\mathbf{x})$'
             if has_tracks:
                 title_a += ' & Cargo Trajectories'
-                legend_line = mlines.Line2D([], [], color=track_color, alpha=track_alpha, lw=track_lw * 1.5, label='Cargo Trajectories')
-                ax_a.legend(handles=[legend_line], loc='upper right', fontsize=9, framealpha=0.6, facecolor='#333333', edgecolor='white', labelcolor='white')
+                legend_line = mlines.Line2D([], [], color=track_color, alpha=0.9, lw=track_lw * 2.0, label='Cargo Trajectories')
+                ax_a.legend(handles=[legend_line], loc='upper right', fontsize=9, framealpha=0.85, facecolor='white', edgecolor='#cccccc', labelcolor='#222222')
 
             ax_a.set_title(title_a, fontsize=13, fontweight='bold')
         else:
