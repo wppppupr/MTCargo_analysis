@@ -20,12 +20,49 @@ from scipy import stats
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+import scipy.fft
+
+# PyTorch / CUDA サポートの確認
+HAS_TORCH = False
+TORCH_CUDA = False
+try:
+    import torch
+    HAS_TORCH = True
+    TORCH_CUDA = torch.cuda.is_available()
+except Exception:
+    pass
+
+# Numba サポートの確認
+HAS_NUMBA = False
+try:
+    import numba
+    from numba import njit, prange
+    HAS_NUMBA = True
+except Exception:
+    pass
 
 # プロジェクト内の FFT 畳み込みモジュールをインポート
 try:
     from libs.fft_convolution import FFTConvolver, create_spatial_kernel
 except ImportError:
     from fft_convolution import FFTConvolver, create_spatial_kernel
+
+
+def _get_device(device_str: Optional[str] = None) -> Tuple[str, Optional[object]]:
+    """実行デバイス ('cuda' or 'cpu') と torch.device を判定して返す。"""
+    if device_str is not None:
+        if device_str == 'cuda' and HAS_TORCH and TORCH_CUDA:
+            return 'cuda', torch.device('cuda')
+        return 'cpu', torch.device('cpu') if HAS_TORCH else None
+
+    if HAS_TORCH and TORCH_CUDA:
+        try:
+            free_mem = torch.cuda.mem_get_info()[0] / (1024 ** 2)
+            if free_mem > 150:
+                return 'cuda', torch.device('cuda')
+        except Exception:
+            pass
+    return 'cpu', torch.device('cpu') if HAS_TORCH else None
 
 
 def exp_decay_model(r: np.ndarray, xi: float, a: float = 1.0) -> np.ndarray:
@@ -39,7 +76,7 @@ def exp_decay_offset_model(r: np.ndarray, xi: float, a: float = 1.0, c0: float =
 
 
 # ==============================================================================
-# 1. 4点配向相関関数 G_4(r) / chi_orient(r)
+# 1. 4点配向相関関数 G_4(r) / chi_orient(r) (GPU & バッチ最適化)
 # ==============================================================================
 
 def calc_4point_correlation_fft(
@@ -54,45 +91,15 @@ def calc_4point_correlation_fft(
     """
     2次元単位ベクトル場 (ux, uy) に対して、テンソル展開と2D FFT畳み込みを用いて
     2点配向相関 C(r) および4点配向相関 chi_orient(r) = <(u(x)·u(x+r))^2> - C(r)^2 を
-    全空間で厳密かつ高速に計算する。
+    全空間で厳密かつ超高速（GPU/バッチFFT対応）に計算する。
 
     展開理論:
       (u(x) · u(x+r))^2 = (ux(x)ux(x+r) + uy(x)uy(x+r))^2
                        = ux^2(x)ux^2(x+r) + uy^2(x)uy^2(x+r) + 2(ux*uy)(x)(ux*uy)(x+r)
       これはスカラー場 f1=ux^2, f2=uy^2, f3=sqrt(2)*ux*uy の自己相関の和に一致。
-
-    Parameters
-    ----------
-    ux, uy : np.ndarray
-        2次元の単位方向ベクトル配列 (H, W)
-    distances_px : List[int]
-        計算する空間距離 r (ピクセル) のリスト
-    kernel_type : str, default 'ring'
-        'ring' (円環シェル), 'disk', または 'gaussian'
-    shell_width : float, default 2.0
-        シェル幅 (ピクセル)
-    valid_mask : np.ndarray, optional
-        有効領域マスク (H, W) (1: 有効, 0: 無効)
-    device : str, optional
-        'cuda', 'scipy', または None (auto)
-
-    Returns
-    -------
-    result : dict
-        - 'distances_px': 距離配列 (px)
-        - 'C_r': 通常の2点配向相関 C(r)
-        - 'C2_r': 内積2乗の空間平均 <(u(x)·u(x+r))^2>
-        - 'chi_orient': 4点配向相関 (局所相関の空間分散) chi_orient(r) = C2_r - C_r^2
-        - 'chi_orient_local_var': 局所シェル平均 c(x, r) の空間分散 Var_x[c(x, r)]
     """
     H, W = ux.shape
-    convolver = FFTConvolver(
-        shape=(H, W),
-        sizes=distances_px,
-        kernel_type=kernel_type,
-        shell_width=shell_width,
-        device=device,
-    )
+    num_d = len(distances_px)
 
     # 有効マスク
     if valid_mask is None:
@@ -101,46 +108,126 @@ def calc_4point_correlation_fft(
     else:
         mask = valid_mask.astype(np.float32)
 
-    # 単位ベクトル化の保証
+    total_valid = np.sum(mask)
+    if total_valid < 10:
+        return {
+            'distances_px': np.array(distances_px, dtype=np.float32),
+            'C_r': np.full(num_d, np.nan, dtype=np.float32),
+            'C2_r': np.full(num_d, np.nan, dtype=np.float32),
+            'chi_orient': np.full(num_d, np.nan, dtype=np.float32),
+            'chi_orient_local_var': np.full(num_d, np.nan, dtype=np.float32),
+        }
+
+    # 単位ベクトル化
     v_mag = np.hypot(ux, uy)
     with np.errstate(divide='ignore', invalid='ignore'):
         u_x = np.where(v_mag > 1e-6, ux / v_mag, 0.0).astype(np.float32) * mask
         u_y = np.where(v_mag > 1e-6, uy / v_mag, 0.0).astype(np.float32) * mask
 
-    # テンソル成分 (f1 = ux^2, f2 = uy^2, f3 = sqrt(2)*ux*uy)
     f1 = (u_x ** 2) * mask
     f2 = (u_y ** 2) * mask
     f3 = (np.sqrt(2.0, dtype=np.float32) * u_x * u_y) * mask
 
-    num_d = len(distances_px)
+    dev_type, t_device = _get_device(device)
+
+    # FFTConvolver で事前計算カーネルを取得
+    convolver = FFTConvolver(
+        shape=(H, W),
+        sizes=distances_px,
+        kernel_type=kernel_type,
+        shell_width=shell_width,
+        device=dev_type,
+    )
+
+    # -------------------------------------------------------------
+    # GPU (PyTorch CUDA) による超高速バッチ実行
+    # -------------------------------------------------------------
+    if dev_type == 'cuda' and HAS_TORCH:
+        try:
+            with torch.no_grad():
+                # 6つのスカラー場を 1つのテンソル (6, H, W) として GPU に転送
+                # fields: [u_x, u_y, mask, f1, f2, f3]
+                fields_np = np.stack([u_x, u_y, mask, f1, f2, f3], axis=0)
+                t_fields = torch.from_numpy(fields_np).to(t_device, non_blocking=True)
+
+                # 一括 2D 実フーリエ変換 (6, H, W_rfft)
+                fft_fields = torch.fft.rfft2(t_fields)
+
+                c_r_list = np.zeros(num_d, dtype=np.float32)
+                c2_r_list = np.zeros(num_d, dtype=np.float32)
+                local_c_var_list = np.zeros(num_d, dtype=np.float32)
+
+                d_mask = t_fields[2]
+                d_ux = t_fields[0]
+                d_uy = t_fields[1]
+                d_f1 = t_fields[3]
+                d_f2 = t_fields[4]
+                d_f3 = t_fields[5]
+
+                for idx, k_fft_cpu in enumerate(convolver.kernel_ffts_torch):
+                    k_fft = k_fft_cpu.to(t_device, non_blocking=True)
+                    # バッチ乗算 & 逆フーリエ変換 (6, H, W)
+                    conv_all = torch.fft.irfft2(fft_fields * k_fft, s=(H, W))
+
+                    conv_ux = conv_all[0]
+                    conv_uy = conv_all[1]
+                    v_mask = conv_all[2]
+                    conv_f1 = conv_all[3]
+                    conv_f2 = conv_all[4]
+                    conv_f3 = conv_all[5]
+
+                    valid_pixels = (d_mask > 0.5) & (v_mask > 1e-4)
+                    if not torch.any(valid_pixels):
+                        c_r_list[idx] = np.nan
+                        c2_r_list[idx] = np.nan
+                        local_c_var_list[idx] = np.nan
+                        continue
+
+                    denom = torch.where(v_mask > 1e-4, v_mask, torch.tensor(1.0, device=t_device))
+
+                    # 局所相関 c(x, r)
+                    local_c = (d_ux * conv_ux + d_uy * conv_uy) / denom
+                    local_c_valid = local_c[valid_pixels]
+
+                    c_r_list[idx] = float(torch.mean(local_c_valid).cpu().numpy())
+                    local_c_var_list[idx] = float(torch.var(local_c_valid).cpu().numpy())
+
+                    # 4点ペア相関 <(u(x)·u(x+r))^2>
+                    local_c2_pair = (d_f1 * conv_f1 + d_f2 * conv_f2 + d_f3 * conv_f3) / denom
+                    c2_r_list[idx] = float(torch.mean(local_c2_pair[valid_pixels]).cpu().numpy())
+
+                chi_orient = c2_r_list - (c_r_list ** 2)
+
+                return {
+                    'distances_px': np.array(distances_px, dtype=np.float32),
+                    'C_r': c_r_list,
+                    'C2_r': c2_r_list,
+                    'chi_orient': chi_orient,
+                    'chi_orient_local_var': local_c_var_list,
+                }
+        except torch.OutOfMemoryError:
+            torch.cuda.empty_cache()
+
+    # -------------------------------------------------------------
+    # CPU (マルチスレッド SciPy) によるフォールバック
+    # -------------------------------------------------------------
+    fields_np = np.stack([u_x, u_y, mask, f1, f2, f3], axis=0)
+    fft_fields = scipy.fft.rfft2(fields_np, axes=(-2, -1), workers=4)
+
     c_r_list = np.zeros(num_d, dtype=np.float32)
     c2_r_list = np.zeros(num_d, dtype=np.float32)
     local_c_var_list = np.zeros(num_d, dtype=np.float32)
 
-    import scipy.fft
-
-    fft_mask = scipy.fft.rfft2(mask, workers=4)
-    fft_ux = scipy.fft.rfft2(u_x, workers=4)
-    fft_uy = scipy.fft.rfft2(u_y, workers=4)
-    fft_f1 = scipy.fft.rfft2(f1, workers=4)
-    fft_f2 = scipy.fft.rfft2(f2, workers=4)
-    fft_f3 = scipy.fft.rfft2(f3, workers=4)
-
-    total_valid = np.sum(mask)
-    if total_valid < 10:
-        return {
-            'distances_px': np.array(distances_px),
-            'C_r': np.full(num_d, np.nan),
-            'C2_r': np.full(num_d, np.nan),
-            'chi_orient': np.full(num_d, np.nan),
-            'chi_orient_local_var': np.full(num_d, np.nan),
-        }
-
     for idx, k_fft in enumerate(convolver.kernel_ffts_np):
-        # 1. 重み正規化用マスクの畳み込み
-        v_mask = scipy.fft.irfft2(fft_mask * k_fft, s=(H, W), workers=4)
-        valid_pixels = (mask > 0.5) & (v_mask > 1e-4)
+        conv_all = scipy.fft.irfft2(fft_fields * k_fft, s=(H, W), axes=(-2, -1), workers=4)
+        conv_ux = conv_all[0]
+        conv_uy = conv_all[1]
+        v_mask = conv_all[2]
+        conv_f1 = conv_all[3]
+        conv_f2 = conv_all[4]
+        conv_f3 = conv_all[5]
 
+        valid_pixels = (mask > 0.5) & (v_mask > 1e-4)
         if not np.any(valid_pixels):
             c_r_list[idx] = np.nan
             c2_r_list[idx] = np.nan
@@ -148,27 +235,14 @@ def calc_4point_correlation_fft(
             continue
 
         denom = np.where(v_mask > 1e-4, v_mask, 1.0)
-
-        # 2. 2点相関 C(r) = <ux * conv(ux) + uy * conv(uy)> / denom
-        conv_ux = scipy.fft.irfft2(fft_ux * k_fft, s=(H, W), workers=4)
-        conv_uy = scipy.fft.irfft2(fft_uy * k_fft, s=(H, W), workers=4)
-
-        # 局所相関 c(x, r) = u(x) · (K_r * u)(x)
         local_c = (u_x * conv_ux + u_y * conv_uy) / denom
         local_c_valid = local_c[valid_pixels]
 
-        c_mean = float(np.mean(local_c_valid))
-        c_r_list[idx] = c_mean
+        c_r_list[idx] = float(np.mean(local_c_valid))
         local_c_var_list[idx] = float(np.var(local_c_valid))
 
-        # 3. 4点相関 厳密ペア平均 < (u(x)·u(x+r))^2 >
-        conv_f1 = scipy.fft.irfft2(fft_f1 * k_fft, s=(H, W), workers=4)
-        conv_f2 = scipy.fft.irfft2(fft_f2 * k_fft, s=(H, W), workers=4)
-        conv_f3 = scipy.fft.irfft2(fft_f3 * k_fft, s=(H, W), workers=4)
-
         local_c2_pair = (f1 * conv_f1 + f2 * conv_f2 + f3 * conv_f3) / denom
-        c2_mean = float(np.mean(local_c2_pair[valid_pixels]))
-        c2_r_list[idx] = c2_mean
+        c2_r_list[idx] = float(np.mean(local_c2_pair[valid_pixels]))
 
     chi_orient = c2_r_list - (c_r_list ** 2)
 
@@ -185,6 +259,145 @@ def calc_4point_correlation_fft(
 # 2. 内積確率密度関数 P(c; r) の非ガウス性パラメータ (NGP)
 # ==============================================================================
 
+if HAS_NUMBA:
+    @njit(parallel=True, fastmath=True)
+    def _sample_dot_products_numba(
+        ux: np.ndarray,
+        uy: np.ndarray,
+        valid_y: np.ndarray,
+        valid_x: np.ndarray,
+        valid_mask: np.ndarray,
+        distances: np.ndarray,
+        n_samples: int,
+        half_w: float,
+        seed: int = 42,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Numba 並列サンプリングカーネル"""
+        np.random.seed(seed)
+        num_d = len(distances)
+        n_valid = len(valid_y)
+        H, W = ux.shape
+
+        out_c = np.empty((num_d, n_samples), dtype=np.float32)
+        out_counts = np.zeros(num_d, dtype=np.int32)
+
+        for d_idx in prange(num_d):
+            r = distances[d_idx]
+            r_min = max(0.5, r - half_w)
+            r_max = r + half_w
+            count = 0
+
+            # 余裕を持ったループ回数
+            max_trials = n_samples * 3
+            for _ in range(max_trials):
+                if count >= n_samples:
+                    break
+                idx = np.random.randint(0, n_valid)
+                y0 = valid_y[idx]
+                x0 = valid_x[idx]
+
+                phi = np.random.uniform(0.0, 2.0 * np.pi)
+                r_act = np.random.uniform(r_min, r_max)
+
+                y1 = int(np.round(y0 + r_act * np.sin(phi)))
+                x1 = int(np.round(x0 + r_act * np.cos(phi)))
+
+                if y1 >= 0 and y1 < H and x1 >= 0 and x1 < W:
+                    if valid_mask[y1, x1]:
+                        u0_x = ux[y0, x0]
+                        u0_y = uy[y0, x0]
+                        u1_x = ux[y1, x1]
+                        u1_y = uy[y1, x1]
+
+                        mag0 = np.hypot(u0_x, u0_y)
+                        mag1 = np.hypot(u1_x, u1_y)
+
+                        if mag0 > 1e-4 and mag1 > 1e-4:
+                            dot = (u0_x * u1_x + u0_y * u1_y) / (mag0 * mag1)
+                            if dot > 1.0:
+                                dot = 1.0
+                            elif dot < -1.0:
+                                dot = -1.0
+                            out_c[d_idx, count] = np.float32(dot)
+                            count += 1
+
+            out_counts[d_idx] = count
+
+        return out_c, out_counts
+
+
+def _sample_dot_products_torch(
+    ux: np.ndarray,
+    uy: np.ndarray,
+    valid_mask: np.ndarray,
+    distances_px: List[int],
+    n_samples_per_dist: int,
+    half_w: float,
+    t_device: "torch.device",
+) -> Dict[int, np.ndarray]:
+    """PyTorch GPU による超高速ベクトル化サンプリング"""
+    H, W = ux.shape
+    d_ux = torch.from_numpy(ux).to(t_device)
+    d_uy = torch.from_numpy(uy).to(t_device)
+    d_mask = torch.from_numpy(valid_mask).to(t_device)
+
+    valid_y, valid_x = torch.where(d_mask)
+    n_valid = len(valid_y)
+    if n_valid < 10:
+        return {r: np.empty(0, dtype=np.float32) for r in distances_px}
+
+    samples_by_dist = {}
+    n_fetch = int(n_samples_per_dist * 1.8)
+
+    for r in distances_px:
+        # ランダムインデックス生成
+        sample_indices = torch.randint(0, n_valid, (n_fetch,), device=t_device)
+        y0 = valid_y[sample_indices]
+        x0 = valid_x[sample_indices]
+
+        phi = torch.rand(n_fetch, device=t_device) * (2.0 * np.pi)
+        r_min = max(0.5, r - half_w)
+        r_max = r + half_w
+        r_act = torch.rand(n_fetch, device=t_device) * (r_max - r_min) + r_min
+
+        y1 = torch.round(y0.float() + r_act * torch.sin(phi)).long()
+        x1 = torch.round(x0.float() + r_act * torch.cos(phi)).long()
+
+        in_bounds = (y1 >= 0) & (y1 < H) & (x1 >= 0) & (x1 < W)
+        if not torch.any(in_bounds):
+            samples_by_dist[r] = np.empty(0, dtype=np.float32)
+            continue
+
+        y0_b, x0_b = y0[in_bounds], x0[in_bounds]
+        y1_b, x1_b = y1[in_bounds], x1[in_bounds]
+
+        valid_pair = d_mask[y0_b, x0_b] & d_mask[y1_b, x1_b]
+        if not torch.any(valid_pair):
+            samples_by_dist[r] = np.empty(0, dtype=np.float32)
+            continue
+
+        y0_v, x0_v = y0_b[valid_pair], x0_b[valid_pair]
+        y1_v, x1_v = y1_b[valid_pair], x1_b[valid_pair]
+
+        u0_x, u0_y = d_ux[y0_v, x0_v], d_uy[y0_v, x0_v]
+        u1_x, u1_y = d_ux[y1_v, x1_v], d_uy[y1_v, x1_v]
+
+        mag0 = torch.hypot(u0_x, u0_y)
+        mag1 = torch.hypot(u1_x, u1_y)
+        valid_norm = (mag0 > 1e-4) & (mag1 > 1e-4)
+
+        if not torch.any(valid_norm):
+            samples_by_dist[r] = np.empty(0, dtype=np.float32)
+            continue
+
+        c_vals = (u0_x[valid_norm] * u1_x[valid_norm] + u0_y[valid_norm] * u1_y[valid_norm]) / (mag0[valid_norm] * mag1[valid_norm])
+        c_vals = torch.clamp(c_vals, -1.0, 1.0)
+        c_res = c_vals[:n_samples_per_dist].cpu().numpy().astype(np.float32)
+        samples_by_dist[r] = c_res
+
+    return samples_by_dist
+
+
 def sample_field_dot_products(
     ux: np.ndarray,
     uy: np.ndarray,
@@ -193,82 +406,91 @@ def sample_field_dot_products(
     shell_width: float = 2.0,
     valid_mask: Optional[np.ndarray] = None,
     rng: Optional[np.random.Generator] = None,
+    device: Optional[str] = None,
 ) -> Dict[int, np.ndarray]:
     """
-    2次元ベクトル場から各距離 r におけるペア内積 c = u(x) · u(x+r) を均等にサンプリングする。
-
-    Parameters
-    ----------
-    ux, uy : np.ndarray
-        2次元の単位方向ベクトル配列 (H, W)
-    distances_px : List[int]
-        サンプリングする距離 (ピクセル)
-    n_samples_per_dist : int, default 20000
-        各距離におけるサンプリングペア数
-    shell_width : float, default 2.0
-        距離許容幅
-    valid_mask : np.ndarray, optional
-        有効マスク (H, W)
-
-    Returns
-    -------
-    samples_by_dist : Dict[int, np.ndarray]
-        各距離 r に対する内積値 c in [-1, 1] の配列
+    2次元ベクトル場から各距離 r におけるペア内積 c = u(x) · u(x+r) を均等かつ超高速（GPU/Numba対応）にサンプリングする。
     """
-    if rng is None:
-        rng = np.random.default_rng()
-
     H, W = ux.shape
     if valid_mask is None:
         mag = np.hypot(ux, uy)
-        valid_mask = mag > 1e-4
+        valid_mask = (mag > 1e-4)
+
+    half_w = float(shell_width) / 2.0
+    dev_type, t_device = _get_device(device)
+
+    # 1. GPU (PyTorch CUDA) が使える場合
+    if dev_type == 'cuda' and HAS_TORCH:
+        try:
+            with torch.no_grad():
+                return _sample_dot_products_torch(
+                    ux, uy, valid_mask.astype(bool), distances_px, n_samples_per_dist, half_w, t_device
+                )
+        except torch.OutOfMemoryError:
+            torch.cuda.empty_cache()
+
+    # 2. CPU Numba 並列サンプリング
+    if rng is None:
+        rng = np.random.default_rng()
 
     valid_y, valid_x = np.where(valid_mask)
     n_valid = len(valid_y)
     if n_valid < 10:
         return {r: np.empty(0, dtype=np.float32) for r in distances_px}
 
-    samples_by_dist = {}
-    half_w = shell_width / 2.0
+    dist_arr = np.array(distances_px, dtype=np.float32)
 
+    if HAS_NUMBA:
+        seed = int(rng.integers(0, 1000000))
+        out_c, out_counts = _sample_dot_products_numba(
+            ux.astype(np.float32),
+            uy.astype(np.float32),
+            valid_y.astype(np.int32),
+            valid_x.astype(np.int32),
+            valid_mask.astype(bool),
+            dist_arr,
+            n_samples_per_dist,
+            half_w,
+            seed,
+        )
+        samples_by_dist = {}
+        for idx, r in enumerate(distances_px):
+            c_len = out_counts[idx]
+            samples_by_dist[r] = out_c[idx, :c_len].copy()
+        return samples_by_dist
+
+    # 3. Vectorized NumPy fallback
+    samples_by_dist = {}
     for r in distances_px:
-        # ランダムな方位角 phi を生成
-        sample_indices = rng.integers(0, n_valid, size=n_samples_per_dist)
+        n_fetch = int(n_samples_per_dist * 1.5)
+        sample_indices = rng.integers(0, n_valid, size=n_fetch)
         y0 = valid_y[sample_indices]
         x0 = valid_x[sample_indices]
 
-        phi = rng.uniform(0, 2 * np.pi, size=n_samples_per_dist)
-        r_actual = rng.uniform(max(0.5, r - half_w), r + half_w, size=n_samples_per_dist)
+        phi = rng.uniform(0, 2 * np.pi, size=n_fetch)
+        r_actual = rng.uniform(max(0.5, r - half_w), r + half_w, size=n_fetch)
 
         y1 = np.round(y0 + r_actual * np.sin(phi)).astype(int)
         x1 = np.round(x0 + r_actual * np.cos(phi)).astype(int)
 
-        # 境界内判定
         in_bounds = (y1 >= 0) & (y1 < H) & (x1 >= 0) & (x1 < W)
         if not np.any(in_bounds):
             samples_by_dist[r] = np.empty(0, dtype=np.float32)
             continue
 
-        y0_b = y0[in_bounds]
-        x0_b = x0[in_bounds]
-        y1_b = y1[in_bounds]
-        x1_b = x1[in_bounds]
+        y0_b, x0_b = y0[in_bounds], x0[in_bounds]
+        y1_b, x1_b = y1[in_bounds], x1[in_bounds]
 
-        # 両点が有効領域か判定
         valid_pair = valid_mask[y0_b, x0_b] & valid_mask[y1_b, x1_b]
         if not np.any(valid_pair):
             samples_by_dist[r] = np.empty(0, dtype=np.float32)
             continue
 
-        y0_v = y0_b[valid_pair]
-        x0_v = x0_b[valid_pair]
-        y1_v = y1_b[valid_pair]
-        x1_v = x1_b[valid_pair]
+        y0_v, x0_v = y0_b[valid_pair], x0_b[valid_pair]
+        y1_v, x1_v = y1_b[valid_pair], x1_b[valid_pair]
 
-        u0_x = ux[y0_v, x0_v]
-        u0_y = uy[y0_v, x0_v]
-        u1_x = ux[y1_v, x1_v]
-        u1_y = uy[y1_v, x1_v]
+        u0_x, u0_y = ux[y0_v, x0_v], uy[y0_v, x0_v]
+        u1_x, u1_y = ux[y1_v, x1_v], uy[y1_v, x1_v]
 
         mag0 = np.hypot(u0_x, u0_y)
         mag1 = np.hypot(u1_x, u1_y)
@@ -280,7 +502,7 @@ def sample_field_dot_products(
 
         c_vals = (u0_x[valid_norm] * u1_x[valid_norm] + u0_y[valid_norm] * u1_y[valid_norm]) / (mag0[valid_norm] * mag1[valid_norm])
         c_vals = np.clip(c_vals, -1.0, 1.0)
-        samples_by_dist[r] = c_vals.astype(np.float32)
+        samples_by_dist[r] = c_vals[:n_samples_per_dist].astype(np.float32)
 
     return samples_by_dist
 
@@ -354,8 +576,255 @@ def calc_dot_product_distribution_and_ngp(
 
 
 # ==============================================================================
-# 3. 局所相関長 xi(x) の空間分布の直接評価 & 空間NGP
+# 3. 局所相関長 xi(x) の空間分布の直接評価 & 空間NGP (GPU / バッチ並列)
 # ==============================================================================
+
+if HAS_NUMBA:
+    @njit(fastmath=True)
+    def _fit_single_curve_numba(x_v: np.ndarray, y_v: np.ndarray, scale: float) -> Tuple[float, float, float]:
+        """1本の相関減衰曲線に対する高速 Gauss-Newton 非線形フィッティング"""
+        n = len(x_v)
+        if n < 3 or y_v[0] <= 0.05:
+            return np.nan, np.nan, np.nan
+
+        # 初期値推定 (対数線形回帰)
+        sum_w = 0.0
+        sum_x = 0.0
+        sum_xx = 0.0
+        sum_y = 0.0
+        sum_xy = 0.0
+
+        for i in range(n):
+            yi = y_v[i]
+            if yi > 0.01:
+                xi = x_v[i]
+                ly = np.log(yi)
+                sum_w += 1.0
+                sum_x += xi
+                sum_xx += xi * xi
+                sum_y += ly
+                sum_xy += xi * ly
+
+        delta = sum_w * sum_xx - sum_x * sum_x
+        if delta > 1e-7 and sum_w >= 2.0:
+            b_init = -(sum_w * sum_xy - sum_x * sum_y) / delta
+            log_a = (sum_xx * sum_y - sum_x * sum_xy) / delta
+            a_est = np.exp(log_a)
+            if b_init > 1e-4:
+                xi_est = 1.0 / b_init
+            else:
+                xi_est = 10.0 * scale
+        else:
+            xi_est = 10.0 * scale
+            a_est = y_v[0]
+
+        a_est = min(max(a_est, 0.1), 1.5)
+        xi_est = min(max(xi_est, 0.05 * scale), 200.0 * scale)
+
+        # Gauss-Newton / LM 反復
+        lam = 1e-3
+        for _ in range(8):
+            b = 1.0 / max(xi_est, 1e-6)
+            h00, h11, h01, g0, g1 = 0.0, 0.0, 0.0, 0.0, 0.0
+
+            for i in range(n):
+                xi = x_v[i]
+                yi = y_v[i]
+                exp_term = np.exp(-b * xi)
+                y_hat = a_est * exp_term
+                res = y_hat - yi
+
+                ja = exp_term
+                jxi = a_est * xi * (1.0 / (xi_est * xi_est)) * exp_term
+
+                h00 += ja * ja
+                h11 += jxi * jxi
+                h01 += ja * jxi
+                g0 += ja * res
+                g1 += jxi * res
+
+            h00 += lam
+            h11 += lam
+            det = h00 * h11 - h01 * h01
+
+            if det > 1e-9:
+                da = -(h11 * g0 - h01 * g1) / det
+                dxi = -(h00 * g1 - h01 * g0) / det
+
+                a_est = min(max(a_est + da, 0.0), 1.5)
+                xi_est = min(max(xi_est + dxi, 0.05 * scale), 200.0 * scale)
+                if abs(da) < 1e-4 and abs(dxi) < 1e-4 * scale:
+                    break
+
+        # R^2 の算出
+        ss_res = 0.0
+        y_mean = 0.0
+        for i in range(n):
+            y_mean += y_v[i]
+        y_mean /= n
+
+        ss_tot = 0.0
+        b_final = 1.0 / max(xi_est, 1e-6)
+        for i in range(n):
+            y_hat = a_est * np.exp(-b_final * x_v[i])
+            ss_res += (y_v[i] - y_hat) ** 2
+            ss_tot += (y_v[i] - y_mean) ** 2
+
+        r2 = 1.0 - (ss_res / (ss_tot + 1e-9)) if ss_tot > 1e-9 else 0.0
+        return xi_est, a_est, r2
+
+    @njit(parallel=True, fastmath=True)
+    def _fit_grid_numba(
+        local_corr_grid: np.ndarray,
+        distances_um: np.ndarray,
+        fit_mask: np.ndarray,
+        scale: float,
+        min_r2: float,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Numba 並列グリッドフィッティング"""
+        num_d, nY, nX = local_corr_grid.shape
+        xi_map = np.full((nY, nX), np.nan, dtype=np.float32)
+        amp_map = np.full((nY, nX), np.nan, dtype=np.float32)
+        r2_map = np.full((nY, nX), np.nan, dtype=np.float32)
+
+        x_fit_all = distances_um[fit_mask]
+        num_fit = len(x_fit_all)
+
+        for iy in prange(nY):
+            for ix in range(nX):
+                # 有効点の抽出
+                n_valid = 0
+                for k in range(num_fit):
+                    val = local_corr_grid[fit_mask, iy, ix][k]
+                    if not np.isnan(val):
+                        n_valid += 1
+
+                if n_valid < 3:
+                    continue
+
+                x_v = np.empty(n_valid, dtype=np.float32)
+                y_v = np.empty(n_valid, dtype=np.float32)
+                idx = 0
+                for k in range(num_fit):
+                    val = local_corr_grid[fit_mask, iy, ix][k]
+                    if not np.isnan(val):
+                        x_v[idx] = x_fit_all[k]
+                        y_v[idx] = val
+                        idx += 1
+
+                xi_est, a_est, r2 = _fit_single_curve_numba(x_v, y_v, scale)
+                if not np.isnan(xi_est):
+                    if r2 >= min_r2 or (r2 < min_r2 and xi_est < 2.0 * scale):
+                        xi_map[iy, ix] = np.float32(xi_est)
+                        amp_map[iy, ix] = np.float32(a_est)
+                        r2_map[iy, ix] = np.float32(r2)
+
+        return xi_map, amp_map, r2_map
+
+
+def _fit_grid_torch(
+    corr_tensor: "torch.Tensor",
+    x_fit: "torch.Tensor",
+    scale: float,
+    min_r2: float,
+    device: "torch.device",
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    PyTorch CUDA による全グリッド（数万点）一括バッチ非線形最小二乗フィッティング。
+    """
+    # corr_tensor shape: (num_fit, N_pts)
+    num_fit, N_pts = corr_tensor.shape
+    x = x_fit.view(num_fit, 1)  # (num_fit, 1)
+
+    # 有効マスク
+    valid_mask = ~torch.isnan(corr_tensor) & (corr_tensor > -0.5)
+    valid_counts = valid_mask.sum(dim=0)  # (N_pts,)
+    first_pt_valid = torch.where(valid_mask[0], corr_tensor[0], torch.tensor(0.0, device=device)) > 0.05
+    fit_eligible = (valid_counts >= 3) & first_pt_valid
+
+    # 初期化
+    xi_out = torch.full((N_pts,), float('nan'), dtype=torch.float32, device=device)
+    amp_out = torch.full((N_pts,), float('nan'), dtype=torch.float32, device=device)
+    r2_out = torch.full((N_pts,), float('nan'), dtype=torch.float32, device=device)
+
+    if not torch.any(fit_eligible):
+        return xi_out.cpu().numpy(), amp_out.cpu().numpy(), r2_out.cpu().numpy()
+
+    # 対象点のみ抽出
+    sub_y = corr_tensor[:, fit_eligible]  # (num_fit, M)
+    sub_mask = valid_mask[:, fit_eligible].float()  # (num_fit, M)
+    M = sub_y.shape[1]
+
+    # 対数線形回帰による初期値推定
+    pos_mask = sub_mask * (sub_y > 0.01).float()
+    safe_y = torch.where(pos_mask > 0, sub_y, torch.tensor(1.0, device=device))
+    log_y = torch.log(safe_y) * pos_mask
+
+    sw = pos_mask.sum(dim=0)
+    sx = (pos_mask * x).sum(dim=0)
+    sxx = (pos_mask * (x ** 2)).sum(dim=0)
+    sy = log_y.sum(dim=0)
+    sxy = (x * log_y).sum(dim=0)
+
+    delta = sw * sxx - sx * sx
+    valid_delta = (delta > 1e-7) & (sw >= 2)
+
+    b_init = torch.where(valid_delta, -(sw * sxy - sx * sy) / torch.clamp(delta, min=1e-7), torch.tensor(1.0 / (10.0 * scale), device=device))
+    log_a = torch.where(valid_delta, (sxx * sy - sx * sxy) / torch.clamp(delta, min=1e-7), torch.tensor(0.0, device=device))
+    a_init = torch.where(valid_delta, torch.exp(log_a), sub_y[0])
+
+    a = torch.clamp(a_init, 0.1, 1.5).view(1, M)
+    xi = torch.clamp(1.0 / torch.clamp(b_init, min=1e-4), 0.05 * scale, 200.0 * scale).view(1, M)
+
+    # Gauss-Newton バッチ反復 (6ステップ)
+    lam = 1e-3
+    for _ in range(6):
+        b = 1.0 / torch.clamp(xi, min=1e-6)  # (1, M)
+        exp_term = torch.exp(-b * x)  # (num_fit, M)
+        y_hat = a * exp_term  # (num_fit, M)
+        res = (y_hat - sub_y) * sub_mask  # (num_fit, M)
+
+        ja = exp_term * sub_mask
+        jxi = (a * x / torch.clamp(xi ** 2, min=1e-8)) * exp_term * sub_mask
+
+        h00 = (ja * ja).sum(dim=0) + lam  # (M,)
+        h11 = (jxi * jxi).sum(dim=0) + lam
+        h01 = (ja * jxi).sum(dim=0)
+        g0 = (ja * res).sum(dim=0)
+        g1 = (jxi * res).sum(dim=0)
+
+        det = h00 * h11 - h01 * h01
+        det_safe = torch.clamp(det, min=1e-9)
+
+        da = -(h11 * g0 - h01 * g1) / det_safe
+        dxi = -(h00 * g1 - h01 * g0) / det_safe
+
+        a = torch.clamp(a + da.view(1, M), 0.0, 1.5)
+        xi = torch.clamp(xi + dxi.view(1, M), 0.05 * scale, 200.0 * scale)
+
+    # R^2 算出
+    b_fin = 1.0 / torch.clamp(xi, min=1e-6)
+    y_hat = a * torch.exp(-b_fin * x)
+    ss_res = (((sub_y - y_hat) * sub_mask) ** 2).sum(dim=0)
+    y_mean = (sub_y * sub_mask).sum(dim=0) / torch.clamp(sub_mask.sum(dim=0), min=1.0)
+    ss_tot = (((sub_y - y_mean.view(1, M)) * sub_mask) ** 2).sum(dim=0)
+    r2 = 1.0 - (ss_res / torch.clamp(ss_tot, min=1e-9))
+
+    a_res = a.view(-1)
+    xi_res = xi.view(-1)
+    passed = (r2 >= min_r2) | ((r2 < min_r2) & (xi_res < 2.0 * scale))
+
+    # 結果をテンソルに書き戻し
+    xi_sub = torch.where(passed, xi_res, torch.tensor(float('nan'), device=device))
+    a_sub = torch.where(passed, a_res, torch.tensor(float('nan'), device=device))
+    r2_sub = torch.where(passed, r2, torch.tensor(float('nan'), device=device))
+
+    xi_out[fit_eligible] = xi_sub
+    amp_out[fit_eligible] = a_sub
+    r2_out[fit_eligible] = r2_sub
+
+    return xi_out.cpu().numpy(), amp_out.cpu().numpy(), r2_out.cpu().numpy()
+
 
 def calc_local_correlation_length_map(
     ux: np.ndarray,
@@ -372,56 +841,11 @@ def calc_local_correlation_length_map(
 ) -> Dict[str, Union[np.ndarray, float]]:
     """
     視野全体をグリッド分割し、各地点を中心とした局所配向相関プロファイル C_x(r) を
-    指数減衰 C(r) = a * exp(-r / xi) にフィッティングして局所相関長 xi(x) の空間マップを構築。
-    得られた xi(x) から空間非ガウス性パラメータ alpha_{2, xi} を直接計算する。
-
-    定義:
-      alpha_{2, xi} = < xi^4 > / (3 * < xi^2 >^2) - 1
-
-    Parameters
-    ----------
-    ux, uy : np.ndarray
-        2次元方向ベクトル配列 (H, W)
-    distances_px : List[int]
-        相関を計算する距離リスト (ピクセル)
-    scale : float, default 0.11
-        空間スケール (um/pixel)
-    grid_step : int, default 8
-        グリッドサンプリング間隔 (ピクセル)
-    kernel_type : str, default 'ring'
-        畳み込みカーネル種別
-    shell_width : float, default 2.0
-        シェル幅 (ピクセル)
-    valid_mask : np.ndarray, optional
-        有効マスク (H, W)
-    max_fit_dist_um : float, optional
-        フィッティングに使用する最大距離 (um)
-    min_r2 : float, default 0.5
-        フィッティング決定係数 R^2 の最小許容値（下回る場合は NaN 扱い）
-    device : str, optional
-        'cuda', 'scipy', または None
-
-    Returns
-    -------
-    result : dict
-        - 'grid_x_um', 'grid_y_um': グリッド座標 (um)
-        - 'xi_map_um': 局所相関長マップ (グリッド点 x グリッド点, um)
-        - 'amp_map': フィッティング振幅マップ a(x)
-        - 'r2_map': フィッティング決定係数マップ R^2(x)
-        - 'xi_valid_um': 有効な局所相関長の1次元配列
-        - 'alpha_2_xi': 相関長の空間非ガウス性パラメータ
-        - 'xi_mean_um': 相関長の空間平均
-        - 'xi_median_um': 相関長の中央値
-        - 'xi_std_um': 相関長の空間標準偏差
+    指数減衰 C(r) = a * exp(-r / xi) にフィッティングして局所相関長 xi(x) の空間マップを超高速に構築。
     """
     H, W = ux.shape
-    convolver = FFTConvolver(
-        shape=(H, W),
-        sizes=distances_px,
-        kernel_type=kernel_type,
-        shell_width=shell_width,
-        device=device,
-    )
+    num_d = len(distances_px)
+    distances_um = np.array(distances_px, dtype=np.float32) * scale
 
     if valid_mask is None:
         mag = np.hypot(ux, uy)
@@ -434,14 +858,7 @@ def calc_local_correlation_length_map(
         u_x = np.where(v_mag > 1e-6, ux / v_mag, 0.0).astype(np.float32) * mask
         u_y = np.where(v_mag > 1e-6, uy / v_mag, 0.0).astype(np.float32) * mask
 
-    import scipy.fft
-
-    fft_mask = scipy.fft.rfft2(mask, workers=4)
-    fft_ux = scipy.fft.rfft2(u_x, workers=4)
-    fft_uy = scipy.fft.rfft2(u_y, workers=4)
-
-    distances_um = np.array(distances_px, dtype=np.float32) * scale
-    num_d = len(distances_px)
+    dev_type, t_device = _get_device(device)
 
     # グリッド座標の作成
     y_coords = np.arange(0, H, grid_step)
@@ -449,78 +866,152 @@ def calc_local_correlation_length_map(
     nY = len(y_coords)
     nX = len(x_coords)
 
-    # 局所相関テンソル (num_d, nY, nX)
+    # フィッティング対象距離マスク
+    fit_mask = np.ones(num_d, dtype=bool)
+    if max_fit_dist_um is not None:
+        fit_mask = distances_um <= max_fit_dist_um
+
+    convolver = FFTConvolver(
+        shape=(H, W),
+        sizes=distances_px,
+        kernel_type=kernel_type,
+        shell_width=shell_width,
+        device=dev_type,
+    )
+
+    # -------------------------------------------------------------
+    # GPU (PyTorch CUDA) による超高速バッチ実行
+    # -------------------------------------------------------------
+    if dev_type == 'cuda' and HAS_TORCH:
+        try:
+            with torch.no_grad():
+                fields_np = np.stack([u_x, u_y, mask], axis=0)
+                t_fields = torch.from_numpy(fields_np).to(t_device, non_blocking=True)
+                fft_fields = torch.fft.rfft2(t_fields)
+
+                d_ux = t_fields[0]
+                d_uy = t_fields[1]
+                d_mask = t_fields[2]
+
+                # グリッド座標のテンソル
+                t_y_coords = torch.from_numpy(y_coords).to(t_device)
+                t_x_coords = torch.from_numpy(x_coords).to(t_device)
+
+                local_corr_grid_t = torch.full((num_d, nY, nX), float('nan'), dtype=torch.float32, device=t_device)
+
+                for idx, k_fft_cpu in enumerate(convolver.kernel_ffts_torch):
+                    k_fft = k_fft_cpu.to(t_device, non_blocking=True)
+                    conv_all = torch.fft.irfft2(fft_fields * k_fft, s=(H, W))
+
+                    conv_ux = conv_all[0]
+                    conv_uy = conv_all[1]
+                    v_mask = conv_all[2]
+
+                    denom = torch.where(v_mask > 1e-4, v_mask, torch.tensor(1.0, device=t_device))
+                    c_field = (d_ux * conv_ux + d_uy * conv_uy) / denom
+                    c_field = torch.where((d_mask > 0.5) & (v_mask > 1e-4), c_field, torch.tensor(float('nan'), device=t_device))
+
+                    # グリッドサンプリング
+                    local_corr_grid_t[idx] = c_field[t_y_coords[:, None], t_x_coords[None, :]]
+
+                # GPU バッチ非線形フィッティング
+                corr_sub = local_corr_grid_t[fit_mask].view(-1, nY * nX)  # (num_fit, N_pts)
+                x_fit_t = torch.from_numpy(distances_um[fit_mask]).to(t_device)
+
+                xi_arr, amp_arr, r2_arr = _fit_grid_torch(corr_sub, x_fit_t, scale, min_r2, t_device)
+
+                xi_map = xi_arr.reshape(nY, nX)
+                amp_map = amp_arr.reshape(nY, nX)
+                r2_map = r2_arr.reshape(nY, nX)
+
+                valid_xi = xi_map[~np.isnan(xi_map)]
+                if len(valid_xi) >= 10:
+                    xi2_mean = float(np.mean(valid_xi ** 2))
+                    xi4_mean = float(np.mean(valid_xi ** 4))
+                    alpha_2_xi = (xi4_mean / (3.0 * (xi2_mean ** 2))) - 1.0 if xi2_mean > 1e-8 else np.nan
+                    xi_mean = float(np.mean(valid_xi))
+                    xi_median = float(np.median(valid_xi))
+                    xi_std = float(np.std(valid_xi))
+                else:
+                    alpha_2_xi = np.nan
+                    xi_mean = np.nan
+                    xi_median = np.nan
+                    xi_std = np.nan
+
+                return {
+                    'grid_x_um': x_coords * scale,
+                    'grid_y_um': y_coords * scale,
+                    'xi_map_um': xi_map,
+                    'amp_map': amp_map,
+                    'r2_map': r2_map,
+                    'xi_valid_um': valid_xi,
+                    'alpha_2_xi': float(alpha_2_xi),
+                    'xi_mean_um': float(xi_mean),
+                    'xi_median_um': float(xi_median),
+                    'xi_std_um': float(xi_std),
+                }
+        except torch.OutOfMemoryError:
+            torch.cuda.empty_cache()
+
+    # -------------------------------------------------------------
+    # CPU (マルチスレッド SciPy & Numba) によるフォールバック
+    # -------------------------------------------------------------
+    fields_np = np.stack([u_x, u_y, mask], axis=0)
+    fft_fields = scipy.fft.rfft2(fields_np, axes=(-2, -1), workers=4)
+
     local_corr_grid = np.full((num_d, nY, nX), np.nan, dtype=np.float32)
 
     for idx, k_fft in enumerate(convolver.kernel_ffts_np):
-        v_mask = scipy.fft.irfft2(fft_mask * k_fft, s=(H, W), workers=4)
-        conv_ux = scipy.fft.irfft2(fft_ux * k_fft, s=(H, W), workers=4)
-        conv_uy = scipy.fft.irfft2(fft_uy * k_fft, s=(H, W), workers=4)
+        conv_all = scipy.fft.irfft2(fft_fields * k_fft, s=(H, W), axes=(-2, -1), workers=4)
+        conv_ux = conv_all[0]
+        conv_uy = conv_all[1]
+        v_mask = conv_all[2]
 
         denom = np.where(v_mask > 1e-4, v_mask, 1.0)
         c_field = (u_x * conv_ux + u_y * conv_uy) / denom
         c_field = np.where((mask > 0.5) & (v_mask > 1e-4), c_field, np.nan)
 
-        # グリッドサンプリング
         local_corr_grid[idx, :, :] = c_field[np.ix_(y_coords, x_coords)]
 
-    # フィッティングによる相関長抽出
-    xi_map = np.full((nY, nX), np.nan, dtype=np.float32)
-    amp_map = np.full((nY, nX), np.nan, dtype=np.float32)
-    r2_map = np.full((nY, nX), np.nan, dtype=np.float32)
+    if HAS_NUMBA:
+        xi_map, amp_map, r2_map = _fit_grid_numba(local_corr_grid, distances_um, fit_mask, scale, min_r2)
+    else:
+        # SciPy curve_fit fallback
+        xi_map = np.full((nY, nX), np.nan, dtype=np.float32)
+        amp_map = np.full((nY, nX), np.nan, dtype=np.float32)
+        r2_map = np.full((nY, nX), np.nan, dtype=np.float32)
+        x_fit_all = distances_um[fit_mask]
 
-    fit_mask = np.ones(num_d, dtype=bool)
-    if max_fit_dist_um is not None:
-        fit_mask = distances_um <= max_fit_dist_um
+        for iy in range(nY):
+            for ix in range(nX):
+                y_curve = local_corr_grid[fit_mask, iy, ix]
+                valid_pt = ~np.isnan(y_curve)
+                if np.count_nonzero(valid_pt) < 3 or y_curve[valid_pt][0] <= 0.05:
+                    continue
+                x_v = x_fit_all[valid_pt]
+                y_v = y_curve[valid_pt]
+                a_init = float(np.clip(y_v[0], 0.1, 1.0))
+                p0 = [10.0 * scale, a_init]
+                bounds = ([0.05 * scale, 0.0], [200.0 * scale, 1.5])
+                try:
+                    popt, _ = curve_fit(exp_decay_model, x_v, y_v, p0=p0, bounds=bounds, maxfev=400)
+                    xi_est, a_est = popt
+                    residuals = y_v - exp_decay_model(x_v, *popt)
+                    ss_res = np.sum(residuals ** 2)
+                    ss_tot = np.sum((y_v - np.mean(y_v)) ** 2)
+                    r2 = 1.0 - (ss_res / (ss_tot + 1e-9)) if ss_tot > 1e-9 else 0.0
+                    if r2 >= min_r2 or (r2 < min_r2 and xi_est < 2.0 * scale):
+                        xi_map[iy, ix] = xi_est
+                        amp_map[iy, ix] = a_est
+                        r2_map[iy, ix] = r2
+                except Exception:
+                    continue
 
-    x_fit_all = distances_um[fit_mask]
-
-    # グリッドごとのフィッティングループ
-    for iy in range(nY):
-        for ix in range(nX):
-            y_curve = local_corr_grid[fit_mask, iy, ix]
-            valid_pt = ~np.isnan(y_curve)
-            if np.count_nonzero(valid_pt) < 3:
-                continue
-
-            x_v = x_fit_all[valid_pt]
-            y_v = y_curve[valid_pt]
-
-            # 最初の点が極端に小さい/負の場合はスキップ
-            if y_v[0] <= 0.05:
-                continue
-
-            a_init = float(np.clip(y_v[0], 0.1, 1.0))
-            p0 = [10.0 * scale, a_init]
-            bounds = ([0.05 * scale, 0.0], [200.0 * scale, 1.5])
-
-            try:
-                popt, _ = curve_fit(exp_decay_model, x_v, y_v, p0=p0, bounds=bounds, maxfev=400)
-                xi_est, a_est = popt
-
-                # R^2 決定係数
-                residuals = y_v - exp_decay_model(x_v, *popt)
-                ss_res = np.sum(residuals ** 2)
-                ss_tot = np.sum((y_v - np.mean(y_v)) ** 2)
-                r2 = 1.0 - (ss_res / (ss_tot + 1e-9)) if ss_tot > 1e-9 else 0.0
-
-                if r2 >= min_r2 or (r2 < min_r2 and xi_est < 2.0 * scale):
-                    xi_map[iy, ix] = xi_est
-                    amp_map[iy, ix] = a_est
-                    r2_map[iy, ix] = r2
-            except Exception:
-                continue
-
-    # 有効な相関長配列
     valid_xi = xi_map[~np.isnan(xi_map)]
-
     if len(valid_xi) >= 10:
         xi2_mean = float(np.mean(valid_xi ** 2))
         xi4_mean = float(np.mean(valid_xi ** 4))
-        if xi2_mean > 1e-8:
-            alpha_2_xi = (xi4_mean / (3.0 * (xi2_mean ** 2))) - 1.0
-        else:
-            alpha_2_xi = np.nan
+        alpha_2_xi = (xi4_mean / (3.0 * (xi2_mean ** 2))) - 1.0 if xi2_mean > 1e-8 else np.nan
         xi_mean = float(np.mean(valid_xi))
         xi_median = float(np.median(valid_xi))
         xi_std = float(np.std(valid_xi))
@@ -550,168 +1041,112 @@ def calc_local_correlation_length_map(
 
 def plot_spatial_heterogeneity_summary(
     distances_um: np.ndarray,
-    four_point_result: dict,
-    ngp_result: dict,
-    local_xi_result: dict,
+    four_point_result: Optional[dict] = None,
+    ngp_result: Optional[dict] = None,
+    local_xi_result: Optional[dict] = None,
     condition_name: str = "",
     save_path: Optional[Union[str, Path]] = None,
 ) -> plt.Figure:
     """
-    1つの実験または条件に対して、3つの不均一性解析結果をまとめた総合ダッシュボード図を作成する。
+    1つの実験または条件に対して、局所相関長マップと相関長分布・空間NGPをまとめた
+    2パネル (1x2) のサマリーダッシュボード図を作成する。
 
-    構成 (2x2 パネル):
-      [Panel A] 4点配向相関関数 chi_orient(r) vs r (相関長ピーク R0 の検出)
-      [Panel B] 内積確率密度関数 P(c; r) の分布推移 & NGP alpha_{2, C}(r)
-      [Panel C] 局所相関長 xi(x) の空間マップ (高速道路 vs ジャンクション)
-      [Panel D] 相関長分布 P(xi) と空間 NGP alpha_{2, xi}
+    構成 (1x2 パネル):
+      [Panel A] 局所相関長 xi(x) の空間マップ (高速道路 vs ジャンクション)
+      [Panel B] 局所相関長分布 P(xi) と空間 NGP alpha_{2, xi}
     """
-    fig, axes = plt.subplots(2, 2, figsize=(14, 11))
-    axes = axes.flatten()
+    if local_xi_result is None and four_point_result is not None and 'xi_map_um' in four_point_result:
+        local_xi_result = four_point_result
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
 
     # -------------------------------------------------------------
-    # Panel A: 4点配向相関関数 chi_orient(r)
+    # Panel A: 局所相関長 xi(x) 空間マップ
     # -------------------------------------------------------------
     ax_a = axes[0]
-    r_um = distances_um
-    chi = four_point_result['chi_orient']
-    c_r = four_point_result['C_r']
+    if local_xi_result and 'xi_map_um' in local_xi_result:
+        xi_map = local_xi_result['xi_map_um']
+        gx = local_xi_result['grid_x_um']
+        gy = local_xi_result['grid_y_um']
 
-    ax_a.plot(r_um, chi, color='#d95f02', lw=2.5, marker='o', ms=4, label=r'$\chi_{\mathrm{orient}}(r) = \langle c^2 \rangle - C(r)^2$')
-    if 'chi_orient_local_var' in four_point_result:
-        ax_a.plot(r_um, four_point_result['chi_orient_local_var'], color='#7570b3', lw=1.8, ls='--', label=r'$\mathrm{Var}_{\mathbf{x}}[c(\mathbf{x}, r)]$ (Local Shell)')
-    ax_a.set_xlabel(r'Distance $r\ [\mu\mathrm{m}]$', fontsize=12)
-    ax_a.set_ylabel(r'4-Point Susceptibility $\chi_{\mathrm{orient}}(r)$', fontsize=12)
-    ax_a.set_title(r'(a) 4-Point Orientational Correlation $G_4(r)$', fontsize=13, fontweight='bold')
-    ax_a.grid(True, linestyle=':', alpha=0.6)
-    ax_a.legend(loc='best', frameon=True, fontsize=10)
+        if len(gx) > 1 and len(gy) > 1 and xi_map.size > 0:
+            extent = [gx[0], gx[-1], gy[-1], gy[0]]
+            vmax = float(np.nanpercentile(xi_map, 98)) if np.any(~np.isnan(xi_map)) else 20.0
+            vmin = float(np.nanpercentile(xi_map, 2)) if np.any(~np.isnan(xi_map)) else 0.5
 
-    # ピーク位置の注釈
-    valid_idx = ~np.isnan(chi)
-    if np.any(valid_idx):
-        max_idx = np.argmax(chi[valid_idx])
-        peak_r = r_um[valid_idx][max_idx]
-        peak_val = chi[valid_idx][max_idx]
-        ax_a.annotate(
-            f'Peak: $r \\approx {peak_r:.1f}\\,\\mu\\mathrm{{m}}$\n$\\chi_{{max}} = {peak_val:.3f}$',
-            xy=(peak_r, peak_val),
-            xytext=(peak_r + 5, peak_val * 0.9),
-            arrowprops=dict(facecolor='black', shrink=0.08, width=1, headwidth=6),
-            fontsize=10,
-            bbox=dict(boxstyle="round,pad=0.3", fc="#ffffcc", ec="orange", lw=1),
-        )
+            im = ax_a.imshow(xi_map, extent=extent, cmap='viridis', vmin=max(0, vmin), vmax=max(vmin + 1, vmax), aspect='auto')
+            cbar = fig.colorbar(im, ax=ax_a, fraction=0.046, pad=0.04)
+            cbar.set_label(r'Local Correlation Length $\xi(\mathbf{x})\ [\mu\mathrm{m}]$', fontsize=11)
+            ax_a.set_xlabel(r'$x\ [\mu\mathrm{m}]$', fontsize=12)
+            ax_a.set_ylabel(r'$y\ [\mu\mathrm{m}]$', fontsize=12)
+            ax_a.set_title(r'(a) Local Correlation Length Map $\xi(\mathbf{x})$', fontsize=13, fontweight='bold')
+        else:
+            ax_a.text(0.5, 0.5, 'Insufficient grid points', ha='center', va='center')
+    else:
+        ax_a.text(0.5, 0.5, 'No local correlation data', ha='center', va='center')
 
     # -------------------------------------------------------------
-    # Panel B: 内積確率密度関数 P(c; r) & NGP alpha_{2, C}(r)
+    # Panel B: 局所相関長分布 P(xi) & 空間 NGP alpha_{2, xi}
     # -------------------------------------------------------------
     ax_b = axes[1]
-    ngp = ngp_result['ngp']
-    r_ngp = ngp_result['distances'] * (r_um[0] / four_point_result['distances_px'][0] if len(r_um) > 0 else 0.11)
+    if local_xi_result and 'xi_valid_um' in local_xi_result:
+        valid_xi = local_xi_result['xi_valid_um']
+        alpha_xi = local_xi_result.get('alpha_2_xi', np.nan)
+        xi_mean = local_xi_result.get('xi_mean_um', np.nan)
+        xi_std = local_xi_result.get('xi_std_um', np.nan)
+        xi_median = local_xi_result.get('xi_median_um', np.nan)
 
-    # 主軸: alpha_{2, C}(r)
-    line_ngp = ax_b.plot(r_ngp, ngp, color='#1b9e77', lw=2.5, marker='s', ms=4, label=r'$\alpha_{2, C}(r)$ (NGP)')
-    ax_b.set_xlabel(r'Distance $r\ [\mu\mathrm{m}]$', fontsize=12)
-    ax_b.set_ylabel(r'Non-Gaussian Parameter $\alpha_{2, C}(r)$', color='#1b9e77', fontsize=12)
-    ax_b.tick_params(axis='y', labelcolor='#1b9e77')
-    ax_b.grid(True, linestyle=':', alpha=0.6)
-    ax_b.set_title(r'(b) Dot Product NGP $\alpha_{2, C}(r)$', fontsize=13, fontweight='bold')
+        if len(valid_xi) > 0:
+            counts, bins, _ = ax_b.hist(valid_xi, bins=25, density=True, color='#882255', alpha=0.65, edgecolor='black')
+            ax_b.axvline(xi_mean, color='black', lw=2, ls='--', label=f'Mean $\\langle \\xi \\rangle = {xi_mean:.2f}\\,\\mu\\mathrm{{m}}$')
+            ax_b.axvline(xi_median, color='blue', lw=1.5, ls=':', label=f'Median = {xi_median:.2f}\\,\\mu\\mathrm{{m}}$')
 
-    # 代表的な距離での P(c; r) の挿入図 (Inset)
-    pdf_dict = ngp_result.get('pdf_dict', {})
-    if pdf_dict:
-        # 近距離、中距離 (相関長付近)、長距離 の3つを選択
-        avail_dists = sorted(list(pdf_dict.keys()))
-        selected_dists = [avail_dists[0], avail_dists[len(avail_dists) // 3], avail_dists[-1]]
-        colors = ['#2b83ba', '#fdae61', '#d7191c']
+            # KDE 曲線のプロット
+            try:
+                kde = stats.gaussian_kde(valid_xi)
+                x_eval = np.linspace(np.min(valid_xi), np.max(valid_xi), 200)
+                ax_b.plot(x_eval, kde(x_eval), color='#882255', lw=2.2)
+            except Exception:
+                pass
 
-        from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-        ax_inset = inset_axes(ax_b, width="42%", height="40%", loc='lower right', borderpad=1.2)
-        for d, col in zip(selected_dists, colors):
-            c_vals, p_vals = pdf_dict[d]
-            d_um = d * (r_um[0] / four_point_result['distances_px'][0] if len(r_um) > 0 else 0.11)
-            ax_inset.plot(c_vals, p_vals, color=col, lw=1.6, label=f'$r={d_um:.1f}\\mu\\mathrm{{m}}$')
-        ax_inset.set_xlabel(r'$c = \mathbf{u}_1 \cdot \mathbf{u}_2$', fontsize=8)
-        ax_inset.set_ylabel(r'$P(c; r)$', fontsize=8)
-        ax_inset.tick_params(labelsize=8)
-        ax_inset.legend(loc='upper center', fontsize=7, framealpha=0.8)
-        ax_inset.grid(True, linestyle=':', alpha=0.4)
+            # 空間 NGP の情報ボックス
+            text_info = (
+                f"$\\mathbf{{\\alpha_{{2, \\xi}} = {alpha_xi:.3f}}}$\n"
+                f"$\\langle \\xi \\rangle = {xi_mean:.2f} \\pm {xi_std:.2f}\\,\\mu\\mathrm{{m}}$\n"
+                f"$N_{{\\mathrm{{grid}}}} = {len(valid_xi)}$"
+            )
+            ax_b.text(
+                0.95, 0.85, text_info,
+                transform=ax_b.transAxes,
+                ha='right', va='top',
+                fontsize=11,
+                bbox=dict(boxstyle="round,pad=0.4", fc="#f0f0f0", ec="gray", lw=1.2)
+            )
 
-    # -------------------------------------------------------------
-    # Panel C: 局所相関長 xi(x) 空間マップ
-    # -------------------------------------------------------------
-    ax_c = axes[2]
-    xi_map = local_xi_result['xi_map_um']
-    gx = local_xi_result['grid_x_um']
-    gy = local_xi_result['grid_y_um']
-
-    if len(gx) > 1 and len(gy) > 1:
-        extent = [gx[0], gx[-1], gy[-1], gy[0]]
-        vmax = float(np.nanpercentile(xi_map, 98)) if np.any(~np.isnan(xi_map)) else 20.0
-        vmin = float(np.nanpercentile(xi_map, 2)) if np.any(~np.isnan(xi_map)) else 0.5
-
-        im = ax_c.imshow(xi_map, extent=extent, cmap='viridis', vmin=max(0, vmin), vmax=max(vmin + 1, vmax), aspect='auto')
-        cbar = fig.colorbar(im, ax=ax_c, fraction=0.046, pad=0.04)
-        cbar.set_label(r'Local Correlation Length $\xi(\mathbf{x})\ [\mu\mathrm{m}]$', fontsize=11)
-        ax_c.set_xlabel(r'$x\ [\mu\mathrm{m}]$', fontsize=12)
-        ax_c.set_ylabel(r'$y\ [\mu\mathrm{m}]$', fontsize=12)
-        ax_c.set_title(r'(c) Local Correlation Length Map $\xi(\mathbf{x})$', fontsize=13, fontweight='bold')
+            ax_b.set_xlabel(r'Correlation Length $\xi\ [\mu\mathrm{m}]$', fontsize=12)
+            ax_b.set_ylabel(r'Probability Density $P(\xi)$', fontsize=12)
+            ax_b.set_title(r'(b) Distribution $P(\xi)$ & Spatial NGP $\alpha_{2, \xi}$', fontsize=13, fontweight='bold')
+            ax_b.grid(True, linestyle=':', alpha=0.6)
+            ax_b.legend(loc='upper right', bbox_to_anchor=(0.95, 0.60), fontsize=9.5)
+        else:
+            ax_b.text(0.5, 0.5, 'No valid correlation lengths', ha='center', va='center')
     else:
-        ax_c.text(0.5, 0.5, 'Insufficient grid points', ha='center', va='center')
+        ax_b.text(0.5, 0.5, 'No valid correlation lengths', ha='center', va='center')
 
-    # -------------------------------------------------------------
-    # Panel D: 局所相関長分布 P(xi) & 空間 NGP alpha_{2, xi}
-    # -------------------------------------------------------------
-    ax_d = axes[3]
-    valid_xi = local_xi_result['xi_valid_um']
-    alpha_xi = local_xi_result['alpha_2_xi']
-    xi_mean = local_xi_result['xi_mean_um']
-    xi_std = local_xi_result['xi_std_um']
-
-    if len(valid_xi) > 0:
-        counts, bins, _ = ax_d.hist(valid_xi, bins=25, density=True, color='#882255', alpha=0.65, edgecolor='black')
-        ax_d.axvline(xi_mean, color='black', lw=2, ls='--', label=f'Mean $\\langle \\xi \\rangle = {xi_mean:.2f}\\,\\mu\\mathrm{{m}}$')
-        ax_d.axvline(local_xi_result['xi_median_um'], color='blue', lw=1.5, ls=':', label=f'Median = {local_xi_result["xi_median_um"]:.2f}\\,\\mu\\mathrm{{m}}$')
-
-        # KDE 曲線のプロット
-        try:
-            kde = stats.gaussian_kde(valid_xi)
-            x_eval = np.linspace(np.min(valid_xi), np.max(valid_xi), 200)
-            ax_d.plot(x_eval, kde(x_eval), color='#882255', lw=2.2)
-        except Exception:
-            pass
-
-        # 空間 NGP の情報ボックス
-        text_info = (
-            f"$\\mathbf{{\\alpha_{{2, \\xi}} = {alpha_xi:.3f}}}$\n"
-            f"$\\langle \\xi \\rangle = {xi_mean:.2f} \\pm {xi_std:.2f}\\,\\mu\\mathrm{{m}}$\n"
-            f"$N_{{\\mathrm{{grid}}}} = {len(valid_xi)}$"
-        )
-        ax_d.text(
-            0.95, 0.85, text_info,
-            transform=ax_d.transAxes,
-            ha='right', va='top',
-            fontsize=11,
-            bbox=dict(boxstyle="round,pad=0.4", fc="#f0f0f0", ec="gray", lw=1.2)
-        )
-
-        ax_d.set_xlabel(r'Correlation Length $\xi\ [\mu\mathrm{m}]$', fontsize=12)
-        ax_d.set_ylabel(r'Probability Density $P(\xi)$', fontsize=12)
-        ax_d.set_title(r'(d) Distribution $P(\xi)$ & Spatial NGP $\alpha_{2, \xi}$', fontsize=13, fontweight='bold')
-        ax_d.grid(True, linestyle=':', alpha=0.6)
-        ax_d.legend(loc='upper right', bbox_to_anchor=(0.95, 0.60), fontsize=9.5)
-    else:
-        ax_d.text(0.5, 0.5, 'No valid correlation lengths', ha='center', va='center')
-
-    title_str = f"Spatial Orientational Heterogeneity Analysis: {condition_name}" if condition_name else "Spatial Orientational Heterogeneity Analysis"
-    fig.suptitle(title_str, fontsize=15, fontweight='bold', y=0.995)
+    title_str = f"Spatial Heterogeneity Analysis: {condition_name}" if condition_name else "Spatial Heterogeneity Analysis"
+    fig.suptitle(title_str, fontsize=14, fontweight='bold', y=0.98)
     try:
-        fig.tight_layout(rect=[0, 0.03, 1, 0.96])
+        fig.tight_layout(rect=[0, 0.03, 1, 0.94])
     except Exception:
-        fig.subplots_adjust(top=0.92, bottom=0.08, left=0.08, right=0.95, hspace=0.3, wspace=0.3)
+        fig.subplots_adjust(top=0.90, bottom=0.12, left=0.08, right=0.95, wspace=0.25)
 
     if save_path:
         save_path = Path(save_path)
         save_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"[INFO] Saved heterogeneity dashboard to {save_path}")
+        svg_path = save_path.with_suffix('.svg')
+        png_path = save_path.with_suffix('.png')
+        fig.savefig(svg_path, bbox_inches='tight')
+        fig.savefig(png_path, dpi=300, bbox_inches='tight')
+        print(f"[INFO] Saved heterogeneity dashboard to {svg_path} and {png_path}")
 
     return fig
