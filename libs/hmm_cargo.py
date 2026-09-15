@@ -2133,7 +2133,8 @@ def calc_integral_correlation_time(
     tau_int_zero, t_zero = _integrate_to_zero(t_vals, c_vals)
 
     # 2. Window integral (全体台形積分)
-    tau_int_window = float(np.trapz(c_vals, t_vals)) if len(t_vals) > 1 else np.nan
+    trapz_func = getattr(np, 'trapezoid', getattr(np, 'trapz', None))
+    tau_int_window = float(trapz_func(c_vals, t_vals)) if len(t_vals) > 1 and trapz_func is not None else np.nan
 
     # 3. Offset corrected integral
     if offset_A is not None and np.isfinite(offset_A) and abs(1.0 - offset_A) > 1e-4:

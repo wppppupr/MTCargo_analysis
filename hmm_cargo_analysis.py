@@ -3523,12 +3523,20 @@ def main():
 
         if args.n_components == 2:
             if bname == 'beads5um':
-                init_means = np.array([[-3.0], [args.init_means_run]])
+                init_means = np.array([[np.log(0.02 + args.epsilon)], [np.log(0.09 + args.epsilon)]])
+                init_covars = np.array([[[1.0]], [[0.1]]])
+                init_startprob = np.array([0.8, 0.2])
+                init_transmat = np.array([[0.95, 0.05], [0.1, 0.9]])
+            elif bname == 'beads7um':
+                init_means = np.array([[np.log(0.02 + args.epsilon)], [np.log(0.07 + args.epsilon)]])
                 init_covars = np.array([[[1.0]], [[0.1]]])
                 init_startprob = np.array([0.8, 0.2])
                 init_transmat = np.array([[0.95, 0.05], [0.1, 0.9]])
             else:
                 init_means = np.array([[args.init_means_tumble], [args.init_means_run]])
+                init_covars = None
+                init_startprob = None
+                init_transmat = None
 
         hmm_model = hc.CargoGaussianHMM(
             n_components=args.n_components,
