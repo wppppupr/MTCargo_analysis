@@ -1044,26 +1044,35 @@ def plot_spatial_heterogeneity_summary(
     four_point_result: Optional[dict] = None,
     ngp_result: Optional[dict] = None,
     local_xi_result: Optional[dict] = None,
+    tracks_data: Optional[Union[pd.DataFrame, str, Path]] = None,
+    scale: float = 0.11,
     condition_name: str = "",
     save_path: Optional[Union[str, Path]] = None,
+    track_color: str = 'white',
+    track_alpha: float = 0.55,
+    track_lw: float = 0.8,
 ) -> plt.Figure:
     """
     1つの実験または条件に対して、局所相関長マップと相関長分布・空間NGPをまとめた
     2パネル (1x2) のサマリーダッシュボード図を作成する。
 
     構成 (1x2 パネル):
-      [Panel A] 局所相関長 xi(x) の空間マップ (高速道路 vs ジャンクション)
+      [Panel A] 局所相関長 xi(x) の空間マップ + 貨物粒子の軌跡オーバーレイ
       [Panel B] 局所相関長分布 P(xi) と空間 NGP alpha_{2, xi}
     """
+    from matplotlib.collections import LineCollection
+    import matplotlib.lines as mlines
+
     if local_xi_result is None and four_point_result is not None and 'xi_map_um' in four_point_result:
         local_xi_result = four_point_result
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
 
     # -------------------------------------------------------------
-    # Panel A: 局所相関長 xi(x) 空間マップ
+    # Panel A: 局所相関長 xi(x) 空間マップ + 貨物粒子軌跡
     # -------------------------------------------------------------
     ax_a = axes[0]
+    has_tracks = False
     if local_xi_result and 'xi_map_um' in local_xi_result:
         xi_map = local_xi_result['xi_map_um']
         gx = local_xi_result['grid_x_um']
@@ -1079,7 +1088,50 @@ def plot_spatial_heterogeneity_summary(
             cbar.set_label(r'Local Correlation Length $\xi(\mathbf{x})\ [\mu\mathrm{m}]$', fontsize=11)
             ax_a.set_xlabel(r'$x\ [\mu\mathrm{m}]$', fontsize=12)
             ax_a.set_ylabel(r'$y\ [\mu\mathrm{m}]$', fontsize=12)
-            ax_a.set_title(r'(a) Local Correlation Length Map $\xi(\mathbf{x})$', fontsize=13, fontweight='bold')
+
+            # 軌跡データのオーバーレイ描画
+            if tracks_data is not None:
+                if isinstance(tracks_data, (str, Path)):
+                    t_path = Path(tracks_data)
+                    if t_path.exists():
+                        try:
+                            df_t = pd.read_csv(t_path)
+                        except Exception:
+                            df_t = None
+                    else:
+                        df_t = None
+                elif isinstance(tracks_data, pd.DataFrame):
+                    df_t = tracks_data
+                else:
+                    df_t = None
+
+                if df_t is not None and not df_t.empty and 'x' in df_t.columns and 'y' in df_t.columns:
+                    p_col = 'particle' if 'particle' in df_t.columns else ('track_id' if 'track_id' in df_t.columns else None)
+                    if p_col:
+                        lines = []
+                        for _, group in df_t.groupby(p_col):
+                            if len(group) > 1:
+                                tx = group['x'].values * scale
+                                ty = group['y'].values * scale
+                                lines.append(np.column_stack([tx, ty]))
+                        if lines:
+                            lc = LineCollection(lines, colors=track_color, alpha=track_alpha, linewidths=track_lw, zorder=3)
+                            ax_a.add_collection(lc)
+                            has_tracks = True
+                    else:
+                        ax_a.plot(df_t['x'] * scale, df_t['y'] * scale, '.', color=track_color, alpha=track_alpha, ms=1.0, zorder=3)
+                        has_tracks = True
+
+            ax_a.set_xlim(extent[0], extent[1])
+            ax_a.set_ylim(extent[2], extent[3])
+
+            title_a = r'(a) Local Correlation Length Map $\xi(\mathbf{x})$'
+            if has_tracks:
+                title_a += ' & Cargo Trajectories'
+                legend_line = mlines.Line2D([], [], color=track_color, alpha=track_alpha, lw=track_lw * 1.5, label='Cargo Trajectories')
+                ax_a.legend(handles=[legend_line], loc='upper right', fontsize=9, framealpha=0.6, facecolor='#333333', edgecolor='white', labelcolor='white')
+
+            ax_a.set_title(title_a, fontsize=13, fontweight='bold')
         else:
             ax_a.text(0.5, 0.5, 'Insufficient grid points', ha='center', va='center')
     else:
@@ -1099,7 +1151,7 @@ def plot_spatial_heterogeneity_summary(
         if len(valid_xi) > 0:
             counts, bins, _ = ax_b.hist(valid_xi, bins=25, density=True, color='#882255', alpha=0.65, edgecolor='black')
             ax_b.axvline(xi_mean, color='black', lw=2, ls='--', label=f'Mean $\\langle \\xi \\rangle = {xi_mean:.2f}\\,\\mu\\mathrm{{m}}$')
-            ax_b.axvline(xi_median, color='blue', lw=1.5, ls=':', label=f'Median = {xi_median:.2f}\\,\\mu\\mathrm{{m}}$')
+            ax_b.axvline(xi_median, color='blue', lw=1.5, ls=':', label=f'Median $= {xi_median:.2f}\\,\\mu\\mathrm{{m}}$')
 
             # KDE 曲線のプロット
             try:

@@ -313,6 +313,9 @@ def main():
         if not flow_path.exists():
             raise FileNotFoundError(f"GFP_flows.h5 not found in {in_path}")
 
+        tracks_csv_path = in_path / 'beads_tracks.csv'
+        tracks_data = tracks_csv_path if tracks_csv_path.exists() else None
+
         print(f"\n=======================================================")
         print(f"Analyzing Single Experiment: {in_path.name}")
         print(f"=======================================================")
@@ -325,6 +328,8 @@ def main():
         sh.plot_spatial_heterogeneity_summary(
             distances_um=distances_um,
             local_xi_result=xi_res,
+            tracks_data=tracks_data,
+            scale=scale,
             condition_name=in_path.name,
             save_path=fig_path,
         )
@@ -353,6 +358,9 @@ def main():
 
         for edir in exp_dirs:
             flow_path = edir / 'GFP_flows.h5'
+            tracks_csv_path = edir / 'beads_tracks.csv'
+            tracks_data = tracks_csv_path if tracks_csv_path.exists() else None
+
             try:
                 four_p, ngp_res, xi_res = analyze_single_flow_movie(
                     flow_path, distances_px=distances_px, scale=scale, grid_step=args.grid_step,
@@ -367,6 +375,8 @@ def main():
             sh.plot_spatial_heterogeneity_summary(
                 distances_um=distances_um,
                 local_xi_result=xi_res,
+                tracks_data=tracks_data,
+                scale=scale,
                 condition_name=f"{cond_name} - {edir.name}",
                 save_path=exp_fig_path,
             )
