@@ -71,64 +71,134 @@ def find_default_root():
     return POSSIBLE_ROOTS[0]
 
 
-def exp_decay_model(x, xi, A):
+def exp_decay_model(t, A, tau, C=0.0, t0=4.0):
     """
-    自己相関関数のフィッティングモデル: f(x) = (1 - A) * exp(-x / xi) + A
-    x=0 で f(0) = 1 となる。
+    自己相関関数の正のテール領域フィッティングモデル（オフセット定数 C 付き）:
+    f(Δt) = A * exp(-(Δt - t0) / tau) + C  (Δt >= t0)
+    Δt = t0 (実測第1フレーム、デフォルト 4.0s) で f(t0) = A + C となる。
     """
-    return (1.0 - A) * np.exp(-x / xi) + A
+    return A * np.exp(-(t - t0) / tau) + C
 
 
-def fit_acf_curve(x_data, y_data, y_err=None, p0=(5.0, 0.0), bounds=((1e-4, -2.0), (1000.0, 2.0))):
+def fit_acf_curve(x_data, y_data, y_err=None, t0=4.0, p0=None, bounds=((-2.0, 1e-4, 0.0), (5.0, 10000.0, 2.0))):
     """
-    自己相関曲線に対して f(x) = (1 - A) * exp(-x / xi) + A をフィッティングする。
+    自己相関関数の正のテール領域 (Δt >= t0) に対して
+    f(Δt) = A * exp(-(Δt - t0) / tau) + C をフィッティングする。
+    Δt = 0 の点を除外し、実測の第1フレーム (Δt >= t0) 以降の正のテール領域のみを対象とする。
     """
-    x = np.asarray(x_data)
-    y = np.asarray(y_data)
-    valid = np.isfinite(x) & np.isfinite(y)
-    x = x[valid]
-    y = y[valid]
+    x = np.asarray(x_data, dtype=float)
+    y = np.asarray(y_data, dtype=float)
+    valid = np.isfinite(x) & np.isfinite(y) & (x >= t0)
+    x_cand = x[valid]
+    y_cand = y[valid]
 
-    if len(x) < 3:
+    if len(x_cand) < 3:
         return None
+
+    # 実測第1フレーム(Δt >= t0)以降の正のテール領域（連続して正の値をとる範囲）を抽出
+    pos_len = 0
+    for v in y_cand:
+        if v > 0:
+            pos_len += 1
+        else:
+            break
+
+    if pos_len < 3:
+        return None
+
+    x_fit = x_cand[:pos_len]
+    y_fit = y_cand[:pos_len]
 
     sigma = None
     if y_err is not None:
-        err = np.asarray(y_err)[valid]
+        err = np.asarray(y_err, dtype=float)[valid][:pos_len]
         if np.all(err > 0) and np.all(np.isfinite(err)):
             sigma = err
 
     try:
-        p0_init = [max(p0[0], 0.1), float(np.clip(y[-1] if len(y) > 0 else 0.0, -0.5, 0.5))]
+        # 初期値の設定:
+        # C_init: 末尾の値（漸近オフセット推定）
+        # A_init: 先頭(Δt=t0)の値とC_initの差
+        # tau_init: 10.0s
+        C_init = float(np.clip(y_fit[-1], -0.5, 0.9))
+        A_init = float(y_fit[0] - C_init)
+        if abs(A_init) < 1e-3:
+            A_init = 1e-2
+        tau_init = 10.0
+
+        if p0 is not None:
+            p0_init = p0
+        else:
+            p0_init = [A_init, tau_init, C_init]
+
+        def _model(t, A, tau, C):
+            return exp_decay_model(t, A, tau, C=C, t0=t0)
+
         popt, pcov = curve_fit(
-            exp_decay_model,
-            x,
-            y,
+            _model,
+            x_fit,
+            y_fit,
             p0=p0_init,
             bounds=bounds,
             sigma=sigma,
-            maxfev=5000
+            maxfev=10000
         )
-        xi_fit, A_fit = popt
-        perr = np.sqrt(np.diag(pcov)) if pcov is not None else [0.0, 0.0]
+        A_fit, tau_fit, C_fit = popt
+        perr = np.sqrt(np.diag(pcov)) if pcov is not None else [0.0, 0.0, 0.0]
 
         # 決定係数 R^2
-        y_pred = exp_decay_model(x, *popt)
-        ss_res = np.sum((y - y_pred) ** 2)
-        ss_tot = np.sum((y - np.mean(y)) ** 2)
+        y_pred = _model(x_fit, *popt)
+        ss_res = np.sum((y_fit - y_pred) ** 2)
+        ss_tot = np.sum((y_fit - np.mean(y_fit)) ** 2)
         r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
 
-        x_fit_eval = np.linspace(0, np.max(x), 200)
-        y_fit_eval = exp_decay_model(x_fit_eval, *popt)
+        # プロット用評価点: t0 から x_fit の最大値まで
+        x_fit_eval = np.linspace(t0, np.max(x_fit), 200)
+        y_fit_eval = _model(x_fit_eval, *popt)
+
+        # 積分相関時間 (Integral correlation time) の計算: Δt=0 から zero-crossing まで
+        # x, y の有効データ全体を利用
+        v_idx = np.isfinite(x) & np.isfinite(y)
+        x_all = x[v_idx]
+        y_all = y[v_idx]
+        sort_i = np.argsort(x_all)
+        x_all, y_all = x_all[sort_i], y_all[sort_i]
+        if len(x_all) > 0 and x_all[0] > 1e-6:
+            x_all = np.insert(x_all, 0, 0.0)
+            y_all = np.insert(y_all, 0, 1.0)
+        
+        tau_int = 0.0
+        for idx in range(len(x_all) - 1):
+            t_a, t_b = x_all[idx], x_all[idx + 1]
+            c_a, c_b = y_all[idx], y_all[idx + 1]
+            if c_a <= 0:
+                break
+            if c_b <= 0:
+                dt_step = t_b - t_a
+                dc_step = c_b - c_a
+                frac = -c_a / dc_step if abs(dc_step) > 1e-12 else 0.0
+                tau_int += 0.5 * c_a * (frac * dt_step)
+                break
+            else:
+                tau_int += 0.5 * (c_a + c_b) * (t_b - t_a)
 
         return {
-            'xi': float(xi_fit),
-            'xi_err': float(perr[0]),
             'A': float(A_fit),
-            'A_err': float(perr[1]),
+            'A_err': float(perr[0]),
+            'tau': float(tau_fit),
+            'tau_err': float(perr[1]),
+            'tau_int': float(tau_int),
+            'C': float(C_fit),
+            'C_err': float(perr[2]),
+            'offset': float(C_fit),     # 互換用エイリアス
+            'offset_err': float(perr[2]),
+            'xi': float(tau_fit),       # 互換用エイリアス
+            'xi_err': float(perr[1]),   # 互換用エイリアス
+            't0': float(t0),
             'r_squared': float(r2),
             'fit_x': x_fit_eval,
-            'fit_y': y_fit_eval
+            'fit_y': y_fit_eval,
+            'n_points': len(x_fit)
         }
     except Exception as e:
         print(f"    [WARNING] フィッティング失敗: {e}")
@@ -252,7 +322,7 @@ def run_all_beads_analysis(root_dir, out_dir=None, modes=None, max_timeshift_fra
     print(f"解析モード: {modes}")
     print(f"パラメータ: max_lag={max_timeshift_frames} frames, interval={frame_interval}s, scale={scale} um/px, yscale={yscale}, fit={fit}")
     if fit:
-        print(f"フィッティングモデル: f(t) = (1 - A) * exp(-t / xi) + A")
+        print(f"フィッティングモデル: f(Δt) = A * exp(-(Δt - {frame_interval}) / tau) + C  (Δt >= {frame_interval}s)")
     print(f"{'='*70}\n")
 
     for mode in modes:
@@ -289,27 +359,30 @@ def run_all_beads_analysis(root_dir, out_dir=None, modes=None, max_timeshift_fra
             evacf_std = evacf_df.groupby('lag time')['VACF'].std().fillna(0.0)
             n_exps = evacf_df['exp'].nunique()
 
-            # 指数減衰フィッティング
+            # 指数減衰フィッティング (Δt >= frame_interval の正のテール領域)
             fit_res = None
             if fit and normalize:
                 fit_res = fit_acf_curve(
                     evacf_mean.index.to_numpy(),
                     evacf_mean.values,
-                    y_err=evacf_std.values
+                    y_err=evacf_std.values,
+                    t0=frame_interval
                 )
                 if fit_res is not None:
                     all_fit_results.append({
                         'mode': mode_str,
                         'bead_name': b_name,
                         'diameter_um': item["diameter_um"],
-                        'xi_s': fit_res['xi'],
-                        'xi_err_s': fit_res['xi_err'],
                         'A': fit_res['A'],
                         'A_err': fit_res['A_err'],
+                        'tau_s': fit_res['tau'],
+                        'tau_err_s': fit_res['tau_err'],
+                        'C': fit_res['C'],
+                        'C_err': fit_res['C_err'],
                         'r_squared': fit_res['r_squared'],
                         'n_experiments': n_exps
                     })
-                    print(f"    -> フィッティング結果: xi = {fit_res['xi']:.2f} s, A = {fit_res['A']:.3f}, R^2 = {fit_res['r_squared']:.3f}")
+                    print(f"    -> フィッティング結果 (Δt >= {frame_interval}s): A = {fit_res['A']:.3f}, tau = {fit_res['tau']:.2f} s, C = {fit_res['C']:.3f}, R^2 = {fit_res['r_squared']:.3f}")
 
             mode_results[b_name] = {
                 "mean": evacf_mean,
@@ -334,7 +407,7 @@ def run_all_beads_analysis(root_dir, out_dir=None, modes=None, max_timeshift_fra
             # 単体プロットへの描画
             label_text = f'{item["label"]}'
             if fit_res is not None:
-                label_text += f' ($\\xi={fit_res["xi"]:.1f}\\mathrm{{s}}$, $R^2={fit_res["r_squared"]:.2f}$)'
+                label_text += f' ($A={fit_res["A"]:.2f}, \\tau={fit_res["tau"]:.1f}\\mathrm{{s}}, C={fit_res["C"]:.2f}, R^2={fit_res["r_squared"]:.2f}$)'
             else:
                 label_text += f' ($N={n_exps}$)'
 
@@ -441,7 +514,7 @@ def _plot_combined_comparison(all_mode_results, out_dir, normalize, xlim, frame_
 
             label_text = f"{item['label']}"
             if fit and fit_res is not None:
-                label_text += f" ($\\xi={fit_res['xi']:.1f}\\mathrm{{s}}$)"
+                label_text += f" ($A={fit_res['A']:.2f}, \\tau={fit_res['tau']:.1f}\\mathrm{{s}}, C={fit_res['C']:.2f}$)"
 
             ax.errorbar(
                 mean_s.index,
@@ -518,7 +591,7 @@ def main():
                         choices=['linear', 'log'],
                         help="Y-axis scale for plots (default: 'linear').")
     parser.add_argument('--fit', action='store_true', default=False,
-                        help="Fit autocorrelation curves with model f(t) = (1 - A) * exp(-t / xi) + A.")
+                        help="Fit autocorrelation curves in tail region (Δt >= frame_interval) with model f(Δt) = A * exp(-(Δt - 4) / tau) + C.")
     parser.add_argument('--green_kubo', action='store_true', default=False,
                         help="Also run Green-Kubo effective diffusion analysis and compare with HMM RTP theoretical model.")
 

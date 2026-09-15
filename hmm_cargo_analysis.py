@@ -1077,6 +1077,267 @@ def plot_state_msd_params_vs_diameter(
     print(f"[SAVED] {output_path}", flush=True)
 
 
+def plot_state_dependent_msad_6panel(
+    fitted_results: Dict[str, dict],
+    output_path: Path,
+    n_components: int = 2,
+    max_lag_s: float = 30.0,
+):
+    """
+    6パネルグリッドで各粒子径における運動モード（All, Run, Tumble）の
+    平均二乗角度変位 MSAD: <(Δθ(Δt))^2> および線形フィッティング直線
+    <(Δθ(Δt))^2> = 2 * Dr * Δt + 2 * σ_θ^2
+    を描画する (Δt <= 30 s)。
+    """
+    fig, axes = plt.subplots(2, 3, figsize=(16, 9.5), sharex=True, sharey=False)
+    axes = axes.flatten()
+
+    for idx, binfo in enumerate(BEADS_INFO):
+        ax = axes[idx]
+        bname = binfo['name']
+        dia = binfo['diameter_um']
+
+        if bname not in fitted_results or 'df_msad' not in fitted_results[bname]:
+            ax.set_visible(False)
+            continue
+
+        res = fitted_results[bname]
+        df_msad = res['df_msad']
+        df_msad_fits = res.get('df_msad_fits', pd.DataFrame())
+
+        if df_msad.empty:
+            ax.set_visible(False)
+            continue
+
+        # 1. 各状態 (Tumble, Run)
+        for s in range(n_components):
+            sub_m = df_msad[df_msad['state'] == s].sort_values(by='lag_time_s')
+            if sub_m.empty:
+                continue
+
+            sub_m = sub_m[sub_m['lag_time_s'] <= max_lag_s + 1e-6]
+            lbl = STATE_NAMES.get(n_components, {}).get(s, f"State {s}")
+            col = STATE_COLORS.get(s, f"C{s}")
+            mrk = 'o' if s == 0 else 's'
+            lsty = '--' if s == 0 else '-'
+
+            fit_row = df_msad_fits[df_msad_fits['state'] == s] if not df_msad_fits.empty else pd.DataFrame()
+            dr_val = fit_row.iloc[0]['Dr_rad2_s'] if not fit_row.empty else np.nan
+            sig_deg = fit_row.iloc[0]['sigma_theta_deg'] if not fit_row.empty else np.nan
+
+            label_str = lbl
+            if not np.isnan(dr_val):
+                label_str += f" ($D_r={dr_val:.3f}\\,\\mathrm{{rad}}^2/\\mathrm{{s}}, \\sigma_\\theta={sig_deg:.1f}^\\circ$)"
+
+            # 実測データ点 + エラーバー
+            if 'msad_sem_rad2' in sub_m.columns and not sub_m['msad_sem_rad2'].isna().all():
+                ax.errorbar(
+                    sub_m['lag_time_s'], sub_m['msad_rad2'], yerr=sub_m['msad_sem_rad2'],
+                    fmt=mrk, color=col, ecolor=col, markersize=4.5, capsize=2,
+                    label=label_str, zorder=3, alpha=0.9
+                )
+            else:
+                ax.plot(
+                    sub_m['lag_time_s'], sub_m['msad_rad2'],
+                    marker=mrk, color=col, linestyle='none', markersize=4.5,
+                    label=label_str, zorder=3, alpha=0.9
+                )
+
+            # フィッティング直線: y = 2 * Dr * t + 2 * sigma_theta^2
+            if not fit_row.empty and not np.isnan(dr_val):
+                sig_sq = fit_row.iloc[0]['sigma_theta_sq_rad2']
+                t_fit = np.linspace(0, max_lag_s, 100)
+                y_fit = 2.0 * dr_val * t_fit + 2.0 * sig_sq
+                ax.plot(t_fit, y_fit, color=col, linestyle=lsty, lw=1.8, zorder=2, alpha=0.85)
+
+        # 2. All (全体)
+        sub_all = df_msad[df_msad['state'] == -1].sort_values(by='lag_time_s')
+        if not sub_all.empty:
+            sub_all = sub_all[sub_all['lag_time_s'] <= max_lag_s + 1e-6]
+            fit_all = df_msad_fits[df_msad_fits['state'] == -1] if not df_msad_fits.empty else pd.DataFrame()
+            dr_all = fit_all.iloc[0]['Dr_rad2_s'] if not fit_all.empty else np.nan
+            sig_all_deg = fit_all.iloc[0]['sigma_theta_deg'] if not fit_all.empty else np.nan
+
+            lbl_all = "All"
+            if not np.isnan(dr_all):
+                lbl_all += f" ($D_r={dr_all:.3f}\\,\\mathrm{{rad}}^2/\\mathrm{{s}}, \\sigma_\\theta={sig_all_deg:.1f}^\\circ$)"
+
+            if 'msad_sem_rad2' in sub_all.columns and not sub_all['msad_sem_rad2'].isna().all():
+                ax.errorbar(
+                    sub_all['lag_time_s'], sub_all['msad_rad2'], yerr=sub_all['msad_sem_rad2'],
+                    fmt='^', color='#444444', ecolor='#888888', markersize=4, capsize=2,
+                    label=lbl_all, zorder=2, alpha=0.85
+                )
+            else:
+                ax.plot(
+                    sub_all['lag_time_s'], sub_all['msad_rad2'],
+                    marker='^', color='#444444', linestyle='none', markersize=4,
+                    label=lbl_all, zorder=2, alpha=0.85
+                )
+
+            if not fit_all.empty and not np.isnan(dr_all):
+                sig_sq_all = fit_all.iloc[0]['sigma_theta_sq_rad2']
+                t_fit = np.linspace(0, max_lag_s, 100)
+                y_fit = 2.0 * dr_all * t_fit + 2.0 * sig_sq_all
+                ax.plot(t_fit, y_fit, color='#444444', linestyle=':', lw=1.6, zorder=1, alpha=0.8)
+
+        ax.set_title(f"$d = {dia:.2f}\\,\\mu\\mathrm{{m}}$", fontsize=12, fontweight='bold')
+        ax.set_xlim(0.0, max_lag_s)
+        ax.grid(True, linestyle='--', alpha=0.4)
+        ax.legend(loc='upper left', fontsize=7.8, frameon=True, framealpha=0.92)
+
+        if idx >= 3:
+            ax.set_xlabel(r"Lag Time $\Delta t$ [s]", fontsize=11)
+        if idx % 3 == 0:
+            ax.set_ylabel(r"MSAD $\langle (\Delta \theta(\Delta t))^2 \rangle$ [$\mathrm{rad}^2$]", fontsize=11)
+
+    fig.suptitle(
+        r"State-Dependent Mean Squared Angular Displacement (MSAD) & Linear Fits ($\langle (\Delta \theta)^2 \rangle = 2 D_r \Delta t + 2 \sigma_\theta^2$)",
+        fontsize=13.5,
+        fontweight='bold',
+    )
+    fig.tight_layout()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches='tight')
+    png_path = output_path.with_suffix('.png')
+    if png_path != output_path:
+        fig.savefig(png_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[SAVED] {output_path} (and {png_path})", flush=True)
+
+
+def plot_msad_params_vs_diameter(
+    df_msad_fits_all: pd.DataFrame,
+    output_path: Path,
+    n_components: int = 2,
+):
+    """
+    粒子径 vs 回転拡散係数 Dr [rad^2/s]、角度測定誤差 σ_θ [deg]、および Dr(Run)/Dr(Tumble) 比を描画する。
+    """
+    if df_msad_fits_all.empty:
+        return
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5.2))
+
+    # (a) 回転拡散係数 Dr vs 粒子径 d
+    ax0 = axes[0]
+    for s in range(n_components):
+        sub = df_msad_fits_all[df_msad_fits_all['state'] == s].sort_values(by='diameter_um')
+        if sub.empty:
+            continue
+        lbl = STATE_NAMES.get(n_components, {}).get(s, f"State {s}")
+        col = STATE_COLORS.get(s, f"C{s}")
+        mrk = 'o' if s == 0 else 's'
+        ax0.errorbar(
+            sub['diameter_um'], sub['Dr_rad2_s'], yerr=sub['Dr_err_rad2_s'],
+            marker=mrk, color=col, lw=2.2, capsize=4, markersize=7,
+            label=f"{lbl} $D_r$", zorder=3
+        )
+
+    sub_all = df_msad_fits_all[df_msad_fits_all['state'] == -1].sort_values(by='diameter_um')
+    if not sub_all.empty:
+        ax0.errorbar(
+            sub_all['diameter_um'], sub_all['Dr_rad2_s'], yerr=sub_all['Dr_err_rad2_s'],
+            marker='^', color='#444444', lw=2.0, linestyle='--', capsize=3.5, markersize=6.5,
+            label="All Tracks $D_r$", zorder=2
+        )
+
+    # Stokes-Einstein-Debye (SED) 理論値: Dr_SED = k_B * T / (pi * eta * d^3)
+    # T = 298.15 K, eta = 0.89e-3 Pa*s
+    kB_T = 1.380649e-23 * 298.15
+    eta_water = 0.89e-3
+    d_vals = np.logspace(np.log10(0.5), np.log10(25.0), 100)  # um
+    d_m = d_vals * 1e-6
+    dr_sed = kB_T / (np.pi * eta_water * (d_m ** 3))  # rad^2 / s
+    ax0.plot(d_vals, dr_sed, color='gray', linestyle=':', lw=1.8, label=r'SED Thermal $D_r^{\mathrm{SED}} \propto d^{-3}$')
+
+    ax0.set_xscale('log')
+    ax0.set_yscale('log')
+    ax0.set_xlabel(r"Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=11)
+    ax0.set_ylabel(r"Rotational Diffusion Coeff. $D_r$ [$\mathrm{rad}^2/\mathrm{s}$]", fontsize=11)
+    ax0.set_title(r"(a) Rotational Diffusion $D_r$ vs Diameter", fontsize=12, fontweight='bold')
+    ax0.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
+    ax0.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
+    ax0.grid(True, which="both", linestyle='--', alpha=0.4)
+    ax0.legend(loc='best', fontsize=8.2, frameon=True, framealpha=0.92)
+
+    # (b) 角度測定誤差 / 局在化ノイズ σ_θ vs 粒子径 d
+    ax1 = axes[1]
+    for s in range(n_components):
+        sub = df_msad_fits_all[df_msad_fits_all['state'] == s].sort_values(by='diameter_um')
+        if sub.empty:
+            continue
+        lbl = STATE_NAMES.get(n_components, {}).get(s, f"State {s}")
+        col = STATE_COLORS.get(s, f"C{s}")
+        mrk = 'o' if s == 0 else 's'
+        ax1.plot(
+            sub['diameter_um'], sub['sigma_theta_deg'],
+            marker=mrk, color=col, lw=2.2, markersize=7,
+            label=f"{lbl} $\\sigma_\\theta$", zorder=3
+        )
+
+    if not sub_all.empty:
+        ax1.plot(
+            sub_all['diameter_um'], sub_all['sigma_theta_deg'],
+            marker='^', color='#444444', lw=2.0, linestyle='--', markersize=6.5,
+            label=r"All Tracks $\sigma_\theta$", zorder=2
+        )
+
+    ax1.set_xscale('log')
+    ax1.set_xlabel(r"Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=11)
+    ax1.set_ylabel(r"Angular Localization Error $\sigma_\theta$ [$^\circ$]", fontsize=11)
+    ax1.set_title(r"(b) Angular Localization Noise $\sigma_\theta$ vs Diameter", fontsize=12, fontweight='bold')
+    ax1.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
+    ax1.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
+    ax1.grid(True, which="both", linestyle='--', alpha=0.4)
+    ax1.legend(loc='best', fontsize=8.2, frameon=True, framealpha=0.92)
+
+    # (c) Run vs Tumble の Dr 比 (Dr^Run / Dr^Tumble)
+    ax2 = axes[2]
+    sub_run = df_msad_fits_all[df_msad_fits_all['state'] == 1].set_index('bead_name')
+    sub_tum = df_msad_fits_all[df_msad_fits_all['state'] == 0].set_index('bead_name')
+
+    dias = []
+    ratios_dr = []
+    for binfo in BEADS_INFO:
+        bn = binfo['name']
+        if bn in sub_run.index and bn in sub_tum.index:
+            dr_r = sub_run.loc[bn, 'Dr_rad2_s']
+            dr_t = sub_tum.loc[bn, 'Dr_rad2_s']
+            if not np.isnan(dr_r) and not np.isnan(dr_t) and dr_t > 0:
+                dias.append(binfo['diameter_um'])
+                ratios_dr.append(dr_r / dr_t)
+
+    ax2.axhline(1.0, color='gray', linestyle=':', lw=1.2, label='Equal Ratio (1.0)')
+    if dias:
+        ax2.plot(dias, ratios_dr, marker='o', color='#9467bd', lw=2.2, markersize=7.5, label=r'$D_r^{\mathrm{Run}} / D_r^{\mathrm{Tumble}}$')
+
+    ax2.set_xscale('log')
+    ax2.set_xlabel(r"Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=11)
+    ax2.set_ylabel(r"Rotational Diffusion Ratio $D_r^{\mathrm{Run}} / D_r^{\mathrm{Tumble}}$", fontsize=11)
+    ax2.set_title(r"(c) Active Rotational Enhancement Ratio", fontsize=12, fontweight='bold')
+    ax2.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
+    ax2.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
+    ax2.grid(True, which="both", linestyle='--', alpha=0.4)
+    ax2.legend(loc='best', fontsize=8.5, frameon=True, framealpha=0.92)
+
+    fig.suptitle(
+        r"Rotational Dynamics Parameters ($D_r, \sigma_\theta$) Across Cargo Particle Diameters",
+        fontsize=13.5,
+        fontweight='bold',
+    )
+    fig.tight_layout()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches='tight')
+    png_path = output_path.with_suffix('.png')
+    if png_path != output_path:
+        fig.savefig(png_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[SAVED] {output_path} (and {png_path})", flush=True)
+
+
 def plot_run_abp_msd_fit_6panel(
     fitted_results: Dict[str, dict],
     output_path: Path,
@@ -1185,6 +1446,233 @@ def plot_run_abp_msd_fit_6panel(
     fig.suptitle(
         r"Run Mode MSD Fitted by Active Brownian Particle Model: $\langle \Delta r^2(t) \rangle = 4 D_t t + 2 v_0^2 \tau_r [ t - \tau_r (1 - e^{-t/\tau_r}) ]$",
         fontsize=13.0,
+        fontweight='bold',
+    )
+    fig.tight_layout()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches='tight')
+    png_path = output_path.with_suffix('.png')
+    if png_path != output_path:
+        fig.savefig(png_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[SAVED] {output_path} (and {png_path})", flush=True)
+
+
+def plot_tumble_diffusion_msd_fit_6panel(
+    fitted_results: Dict[str, dict],
+    output_path: Path,
+):
+    """
+    Tumble 状態の MSD 曲線に対して純粋ブラウン運動 (4 D_t \Delta t)
+    をフィッティングした結果の6パネルプロット。
+    """
+    fig, axes = plt.subplots(2, 3, figsize=(15.5, 9.5), sharex=True, sharey=True)
+    axes = axes.flatten()
+
+    for idx, binfo in enumerate(BEADS_INFO):
+        ax = axes[idx]
+        bname = binfo['name']
+        dia = binfo['diameter_um']
+
+        if bname not in fitted_results or 'tumble_diff_fit' not in fitted_results[bname]:
+            ax.set_visible(False)
+            continue
+
+        res = fitted_results[bname]
+        df_msd = res.get('df_msd', pd.DataFrame())
+        diff_res = res.get('tumble_diff_fit', {})
+
+        if df_msd.empty or not diff_res:
+            ax.set_visible(False)
+            continue
+
+        sub_tum = df_msd[df_msd['state'] == 0].sort_values(by='lag_time_s')
+        valid_pts = sub_tum[(sub_tum['msd_um2'] > 0) & np.isfinite(sub_tum['msd_um2'])]
+
+        if valid_pts.empty:
+            ax.set_visible(False)
+            continue
+
+        # 実測データ点
+        ax.errorbar(
+            valid_pts['lag_time_s'],
+            valid_pts['msd_um2'],
+            yerr=valid_pts['msd_sem_um2'],
+            fmt='o',
+            markersize=5,
+            lw=2.0,
+            color='#1f77b4',
+            ecolor='#1f77b4',
+            capsize=3,
+            label=r'Tumble MSD $\langle \Delta r^2 \rangle_{\mathrm{Tumble}}$',
+            zorder=4,
+        )
+
+        # 4 * Dt * t フィッティング直線
+        fit_t = diff_res.get('fit_t', np.array([]))
+        fit_msd = diff_res.get('fit_msd', np.array([]))
+        Dt = diff_res.get('Dt_um2_s', np.nan)
+        Dt_err = diff_res.get('Dt_err_um2_s', np.nan)
+        r2 = diff_res.get('r_squared', np.nan)
+
+        # Stokes-Einstein 理論値: D_th = k_B * T / (3 * pi * eta * d) [um^2/s]
+        d_m = dia * 1e-6
+        d_th_um2_s = (1.380649e-23 * 298.15 / (3.0 * np.pi * 0.89e-3 * d_m)) * 1e12
+
+        if len(fit_t) > 0 and not np.isnan(Dt):
+            ax.plot(
+                fit_t, fit_msd,
+                color='#d95f02', lw=2.2, linestyle='-',
+                label=r'Brownian Fit ($4 D_t \Delta t$)',
+                zorder=3,
+            )
+
+            # Stokes-Einstein 熱拡散線: 4 * D_th * t
+            msd_th = 4.0 * d_th_um2_s * fit_t
+            ax.plot(fit_t, msd_th, color='#888888', linestyle=':', lw=1.5, alpha=0.8, label=r'Stokes-Einstein ($4 D_{\mathrm{th}} \Delta t$)')
+
+            # パラメータテキスト
+            r2_str = f"$R^2 = {r2:.3f}$" if not np.isnan(r2) else ""
+            txt = (
+                f"$D_t^{{\\mathrm{{Tumble}}}} = {Dt:.5f} \\pm {Dt_err:.5f}\\,\\mu\\mathrm{{m^2/s}}$\n"
+                f"$D_{{\\mathrm{{th}}}} = {d_th_um2_s:.5f}\\,\\mu\\mathrm{{m^2/s}}$\n"
+                f"$D_t / D_{{\\mathrm{{th}}}} = {Dt / (d_th_um2_s + 1e-12):.2f}$\n"
+                f"{r2_str}"
+            )
+            ax.text(
+                0.05, 0.95, txt,
+                transform=ax.transAxes,
+                va='top', ha='left',
+                fontsize=8.5,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.88, edgecolor='#cccccc'),
+                zorder=5,
+            )
+
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        ax.set_title(f"$d = {dia:.2f}\\,\\mu\\mathrm{{m}}$", fontsize=12, fontweight='bold')
+        ax.grid(True, which="both", linestyle='--', alpha=0.4)
+        ax.legend(loc='lower right', fontsize=7.8, frameon=True, framealpha=0.9)
+
+        if idx >= 3:
+            ax.set_xlabel(r"Lag Time $\Delta t$ [s]", fontsize=11)
+        if idx % 3 == 0:
+            ax.set_ylabel(r"MSD $\langle \Delta r^2 \rangle$ [$\mu\mathrm{m}^2$]", fontsize=11)
+
+    fig.suptitle(
+        r"Tumble State MSD Fitted by Pure Diffusion Model: $\langle \Delta r^2(\Delta t) \rangle = 4 D_t \Delta t$",
+        fontsize=13.5,
+        fontweight='bold',
+    )
+    fig.tight_layout()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches='tight')
+    png_path = output_path.with_suffix('.png')
+    if png_path != output_path:
+        fig.savefig(png_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[SAVED] {output_path} (and {png_path})", flush=True)
+
+
+def plot_diffusion_coefficients_vs_diameter(
+    df_tumble_diff: pd.DataFrame,
+    df_abp_summary: pd.DataFrame,
+    output_path: Path,
+):
+    """
+    粒子径 vs Tumble 拡散係数 D_t^Tumble, Run 拡散係数 D_t^Run, および Stokes-Einstein 熱拡散理論線 D_th の比較プロット。
+    """
+    if df_tumble_diff.empty:
+        return
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5.2))
+
+    df_tum = df_tumble_diff.sort_values(by='diameter_um')
+    df_run = df_abp_summary.sort_values(by='diameter_um') if not df_abp_summary.empty else pd.DataFrame()
+
+    # (a) D_t vs 粒子径 d
+    ax0 = axes[0]
+    ax0.errorbar(
+        df_tum['diameter_um'], df_tum['Dt_tumble_um2_s'], yerr=df_tum['Dt_tumble_err_um2_s'],
+        marker='o', color='#1f77b4', lw=2.2, capsize=4, markersize=7,
+        label=r'Tumble $D_t^{\mathrm{Tumble}}$ ($4 D_t \Delta t$)', zorder=4
+    )
+    if not df_run.empty and 'Dt_um2_s' in df_run.columns:
+        ax0.errorbar(
+            df_run['diameter_um'], df_run['Dt_um2_s'], yerr=df_run['Dt_err_um2_s'],
+            marker='s', color='#d95f02', lw=2.0, capsize=3.5, markersize=6.5,
+            label=r'Run $D_t^{\mathrm{Run}}$ (ABP Model)', zorder=3
+        )
+
+    # Stokes-Einstein 理論線: D_th = k_B * T / (3 * pi * eta * d)
+    d_fine = np.logspace(np.log10(0.5), np.log10(25.0), 100)
+    d_m_fine = d_fine * 1e-6
+    d_th_fine = (1.380649e-23 * 298.15 / (3.0 * np.pi * 0.89e-3 * d_m_fine)) * 1e12
+    ax0.plot(d_fine, d_th_fine, color='gray', linestyle=':', lw=1.8, label=r'Stokes-Einstein Thermal $D_{\mathrm{th}} \propto d^{-1}$')
+
+    ax0.set_xscale('log')
+    ax0.set_yscale('log')
+    ax0.set_xlabel(r"Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=11)
+    ax0.set_ylabel(r"Translational Diffusion Coeff. $D_t$ [$\mu\mathrm{m}^2/\mathrm{s}$]", fontsize=11)
+    ax0.set_title(r"(a) Translational Diffusion $D_t$ vs Diameter", fontsize=12, fontweight='bold')
+    ax0.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
+    ax0.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
+    ax0.grid(True, which="both", linestyle='--', alpha=0.4)
+    ax0.legend(loc='best', fontsize=8.2, frameon=True, framealpha=0.92)
+
+    # (b) 比 D_t / D_th vs 粒子径 d
+    ax1 = axes[1]
+    ax1.plot(
+        df_tum['diameter_um'], df_tum['ratio_Dt_to_thermal'],
+        marker='o', color='#1f77b4', lw=2.2, markersize=7,
+        label=r'Tumble $D_t^{\mathrm{Tumble}} / D_{\mathrm{th}}$', zorder=4
+    )
+    if not df_run.empty and 'Dt_um2_s' in df_run.columns:
+        df_merged = pd.merge(df_run, df_tum[['bead_name', 'D_thermal_um2_s']], on='bead_name')
+        ratio_run = df_merged['Dt_um2_s'] / (df_merged['D_thermal_um2_s'] + 1e-12)
+        ax1.plot(
+            df_merged['diameter_um'], ratio_run,
+            marker='s', color='#d95f02', lw=2.0, markersize=6.5,
+            label=r'Run $D_t^{\mathrm{Run}} / D_{\mathrm{th}}$', zorder=3
+        )
+
+    ax1.axhline(1.0, color='gray', linestyle='--', lw=1.2, label='Pure Thermal (Ratio = 1.0)')
+    ax1.set_xscale('log')
+    ax1.set_yscale('log')
+    ax1.set_xlabel(r"Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=11)
+    ax1.set_ylabel(r"Ratio to Thermal Diffusion $D_t / D_{\mathrm{th}}$", fontsize=11)
+    ax1.set_title(r"(b) Ratio to Thermal Stokes-Einstein Diffusion", fontsize=12, fontweight='bold')
+    ax1.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
+    ax1.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
+    ax1.grid(True, which="both", linestyle='--', alpha=0.4)
+    ax1.legend(loc='best', fontsize=8.2, frameon=True, framealpha=0.92)
+
+    # (c) Tumble vs Run 比 (Dt^Run / Dt^Tumble)
+    ax2 = axes[2]
+    if not df_run.empty and 'Dt_um2_s' in df_run.columns:
+        df_comp = pd.merge(df_run[['bead_name', 'diameter_um', 'Dt_um2_s']], df_tum[['bead_name', 'Dt_tumble_um2_s']], on='bead_name').sort_values(by='diameter_um')
+        ratios_dt = df_comp['Dt_um2_s'] / (df_comp['Dt_tumble_um2_s'] + 1e-12)
+        ax2.plot(
+            df_comp['diameter_um'], ratios_dt,
+            marker='^', color='#2ca02c', lw=2.2, markersize=7.5,
+            label=r'$D_t^{\mathrm{Run}} / D_t^{\mathrm{Tumble}}$'
+        )
+
+    ax2.axhline(1.0, color='gray', linestyle=':', lw=1.2, label='Equal Ratio (1.0)')
+    ax2.set_xscale('log')
+    ax2.set_xlabel(r"Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=11)
+    ax2.set_ylabel(r"Translational Diffusion Ratio $D_t^{\mathrm{Run}} / D_t^{\mathrm{Tumble}}$", fontsize=11)
+    ax2.set_title(r"(c) Run vs Tumble Diffusion Ratio", fontsize=12, fontweight='bold')
+    ax2.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
+    ax2.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
+    ax2.grid(True, which="both", linestyle='--', alpha=0.4)
+    ax2.legend(loc='best', fontsize=8.5, frameon=True, framealpha=0.92)
+
+    fig.suptitle(
+        r"Translational Diffusion Parameters ($D_t^{\mathrm{Tumble}}, D_t^{\mathrm{Run}}, D_{\mathrm{th}}$) Across Cargo Diameters",
+        fontsize=13.5,
         fontweight='bold',
     )
     fig.tight_layout()
@@ -2349,7 +2837,7 @@ def plot_state_autocorrelations_grid(
     行0: 速度ベクトル自己相関 (VACF: Velocity Autocorrelation Function)
     行1: 配向方向自己相関 (OACF: Orientation Autocorrelation Function)
     行2: 速さスカラー自己相関 (SACF: Speed Autocorrelation Function)
-    および指数減衰フィッティング曲線 C(tau) = exp(-tau / tau_corr) を描画する。
+    の実測データおよび積分相関時間 tau_int を描画する。
     """
     fig, axes = plt.subplots(3, 6, figsize=(22, 10.5), sharex=True)
     corr_types = [
@@ -2388,36 +2876,25 @@ def plot_state_autocorrelations_grid(
                 lsty = '--' if s == 0 else '-'
 
                 fit_res = fits_dict.get(s, {}).get(ctype, {})
-                tau_c = fit_res.get('tau_corr_s', np.nan)
-                off_A = fit_res.get('offset_A', np.nan)
+                tau_int = fit_res.get('tau_int_zero_s', np.nan)
 
                 label_str = f"{s_lbl}"
-                if not np.isnan(tau_c):
-                    if not np.isnan(off_A) and abs(off_A) > 1e-4:
-                        label_str += f" ($\\tau={tau_c:.1f}\\,\\mathrm{{s}}, A={off_A:.2f}$)"
-                    else:
-                        label_str += f" ($\\tau={tau_c:.1f}\\,\\mathrm{{s}}$)"
+                if not np.isnan(tau_int):
+                    label_str += f" ($\\tau_{{\\mathrm{{int}}}}={tau_int:.1f}\\,\\mathrm{{s}}$)"
 
-                # データ点 + エラーバー
+                # データ点 + 折れ線 + エラーバー（フィッティング曲線は描画しない）
                 if 'sem' in sub_c.columns and not sub_c['sem'].isna().all():
                     ax.errorbar(
                         sub_c['lag_time_s'], sub_c['corr'], yerr=sub_c['sem'],
-                        fmt=mrk, color=col, ecolor=col, markersize=4, capsize=2,
-                        label=label_str, zorder=3, alpha=0.85
+                        fmt=mrk, color=col, ecolor=col, linestyle=lsty, lw=1.5,
+                        markersize=4.5, capsize=2, label=label_str, zorder=3, alpha=0.9
                     )
                 else:
                     ax.plot(
                         sub_c['lag_time_s'], sub_c['corr'],
-                        marker=mrk, color=col, linestyle='none', markersize=4,
-                        label=label_str, zorder=3, alpha=0.85
+                        marker=mrk, color=col, linestyle=lsty, lw=1.5,
+                        markersize=4.5, label=label_str, zorder=3, alpha=0.9
                     )
-
-                # フィッティング曲線
-                fit_t = fit_res.get('fit_t', np.array([]))
-                fit_y = fit_res.get('fit_corr', np.array([]))
-                if len(fit_t) > 0 and len(fit_y) > 0:
-                    mask_t = fit_t <= max_lag_s
-                    ax.plot(fit_t[mask_t], fit_y[mask_t], color=col, linestyle=lsty, lw=1.8, zorder=2, alpha=0.9)
 
             ax.grid(True, linestyle='--', alpha=0.4)
             ax.set_ylim(-0.25, 1.05)
@@ -2432,7 +2909,7 @@ def plot_state_autocorrelations_grid(
             ax.legend(loc='upper right', fontsize=7.2, frameon=True, framealpha=0.9)
 
     fig.suptitle(
-        r"State-Dependent Autocorrelation Functions & Offset Exponential Fits ($C(\tau) = (1-A)e^{-\tau/\tau_{\mathrm{corr}}} + A$)",
+        r"State-Dependent Autocorrelation Functions & Integral Correlation Times $\tau_{\mathrm{int}}$",
         fontsize=14,
         fontweight='bold',
     )
@@ -2454,7 +2931,7 @@ def plot_autocorrelation_timescales_vs_diameter(
     n_components: int = 2,
 ):
     """
-    粒子径 vs 各自己相関緩和時間 (tau_VACF, tau_OACF, tau_SACF) および Dwell time 緩和時間 (tau_dwell) の比較プロット。
+    粒子径 vs 各自己相関の積分相関時間 (tau_int,VACF, tau_int,OACF, tau_int,SACF) および Dwell time 緩和時間 (tau_dwell) の比較プロット。
     """
     if df_autocorr_summary.empty:
         return
@@ -2467,9 +2944,9 @@ def plot_autocorrelation_timescales_vs_diameter(
         'sacf': '#9467bd',  # 紫
     }
     mode_labels = {
-        'vacf': r'Velocity Vector $\tau_{\mathrm{VACF}}$',
-        'oacf': r'Orientation $\tau_{\mathrm{OACF}}$',
-        'sacf': r'Speed Fluctuation $\tau_{\mathrm{SACF}}$',
+        'vacf': r'Velocity Vector $\tau_{\mathrm{VACF}}^{\mathrm{int}}$',
+        'oacf': r'Orientation $\tau_{\mathrm{OACF}}^{\mathrm{int}}$',
+        'sacf': r'Speed Fluctuation $\tau_{\mathrm{SACF}}^{\mathrm{int}}$',
     }
     mode_markers = {
         'vacf': 'o',
@@ -2477,16 +2954,17 @@ def plot_autocorrelation_timescales_vs_diameter(
         'sacf': 's',
     }
 
-    # (a) Run モードの各緩和時間 vs 粒子径
+    # (a) Run モードの積分相関時間 vs 粒子径
     ax0 = axes[0]
     for mode in ['vacf', 'oacf', 'sacf']:
         sub = df_autocorr_summary[(df_autocorr_summary['state'] == 1) & (df_autocorr_summary['mode'] == mode)].sort_values(by='diameter_um')
         if sub.empty:
             continue
-        ax0.errorbar(
-            sub['diameter_um'], sub['tau_corr_s'], yerr=sub['tau_err_s'],
-            marker=mode_markers[mode], color=mode_colors[mode], lw=2.0, capsize=3.5,
-            markersize=6.5, label=mode_labels[mode], zorder=3
+        tau_val_col = 'tau_int_zero_s' if 'tau_int_zero_s' in sub.columns else 'tau_corr_s'
+        ax0.plot(
+            sub['diameter_um'], sub[tau_val_col],
+            marker=mode_markers[mode], color=mode_colors[mode], lw=2.2,
+            markersize=7.0, label=mode_labels[mode], zorder=3
         )
 
     # Run Dwell time 緩和時間も併記
@@ -2504,22 +2982,23 @@ def plot_autocorrelation_timescales_vs_diameter(
     ax0.set_yscale('log')
     ax0.set_xlabel(r"Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=11)
     ax0.set_ylabel(r"Relaxation Time $\tau$ [s]", fontsize=11)
-    ax0.set_title(r"(a) Run State Relaxation Timescales", fontsize=12, fontweight='bold')
+    ax0.set_title(r"(a) Run State Integral Timescales $\tau_{\mathrm{int}}$", fontsize=12, fontweight='bold')
     ax0.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
     ax0.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
     ax0.grid(True, which="both", linestyle='--', alpha=0.4)
     ax0.legend(loc='best', fontsize=8.5, frameon=True, framealpha=0.92)
 
-    # (b) Tumble モードの各緩和時間 vs 粒子径
+    # (b) Tumble モードの積分相関時間 vs 粒子径
     ax1 = axes[1]
     for mode in ['vacf', 'oacf', 'sacf']:
         sub = df_autocorr_summary[(df_autocorr_summary['state'] == 0) & (df_autocorr_summary['mode'] == mode)].sort_values(by='diameter_um')
         if sub.empty:
             continue
-        ax1.errorbar(
-            sub['diameter_um'], sub['tau_corr_s'], yerr=sub['tau_err_s'],
-            marker=mode_markers[mode], color=mode_colors[mode], lw=2.0, capsize=3.5,
-            markersize=6.5, label=mode_labels[mode], zorder=3
+        tau_val_col = 'tau_int_zero_s' if 'tau_int_zero_s' in sub.columns else 'tau_corr_s'
+        ax1.plot(
+            sub['diameter_um'], sub[tau_val_col],
+            marker=mode_markers[mode], color=mode_colors[mode], lw=2.2,
+            markersize=7.0, label=mode_labels[mode], zorder=3
         )
 
     df_tumble_state = df_state_summary[df_state_summary['state'] == 0].sort_values(by='diameter_um')
@@ -2536,13 +3015,13 @@ def plot_autocorrelation_timescales_vs_diameter(
     ax1.set_yscale('log')
     ax1.set_xlabel(r"Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=11)
     ax1.set_ylabel(r"Relaxation Time $\tau$ [s]", fontsize=11)
-    ax1.set_title(r"(b) Tumble State Relaxation Timescales", fontsize=12, fontweight='bold')
+    ax1.set_title(r"(b) Tumble State Integral Timescales $\tau_{\mathrm{int}}$", fontsize=12, fontweight='bold')
     ax1.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
     ax1.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
     ax1.grid(True, which="both", linestyle='--', alpha=0.4)
     ax1.legend(loc='best', fontsize=8.5, frameon=True, framealpha=0.92)
 
-    # (c) Run vs Tumble の 速度・配向 緩和時間比
+    # (c) Run vs Tumble の 積分相関時間比
     ax2 = axes[2]
     sub_run_v = df_autocorr_summary[(df_autocorr_summary['state'] == 1) & (df_autocorr_summary['mode'] == 'vacf')].set_index('bead_name')
     sub_tum_v = df_autocorr_summary[(df_autocorr_summary['state'] == 0) & (df_autocorr_summary['mode'] == 'vacf')].set_index('bead_name')
@@ -2555,10 +3034,10 @@ def plot_autocorrelation_timescales_vs_diameter(
     for binfo in BEADS_INFO:
         bn = binfo['name']
         if bn in sub_run_v.index and bn in sub_tum_v.index:
-            tv_r = sub_run_v.loc[bn, 'tau_corr_s']
-            tv_t = sub_tum_v.loc[bn, 'tau_corr_s']
-            to_r = sub_run_o.loc[bn, 'tau_corr_s'] if bn in sub_run_o.index else np.nan
-            to_t = sub_tum_o.loc[bn, 'tau_corr_s'] if bn in sub_tum_o.index else np.nan
+            tv_r = sub_run_v.loc[bn, 'tau_int_zero_s'] if 'tau_int_zero_s' in sub_run_v.columns else sub_run_v.loc[bn, 'tau_corr_s']
+            tv_t = sub_tum_v.loc[bn, 'tau_int_zero_s'] if 'tau_int_zero_s' in sub_tum_v.columns else sub_tum_v.loc[bn, 'tau_corr_s']
+            to_r = (sub_run_o.loc[bn, 'tau_int_zero_s'] if 'tau_int_zero_s' in sub_run_o.columns else sub_run_o.loc[bn, 'tau_corr_s']) if bn in sub_run_o.index else np.nan
+            to_t = (sub_tum_o.loc[bn, 'tau_int_zero_s'] if 'tau_int_zero_s' in sub_tum_o.columns else sub_tum_o.loc[bn, 'tau_corr_s']) if bn in sub_tum_o.index else np.nan
 
             dias.append(binfo['diameter_um'])
             ratio_vacf.append(tv_r / (tv_t + 1e-12) if not np.isnan(tv_r) and not np.isnan(tv_t) else np.nan)
@@ -2566,12 +3045,12 @@ def plot_autocorrelation_timescales_vs_diameter(
 
     ax2.axhline(1.0, color='gray', linestyle=':', lw=1.2, label='Equal Ratio (1.0)')
     if dias:
-        ax2.plot(dias, ratio_vacf, marker='o', color='#1f77b4', lw=2.0, markersize=7, label=r'VACF Ratio $\tau_{\mathrm{Run}} / \tau_{\mathrm{Tumble}}$')
-        ax2.plot(dias, ratio_oacf, marker='^', color='#2ca02c', lw=2.0, markersize=7, label=r'OACF Ratio $\tau_{\mathrm{Run}} / \tau_{\mathrm{Tumble}}$')
+        ax2.plot(dias, ratio_vacf, marker='o', color='#1f77b4', lw=2.0, markersize=7, label=r'VACF Ratio $\tau_{\mathrm{int}}^{\mathrm{Run}} / \tau_{\mathrm{int}}^{\mathrm{Tumble}}$')
+        ax2.plot(dias, ratio_oacf, marker='^', color='#2ca02c', lw=2.0, markersize=7, label=r'OACF Ratio $\tau_{\mathrm{int}}^{\mathrm{Run}} / \tau_{\mathrm{int}}^{\mathrm{Tumble}}$')
 
     ax2.set_xscale('log')
     ax2.set_xlabel(r"Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=11)
-    ax2.set_ylabel(r"Relaxation Time Ratio $\tau_{\mathrm{Run}} / \tau_{\mathrm{Tumble}}$", fontsize=11)
+    ax2.set_ylabel(r"Integral Time Ratio $\tau_{\mathrm{int}}^{\mathrm{Run}} / \tau_{\mathrm{int}}^{\mathrm{Tumble}}$", fontsize=11)
     ax2.set_title(r"(c) Run / Tumble Persistence Ratio", fontsize=12, fontweight='bold')
     ax2.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
     ax2.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
@@ -2579,12 +3058,11 @@ def plot_autocorrelation_timescales_vs_diameter(
     ax2.legend(loc='best', fontsize=8.5, frameon=True, framealpha=0.92)
 
     fig.suptitle(
-        r"Characteristic Relaxation Timescales of Velocity, Speed and Orientation Autocorrelations vs Diameter",
+        r"Characteristic Autocorrelation Integral Timescales $\tau_{\mathrm{int}}$ vs Diameter",
         fontsize=13.5,
         fontweight='bold',
     )
     fig.tight_layout()
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches='tight')
     png_path = output_path.with_suffix('.png')
@@ -2779,7 +3257,12 @@ def evaluate_model_selection_bic(
             try:
                 if k == 2:
                     if bname == 'beads5um':
-                        im = np.array([[-3.0], [0.0]])
+                        im = np.array([[np.log(0.02 + epsilon)], [np.log(0.09 + epsilon)]])
+                        ic = np.array([[[1.0]], [[0.1]]])
+                        isp = np.array([0.8, 0.2])
+                        it = np.array([[0.95, 0.05], [0.1, 0.9]])
+                    elif bname == 'beads7um':
+                        im = np.array([[np.log(0.02 + epsilon)], [np.log(0.07 + epsilon)]])
                         ic = np.array([[[1.0]], [[0.1]]])
                         isp = np.array([0.8, 0.2])
                         it = np.array([[0.95, 0.05], [0.1, 0.9]])
@@ -2797,6 +3280,17 @@ def evaluate_model_selection_bic(
                 bic_val, aic_val = model.compute_bic_aic(X, lengths=lengths)
                 log_lik = model.score(X, lengths=lengths)
 
+                # 分類エントロピーと ICL (Integrated Completed Likelihood)
+                if k == 1:
+                    entropy = 0.0
+                else:
+                    proba = model.predict_proba(X, lengths=lengths)
+                    safe_proba = np.where(proba > 1e-15, proba, 1.0)
+                    entropy = -np.sum(np.where(proba > 1e-15, proba * np.log(safe_proba), 0.0))
+
+                mean_entropy = entropy / len(X)
+                icl_val = bic_val + 2.0 * entropy
+
                 records.append({
                     'bead_name': bname,
                     'diameter_um': dia,
@@ -2805,10 +3299,14 @@ def evaluate_model_selection_bic(
                     'log_likelihood': log_lik,
                     'bic': bic_val,
                     'aic': aic_val,
+                    'entropy': entropy,
+                    'mean_entropy': mean_entropy,
+                    'icl': icl_val,
                     'bic_per_sample': bic_val / len(X),
                     'aic_per_sample': aic_val / len(X),
+                    'icl_per_sample': icl_val / len(X),
                 })
-                print(f"  {bname} (d={dia:.2f}um) K={k}: logLik={log_lik:.1f}, BIC={bic_val:.1f}, AIC={aic_val:.1f}", flush=True)
+                print(f"  {bname} (d={dia:.2f}um) K={k}: logLik={log_lik:.1f}, BIC={bic_val:.1f}, Ent={entropy:.1f}, ICL={icl_val:.1f}", flush=True)
             except Exception as e:
                 print(f"  [ERROR] {bname} K={k} fitting failed: {e}", flush=True)
 
@@ -2817,39 +3315,93 @@ def evaluate_model_selection_bic(
 
     df_bic = pd.DataFrame(records)
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    # 4パネル構成: (a) ΔBIC vs K, (b) Mean Entropy vs K, (c) ΔICL vs K, (d) ΔBIC(1->2) & ΔICL(1->2) vs Diameter
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    axes = axes.flatten()
+
+    delta_k1_k2_list = []
+
     for binfo in BEADS_INFO:
         bname = binfo['name']
         dia = binfo['diameter_um']
         df_b = df_bic[df_bic['bead_name'] == bname].sort_values(by='k_components')
-        if df_b.empty:
-            continue
-
         df_k2 = df_b[df_b['k_components'] == 2]
+        df_k1 = df_b[df_b['k_components'] == 1]
+
         if df_k2.empty:
             bic_base = df_b['bic'].iloc[0]
-            aic_base = df_b['aic'].iloc[0]
+            icl_base = df_b['icl'].iloc[0]
         else:
             bic_base = df_k2.iloc[0]['bic']
-            aic_base = df_k2.iloc[0]['aic']
+            icl_base = df_k2.iloc[0]['icl']
 
-        axes[0].plot(df_b['k_components'], df_b['bic'] - bic_base, marker=binfo['marker'], color=binfo['color'], label=f"$d={dia:.2f}\\,\\mu\\mathrm{{m}}$", lw=1.8)
-        axes[1].plot(df_b['k_components'], df_b['aic'] - aic_base, marker=binfo['marker'], color=binfo['color'], label=f"$d={dia:.2f}\\,\\mu\\mathrm{{m}}$", lw=1.8)
+        if not df_k1.empty and not df_k2.empty:
+            delta_bic_12 = df_k1.iloc[0]['bic'] - df_k2.iloc[0]['bic']
+            delta_icl_12 = df_k1.iloc[0]['icl'] - df_k2.iloc[0]['icl']
+            ent_k2 = df_k2.iloc[0]['mean_entropy']
+            delta_k1_k2_list.append({
+                'bead_name': bname,
+                'diameter_um': dia,
+                'delta_bic_12': delta_bic_12,
+                'delta_icl_12': delta_icl_12,
+                'mean_entropy_k2': ent_k2,
+                'marker': binfo['marker'],
+                'color': binfo['color'],
+            })
 
-    axes[0].set_title(r"$\Delta$BIC vs Number of States $K$ (1D Speed-Only)", fontsize=12, fontweight='bold')
+        lbl = f"$d={dia:.2f}\\,\\mu\\mathrm{{m}}$"
+        # (a) ΔBIC vs K
+        axes[0].plot(df_b['k_components'], df_b['bic'] - bic_base, marker=binfo['marker'], color=binfo['color'], label=lbl, lw=2.0, ms=7)
+        # (b) Mean Entropy vs K
+        axes[1].plot(df_b['k_components'], df_b['mean_entropy'], marker=binfo['marker'], color=binfo['color'], label=lbl, lw=2.0, ms=7)
+        # (c) ΔICL vs K
+        axes[2].plot(df_b['k_components'], df_b['icl'] - icl_base, marker=binfo['marker'], color=binfo['color'], label=lbl, lw=2.0, ms=7)
+
+    # (a)
+    axes[0].axhline(0, color='gray', linestyle=':', lw=1.2, alpha=0.7)
+    axes[0].set_title(r"(a) $\Delta\mathrm{BIC} = \mathrm{BIC}(K) - \mathrm{BIC}(2)$", fontsize=12, fontweight='bold')
     axes[0].set_xlabel("Number of Hidden States $K$", fontsize=11)
-    axes[0].set_ylabel(r"$\Delta\mathrm{BIC} = \mathrm{BIC}(K) - \mathrm{BIC}(2)$", fontsize=11)
+    axes[0].set_ylabel(r"$\Delta\mathrm{BIC}$", fontsize=11)
     axes[0].set_xticks(range(1, max_k + 1))
     axes[0].grid(True, linestyle='--', alpha=0.5)
     axes[0].legend(loc='best', fontsize=9, frameon=True)
 
-    axes[1].set_title(r"$\Delta$AIC vs Number of States $K$ (1D Speed-Only)", fontsize=12, fontweight='bold')
+    # (b)
+    axes[1].set_title(r"(b) Mean Classification Entropy $E/N = -\frac{1}{N} \sum_{t,k} \gamma_{t,k} \ln \gamma_{t,k}$", fontsize=12, fontweight='bold')
     axes[1].set_xlabel("Number of Hidden States $K$", fontsize=11)
-    axes[1].set_ylabel(r"$\Delta\mathrm{AIC} = \mathrm{AIC}(K) - \mathrm{AIC}(2)$", fontsize=11)
+    axes[1].set_ylabel("Mean Entropy per Sample (nats)", fontsize=11)
     axes[1].set_xticks(range(1, max_k + 1))
     axes[1].grid(True, linestyle='--', alpha=0.5)
 
-    fig.suptitle("HMM Model Selection via Information Criteria (1D Speed-Only Model)", fontsize=14, fontweight='bold')
+    # (c)
+    axes[2].axhline(0, color='gray', linestyle=':', lw=1.2, alpha=0.7)
+    axes[2].set_title(r"(c) $\Delta\mathrm{ICL} = \mathrm{ICL}(K) - \mathrm{ICL}(2) \quad (\mathrm{ICL} = \mathrm{BIC} + 2E)$", fontsize=12, fontweight='bold')
+    axes[2].set_xlabel("Number of Hidden States $K$", fontsize=11)
+    axes[2].set_ylabel(r"$\Delta\mathrm{ICL}$", fontsize=11)
+    axes[2].set_xticks(range(1, max_k + 1))
+    axes[2].grid(True, linestyle='--', alpha=0.5)
+
+    # (d) ΔBIC(1->2) & ΔICL(1->2) vs Diameter
+    if delta_k1_k2_list:
+        df_d = pd.DataFrame(delta_k1_k2_list).sort_values(by='diameter_um')
+        axes[3].axhline(0, color='black', linestyle='--', lw=1.2, alpha=0.6, label='Neutral Threshold (Δ=0)')
+        
+        # Plot ΔBIC(1->2) and ΔICL(1->2)
+        axes[3].plot(df_d['diameter_um'], df_d['delta_bic_12'], 'o-', color='#1f77b4', lw=2.0, ms=7, label=r'$\Delta\mathrm{BIC}(1 \to 2) = \mathrm{BIC}(1) - \mathrm{BIC}(2)$')
+        axes[3].plot(df_d['diameter_um'], df_d['delta_icl_12'], 's--', color='#d62728', lw=2.0, ms=7, label=r'$\Delta\mathrm{ICL}(1 \to 2) = \mathrm{ICL}(1) - \mathrm{ICL}(2)$')
+        
+        for _, row in df_d.iterrows():
+            axes[3].scatter(row['diameter_um'], row['delta_bic_12'], marker=row['marker'], color='#1f77b4', s=70, zorder=5)
+            axes[3].scatter(row['diameter_um'], row['delta_icl_12'], marker=row['marker'], color='#d62728', s=70, zorder=5)
+
+        axes[3].set_title(r"(d) 2-State Preference $\Delta\mathrm{Score}(1 \to 2)$ vs Diameter", fontsize=12, fontweight='bold')
+        axes[3].set_xlabel(r"Particle Diameter $d$ ($\mu\mathrm{m}$)", fontsize=11)
+        axes[3].set_ylabel(r"$\Delta\mathrm{Score}(1 \to 2)$ (Positive = 2-State Favored)", fontsize=11)
+        axes[3].set_xscale('log')
+        axes[3].grid(True, linestyle='--', alpha=0.5, which='both')
+        axes[3].legend(loc='best', fontsize=9, frameon=True)
+
+    fig.suptitle("HMM Model Selection & State Discreteness (BIC, Entropy & ICL)", fontsize=14, fontweight='bold')
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -2858,6 +3410,16 @@ def evaluate_model_selection_bic(
         fig.savefig(png_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"[SAVED] {output_path} (and {png_path})", flush=True)
+
+    # CSV の保存
+    csv_bic_path = output_path.parent / "hmm_model_selection_bic_icl.csv"
+    df_bic.to_csv(csv_bic_path, index=False)
+    print(f"[SAVED] {csv_bic_path}", flush=True)
+
+    if delta_k1_k2_list:
+        csv_sum_path = output_path.parent / "hmm_model_selection_k2_vs_k1_summary.csv"
+        df_d.to_csv(csv_sum_path, index=False)
+        print(f"[SAVED] {csv_sum_path}", flush=True)
 
     return df_bic
 
@@ -2878,6 +3440,7 @@ def main():
     parser.add_argument("--init_means_tumble", type=float, default=-3.5, help="Initial log-speed mean for Tumble state in K=2 (default: -3.5)")
     parser.add_argument("--init_means_run", type=float, default=0.0, help="Initial log-speed mean for Run state in K=2 (default: 0.0)")
     parser.add_argument("--min_dwell_frames", type=int, default=2, help="Minimum dwell duration in frames for isolated glitch filter (default: 2 = 8s, set <=1 to disable)")
+    parser.add_argument("--drop_edges", action="store_true", default=False, help="Drop boundary/edge dwell segments at track ends (default: False)")
     parser.add_argument("--eval_bic", action="store_true", help="Evaluate BIC/AIC for K=1..4 and generate ΔBIC(2->1) vs diameter plot")
     parser.add_argument("--save_csv", action="store_true", default=True, help="Save summary CSV tables")
 
@@ -2901,6 +3464,7 @@ def main():
         print(f"Init means (K=2): Tumble={args.init_means_tumble}, Run={args.init_means_run}")
     if args.min_dwell_frames >= 2:
         print(f"Glitch filter:    Enabled (min_dwell >= {args.min_dwell_frames} frames = {args.min_dwell_frames * args.frame_interval:.1f} s)")
+    print(f"Drop edge dwells: {args.drop_edges}")
     print("=================================================================\n")
 
     if args.beads == "all":
@@ -2918,8 +3482,11 @@ def main():
     all_conf_records = []
     all_msd_curves = []
     all_msd_fits = []
+    all_msad_curves = []
+    all_msad_fits = []
     all_autocorr_records = []
     all_abp_records = []
+    all_tumble_diff_records = []
 
     for binfo in target_bead_infos:
         bname = binfo['name']
@@ -3105,6 +3672,10 @@ def main():
                         'mode': ctype,
                         'tau_corr_s': f_res.get('tau_corr_s', np.nan),
                         'tau_err_s': f_res.get('tau_err_s', np.nan),
+                        'tau_int_zero_s': f_res.get('tau_int_zero_s', np.nan),
+                        'tau_int_window_s': f_res.get('tau_int_window_s', np.nan),
+                        'tau_int_corrected_s': f_res.get('tau_int_corrected_s', np.nan),
+                        't_zero_crossing_s': f_res.get('t_zero_crossing_s', np.nan),
                         'offset_A': f_res.get('offset_A', np.nan),
                         'offset_A_err': f_res.get('offset_A_err', np.nan),
                         'r_squared': f_res.get('r_squared', np.nan),
@@ -3137,6 +3708,54 @@ def main():
         else:
             abp_fit_res = {}
 
+        # Tumble 状態 (State 0) の MSD に対する純粋ブラウン拡散 (4 * Dt * t) フィッティング
+        sub_tum_msd = df_msd[df_msd['state'] == 0].sort_values(by='lag_time_s')
+        if not sub_tum_msd.empty:
+            tum_diff_res = hc.fit_tumble_brownian_msd(
+                sub_tum_msd['lag_time_s'].values,
+                sub_tum_msd['msd_um2'].values,
+                sem_vals=sub_tum_msd['msd_sem_um2'].values if 'msd_sem_um2' in sub_tum_msd.columns else None,
+                fit_max_tau_s=40.0,
+            )
+            d_m = dia * 1e-6
+            d_th_um2_s = (1.380649e-23 * 298.15 / (3.0 * np.pi * 0.89e-3 * d_m)) * 1e12
+            all_tumble_diff_records.append({
+                'bead_name': bname,
+                'diameter_um': dia,
+                'Dt_tumble_um2_s': tum_diff_res.get('Dt_um2_s', np.nan),
+                'Dt_tumble_err_um2_s': tum_diff_res.get('Dt_err_um2_s', np.nan),
+                'D_thermal_um2_s': d_th_um2_s,
+                'ratio_Dt_to_thermal': tum_diff_res.get('Dt_um2_s', np.nan) / (d_th_um2_s + 1e-12),
+                'r_squared': tum_diff_res.get('r_squared', np.nan),
+                'fit_points': tum_diff_res.get('count', 0),
+            })
+        else:
+            tum_diff_res = {}
+
+        # 状態別 MSAD (Mean Squared Angular Displacement) の算出 & 線形フィッティング
+        df_msad = hc.calc_state_dependent_msad(
+            df_obs,
+            max_tau=25,
+            frame_interval=args.frame_interval,
+            min_segment_len=3,
+            n_components=args.n_components,
+        )
+        df_msad_fits = hc.fit_msad_linear(
+            df_msad,
+            fit_min_tau_s=args.frame_interval,
+            fit_max_tau_s=30.0,
+            min_points=3,
+            n_components=args.n_components,
+        )
+        if not df_msad.empty:
+            df_msad['bead_name'] = bname
+            df_msad['diameter_um'] = dia
+            all_msad_curves.append(df_msad)
+        if not df_msad_fits.empty:
+            df_msad_fits['bead_name'] = bname
+            df_msad_fits['diameter_um'] = dia
+            all_msad_fits.append(df_msad_fits)
+
         fitted_results[bname] = {
             'X': X,
             'lengths': lengths,
@@ -3152,10 +3771,13 @@ def main():
             'autocorrelations': autocorr_data,
             'autocorr_fits': autocorr_fits,
             'abp_fit': abp_fit_res,
+            'tumble_diff_fit': tum_diff_res,
             'markov_check': markov_res,
             'summary': df_state_sum,
             'df_msd': df_msd,
             'df_msd_fits': df_fits,
+            'df_msad': df_msad,
+            'df_msad_fits': df_msad_fits,
         }
 
         print("  State summary:")
@@ -3249,6 +3871,20 @@ def main():
         fig10_path = output_dir / f"hmm_state_msd_params_vs_diameter_k{args.n_components}.png"
         plot_state_msd_params_vs_diameter(df_msd_fits_all, fig10_path, n_components=args.n_components)
 
+    # 10b. 状態別 MSAD (平均二乗角度変位) (6パネル) & パラメータ (Dr, sigma_theta) vs 粒子径
+    df_msad_curves_all = pd.concat(all_msad_curves, ignore_index=True) if all_msad_curves else pd.DataFrame()
+    df_msad_fits_all = pd.concat(all_msad_fits, ignore_index=True) if all_msad_fits else pd.DataFrame()
+    if len(fitted_results) > 1 and args.n_components == 2:
+        fig_msad_path = output_dir / f"hmm_msad_6panel_k{args.n_components}.svg"
+        plot_state_dependent_msad_6panel(fitted_results, fig_msad_path, n_components=args.n_components)
+
+        fig_msad_params_path = output_dir / f"hmm_msad_params_vs_diameter_k{args.n_components}.svg"
+        plot_msad_params_vs_diameter(df_msad_fits_all, fig_msad_params_path, n_components=args.n_components)
+
+        if not df_msad_fits_all.empty and args.save_csv:
+            safe_save_csv(df_msad_curves_all, output_dir / f"hmm_msad_curves_k{args.n_components}.csv")
+            safe_save_csv(df_msad_fits_all, output_dir / f"hmm_msad_fits_summary_k{args.n_components}.csv")
+
     # 11. 状態分離度 S_v vs 粒子径 (2パネル)
     if len(fitted_results) > 1 and args.n_components == 2:
         fig_sep_path = output_dir / "hmm_separation_index_vs_diameter.svg"
@@ -3317,6 +3953,18 @@ def main():
 
         if not df_abp_summary.empty and args.save_csv:
             safe_save_csv(df_abp_summary, output_dir / "hmm_run_abp_fits_summary_k2.csv")
+
+    # 11h. Tumble 状態の純粋ブラウン運動 (4 D_t \Delta t) フィッティング (6パネル) & 拡散係数 vs 粒子径
+    df_tumble_diff = pd.DataFrame(all_tumble_diff_records)
+    if len(fitted_results) > 1 and args.n_components == 2:
+        fig_tum_msd_path = output_dir / "hmm_tumble_brownian_msd_fit_6panel_k2.svg"
+        plot_tumble_diffusion_msd_fit_6panel(fitted_results, fig_tum_msd_path)
+
+        fig_tum_params_path = output_dir / "hmm_diffusion_parameters_vs_diameter_k2.svg"
+        plot_diffusion_coefficients_vs_diameter(df_tumble_diff, df_abp_summary, fig_tum_params_path)
+
+        if not df_tumble_diff.empty and args.save_csv:
+            safe_save_csv(df_tumble_diff, output_dir / "hmm_tumble_diffusion_fits_summary_k2.csv")
 
     # 12. BIC / AIC モデル選択評価 & ΔBIC_{2->1} 解析
     if args.eval_bic or (len(fitted_results) > 1 and args.beads == "all"):

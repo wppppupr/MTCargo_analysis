@@ -317,17 +317,19 @@ pixi run python vacf_analysis.py --mode all_with_fluc --fit
 | `angle_change_fluctuation` | **角度変化ゆらぎ自己相関** | $\frac{\langle \delta\Delta\theta(t) \delta\Delta\theta(t+\Delta t) \rangle}{\langle (\delta\Delta\theta)^2 \rangle}$ | 平均回転角を差し引いた角度変化ゆらぎの自己相関 |
 
 - **指数減衰フィッティングモデル (`--fit`)**:
+  実測の第1フレーム（$\Delta t \ge 4\,\mathrm{s}$）以降の正のテール領域を対象に、$\Delta t = 0$ を除外してオフセット定数付き単一指数減衰をフィッティングします：
   $$
-  f(\Delta t) = (1 - A) \exp\left( - \frac{\Delta t}{\xi} \right) + A
+  f(\Delta t) = A \exp\left( - \frac{\Delta t - 4}{\tau} \right) + C \quad (\Delta t \ge 4\,\mathrm{s})
   $$
-  - $\xi$: 特性減衰時間・相関時間 (Decay correlation time [s])
-  - $A$: 長時間漸近オフセット (Asymptotic offset)
-  - $\Delta t = 0$ で $f(0) = 1$ を満たす物理的モデル
+  - $A$: 減衰振幅 (Amplitude)
+  - $\tau$: 特性相関時間・減衰時間 (Decay correlation time [s])
+  - $C$: オフセット定数・長時間漸近値 (Constant baseline offset)
+  - 実測第1フレーム以降の正のテール領域のみを抽出して評価
 
 #### 📂 主な出力ファイル (`figure/autocorrelation/`)
 - `VELOCITY_ACF.svg/.png`, `ORIENTATION_ACF.svg/.png`, `SPEED_ACF.svg/.png` (各モードの全ビーズ比較図、フィット曲線入り)
 - `all_ACF_comparison.svg/.png` (3モード横並び総合比較プロット)
-- `ACF_fits_summary.csv` (全ビーズ・各モードの相関時間 $\xi$, オフセット $A$, 決定係数 $R^2$)
+- `ACF_fits_summary.csv` (全ビーズ・各モードの振幅 $A$, 相関時間 $\tau$, オフセット $C$, 決定係数 $R^2$)
 - `VELOCITY_summary.csv`, `ORIENTATION_summary.csv`, `SPEED_summary.csv` (各 lag time の平均値・標準偏差・実験数)
 
 ---

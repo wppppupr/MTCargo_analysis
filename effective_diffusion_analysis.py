@@ -45,8 +45,20 @@ def main():
         help="Path to Run ABP MSD fits summary CSV (default: figure/hmm_1d/hmm_run_abp_fits_summary_k2.csv)."
     )
     parser.add_argument(
-        '--max_lag', type=int, default=50,
-        help="Maximum lag time in frames for VACF calculation (default: 50 frames = 200s)."
+        '--autocorr_summary', type=str, default=None,
+        help="Path to autocorrelation summary CSV (default: figure/hmm_1d/hmm_autocorrelation_summary_k2.csv)."
+    )
+    parser.add_argument(
+        '--state_msd_fits', type=str, default=None,
+        help="Path to state MSD fits summary CSV (default: figure/hmm_1d/hmm_state_msd_fits_k2.csv)."
+    )
+    parser.add_argument(
+        '--state_msd_curves', type=str, default=None,
+        help="Path to state MSD curves CSV (default: figure/hmm_1d/hmm_state_msd_curves_k2.csv)."
+    )
+    parser.add_argument(
+        '--max_lag', type=int, default=100,
+        help="Maximum lag time in frames for VACF calculation (default: 100 frames = 400s)."
     )
     parser.add_argument(
         '--frame_interval', type=float, default=4.0,
@@ -57,9 +69,10 @@ def main():
         help="Spatial scale in um/pixel (default: 0.11)."
     )
     parser.add_argument(
-        '--max_lag_time', type=float, default=200.0,
-        help="Upper integration limit for Green-Kubo integral in seconds (default: 200.0)."
+        '--max_lag_time', type=float, default=400.0,
+        help="Upper integration limit for Green-Kubo integral in seconds (default: 400.0)."
     )
+
 
     args = parser.parse_args()
 
@@ -71,6 +84,9 @@ def main():
         hmm_summary_path=args.hmm_summary,
         angle_summary_path=args.angle_summary,
         abp_summary_path=args.abp_summary,
+        state_msd_fits_path=args.state_msd_fits,
+        state_msd_curves_path=args.state_msd_curves,
+        autocorr_summary_path=args.autocorr_summary,
         max_timeshift_frames=args.max_lag,
         frame_interval=args.frame_interval,
         scale=args.scale,

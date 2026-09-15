@@ -375,7 +375,7 @@ def calc_state_dwell_times(
     states: np.ndarray,
     lengths: List[int],
     frame_interval: float = 4.0,
-    drop_edges: bool = True,
+    drop_edges: bool = False,
 ) -> Dict[int, List[float]]:
     """復号された状態系列から各状態の持続時間（Dwell time [s]）を抽出。"""
     n_states = int(np.max(states)) + 1 if len(states) > 0 else 0
@@ -1104,6 +1104,301 @@ def calc_state_dependent_msd(
     return df_msd, df_fits
 
 
+def calc_state_dependent_msad(
+    df_obs: pd.DataFrame,
+    max_tau: int = 25,
+    frame_interval: float = 4.0,
+    min_segment_len: int = 3,
+    n_components: int = 2,
+) -> pd.DataFrame:
+    """
+    各運動モード（All, Run, Tumble）における平均二乗角度変位
+    MSAD: <(Δθ(τ))^2> を算出する。
+
+    各軌跡・セグメントにおいて、瞬時進行方向角 θ = arctan2(dy, dx) を
+    np.unwrap でアンラップして連続化し、ラグ τ における角度変化
+    Δθ(τ) = θ(t+τ) - θ(t) の二乗平均を計算する。
+
+    Parameters
+    ----------
+    df_obs : pd.DataFrame
+        'dx_um', 'dy_um', 'frame', 'particle', 'pred_state' を含む DataFrame
+    max_tau : int, default 25
+        最大ラグステップ数
+    frame_interval : float, default 4.0
+        フレーム間隔 [s]
+    min_segment_len : int, default 3
+        計算に含める最小セグメント長
+    n_components : int, default 2
+        HMM 状態数
+
+    Returns
+    -------
+    pd.DataFrame:
+        'state', 'state_label', 'tau_step', 'lag_time_s', 'msad_rad2', 'msad_deg2', 'msad_std_rad2', 'msad_sem_rad2', 'count'
+    """
+    if df_obs.empty or 'pred_state' not in df_obs.columns:
+        return pd.DataFrame()
+
+    # 状態ごとの二乗角度変位リスト: state -> tau -> list of (dtheta)^2
+    state_dtheta2 = {s: {tau: [] for tau in range(1, max_tau + 1)} for s in range(n_components)}
+    all_dtheta2 = {tau: [] for tau in range(1, max_tau + 1)}
+
+    group_cols = ['exp_dir', 'particle'] if 'exp_dir' in df_obs.columns else ['particle']
+
+    for _, group in df_obs.groupby(group_cols):
+        df_p = group.sort_values(by='frame')
+        frames = df_p['frame'].to_numpy()
+        dx = df_p['dx_um'].to_numpy()
+        dy = df_p['dy_um'].to_numpy()
+        states = df_p['pred_state'].to_numpy()
+
+        n = len(frames)
+        if n < min_segment_len:
+            continue
+
+        # 瞬時方向角 θ [rad]
+        angles = np.arctan2(dy, dx)
+
+        # 1. 全体 (All States) の連続フレームセグメントを抽出
+        frame_diffs = np.diff(frames)
+        all_split_idx = np.where(frame_diffs != 1)[0] + 1
+        all_starts = np.concatenate([[0], all_split_idx])
+        all_ends = np.concatenate([all_split_idx, [n]])
+
+        for a_start, a_end in zip(all_starts, all_ends):
+            seg_len = a_end - a_start
+            if seg_len < min_segment_len:
+                continue
+            ang_seg = angles[a_start:a_end]
+            unwrapped_theta = np.unwrap(ang_seg)
+
+            for tau in range(1, min(max_tau + 1, seg_len)):
+                d_th = unwrapped_theta[tau:] - unwrapped_theta[:-tau]
+                all_dtheta2[tau].extend((d_th**2).tolist())
+
+        # 2. 状態ごとの連続フレームセグメントを抽出
+        state_diffs = np.diff(states)
+        split_idx = np.where((frame_diffs != 1) | (state_diffs != 0))[0] + 1
+        seg_starts = np.concatenate([[0], split_idx])
+        seg_ends = np.concatenate([split_idx, [n]])
+
+        for s_start, s_end in zip(seg_starts, seg_ends):
+            seg_len = s_end - s_start
+            if seg_len < min_segment_len:
+                continue
+
+            st = states[s_start]
+            ang_seg = angles[s_start:s_end]
+            unwrapped_theta = np.unwrap(ang_seg)
+
+            for tau in range(1, min(max_tau + 1, seg_len)):
+                d_th = unwrapped_theta[tau:] - unwrapped_theta[:-tau]
+                state_dtheta2[st][tau].extend((d_th**2).tolist())
+
+    # 集計 DataFrame の作成
+    msad_records = []
+    # 各状態
+    for s in range(n_components):
+        s_lbl = "Tumble / Pause" if s == 0 else ("Run" if s == 1 else f"State {s}")
+        for tau in range(1, max_tau + 1):
+            vals = np.array(state_dtheta2[s][tau])
+            if len(vals) > 0:
+                mean_msad = float(np.mean(vals))
+                std_msad = float(np.std(vals))
+                sem_msad = float(std_msad / np.sqrt(len(vals)))
+                n_count = len(vals)
+            else:
+                mean_msad, std_msad, sem_msad, n_count = np.nan, np.nan, np.nan, 0
+
+            msad_records.append({
+                'state': s,
+                'state_label': s_lbl,
+                'tau_step': tau,
+                'lag_time_s': tau * frame_interval,
+                'msad_rad2': mean_msad,
+                'msad_deg2': mean_msad * ((180.0 / np.pi)**2) if np.isfinite(mean_msad) else np.nan,
+                'msad_std_rad2': std_msad,
+                'msad_sem_rad2': sem_msad,
+                'sem_rad2': sem_msad,
+                'count': n_count,
+            })
+
+    # 全体 (All)
+    for tau in range(1, max_tau + 1):
+        vals = np.array(all_dtheta2[tau])
+        if len(vals) > 0:
+            mean_msad = float(np.mean(vals))
+            std_msad = float(np.std(vals))
+            sem_msad = float(std_msad / np.sqrt(len(vals)))
+            n_count = len(vals)
+        else:
+            mean_msad, std_msad, sem_msad, n_count = np.nan, np.nan, np.nan, 0
+
+        msad_records.append({
+            'state': -1,
+            'state_label': "All",
+            'tau_step': tau,
+            'lag_time_s': tau * frame_interval,
+            'msad_rad2': mean_msad,
+            'msad_deg2': mean_msad * ((180.0 / np.pi)**2) if np.isfinite(mean_msad) else np.nan,
+            'msad_std_rad2': std_msad,
+            'msad_sem_rad2': sem_msad,
+            'sem_rad2': sem_msad,
+            'count': n_count,
+        })
+
+    return pd.DataFrame(msad_records)
+
+
+def fit_msad_linear(
+    df_msad: pd.DataFrame,
+    fit_min_tau_s: float = 4.0,
+    fit_max_tau_s: float = 30.0,
+    min_points: int = 3,
+    n_components: int = 2,
+) -> pd.DataFrame:
+    """
+    MSAD 曲線に対し、理論式:
+    <(Δθ(τ))^2> = 2 * Dr * τ + 2 * σ_θ^2
+    を線形フィッティングして回転拡散係数 Dr [rad^2/s] および 測定誤差分散 σ_θ^2 [rad^2] を推定する。
+
+    Parameters
+    ----------
+    df_msad : pd.DataFrame
+        calc_state_dependent_msad の戻り値
+    fit_min_tau_s : float, default 4.0
+        フィッティングに使用する最小ラグ時間 [s]
+    fit_max_tau_s : float, default 40.0
+        フィッティングに使用する最大ラグ時間 [s]
+    min_points : int, default 3
+        フィッティングに必要な最小点数
+    n_components : int, default 2
+        HMM 状態数
+
+    Returns
+    -------
+    pd.DataFrame:
+        'state', 'state_label', 'Dr_rad2_s', 'Dr_err_rad2_s', 'Dr_deg2_s',
+        'sigma_theta_sq_rad2', 'sigma_theta_sq_err_rad2', 'sigma_theta_rad', 'sigma_theta_deg',
+        'intercept_rad2', 'r_squared', 'fit_points'
+    """
+    if df_msad is None or df_msad.empty:
+        return pd.DataFrame()
+
+    fit_records = []
+    target_states = list(range(n_components)) + [-1]
+
+    for s in target_states:
+        s_lbl = "All" if s == -1 else ("Tumble / Pause" if s == 0 else ("Run" if s == 1 else f"State {s}"))
+        sub_df = df_msad[
+            (df_msad['state'] == s) &
+            (df_msad['lag_time_s'] >= fit_min_tau_s - 1e-6) &
+            (df_msad['lag_time_s'] <= fit_max_tau_s + 1e-6) &
+            (df_msad['msad_rad2'] > 0) &
+            (~df_msad['msad_rad2'].isna())
+        ].sort_values(by='lag_time_s')
+
+        if len(sub_df) < min_points:
+            fit_records.append({
+                'state': s,
+                'state_label': s_lbl,
+                'Dr_rad2_s': np.nan,
+                'Dr_err_rad2_s': np.nan,
+                'Dr_deg2_s': np.nan,
+                'sigma_theta_sq_rad2': np.nan,
+                'sigma_theta_sq_err_rad2': np.nan,
+                'sigma_theta_rad': np.nan,
+                'sigma_theta_deg': np.nan,
+                'intercept_rad2': np.nan,
+                'r_squared': np.nan,
+                'fit_points': len(sub_df),
+            })
+            continue
+
+        t_data = sub_df['lag_time_s'].to_numpy(dtype=float)
+        y_data = sub_df['msad_rad2'].to_numpy(dtype=float)
+        sem_data = sub_df['msad_sem_rad2'].to_numpy(dtype=float) if 'msad_sem_rad2' in sub_df.columns else None
+
+        # 線形モデル: y = m * t + c  (m = 2 * Dr, c = 2 * sigma_theta^2)
+        def _lin_model(t, Dr, sigma_theta_sq):
+            return 2.0 * Dr * t + 2.0 * sigma_theta_sq
+
+        # 重み付きフィッティング
+        sigma = sem_data if sem_data is not None and np.all(sem_data > 0) and np.all(np.isfinite(sem_data)) else None
+
+        try:
+            # 初期値
+            slope_init = max(1e-5, (y_data[-1] - y_data[0]) / max(1.0, (t_data[-1] - t_data[0])))
+            dr_init = slope_init / 2.0
+            sig_init = max(0.0, y_data[0] / 2.0)
+
+            popt, pcov = curve_fit(
+                _lin_model,
+                t_data,
+                y_data,
+                p0=[dr_init, sig_init],
+                bounds=([0.0, 0.0], [100.0, 50.0]),
+                sigma=sigma,
+                absolute_sigma=False if sigma is not None else False,
+                maxfev=5000,
+            )
+
+            dr_fit = float(popt[0])
+            sig_sq_fit = float(popt[1])
+            perr = np.sqrt(np.diag(pcov)) if pcov is not None else [np.nan, np.nan]
+            dr_err = float(perr[0]) if np.isfinite(perr[0]) else np.nan
+            sig_sq_err = float(perr[1]) if np.isfinite(perr[1]) else np.nan
+
+            pred_y = _lin_model(t_data, dr_fit, sig_sq_fit)
+            ss_res = np.sum((y_data - pred_y)**2)
+            ss_tot = np.sum((y_data - np.mean(y_data))**2)
+            r2 = float(1.0 - ss_res / (ss_tot + 1e-12)) if ss_tot > 0 else np.nan
+
+            sig_rad = float(np.sqrt(max(0.0, sig_sq_fit)))
+            sig_deg = float(sig_rad * (180.0 / np.pi))
+            dr_deg = float(dr_fit * ((180.0 / np.pi)**2))
+            intercept = float(2.0 * sig_sq_fit)
+
+        except Exception:
+            # フォールバック: polyfit
+            try:
+                poly, cov = np.polyfit(t_data, y_data, deg=1, cov=True)
+                dr_fit = float(max(0.0, poly[0] / 2.0))
+                dr_err = float(np.sqrt(cov[0, 0]) / 2.0)
+                intercept = float(poly[1])
+                sig_sq_fit = float(max(0.0, intercept / 2.0))
+                sig_sq_err = float(np.sqrt(cov[1, 1]) / 2.0)
+                sig_rad = float(np.sqrt(sig_sq_fit))
+                sig_deg = float(sig_rad * (180.0 / np.pi))
+                dr_deg = float(dr_fit * ((180.0 / np.pi)**2))
+
+                pred_y = np.polyval(poly, t_data)
+                ss_res = np.sum((y_data - pred_y)**2)
+                ss_tot = np.sum((y_data - np.mean(y_data))**2)
+                r2 = float(1.0 - ss_res / (ss_tot + 1e-12)) if ss_tot > 0 else np.nan
+            except Exception:
+                dr_fit, dr_err, dr_deg = np.nan, np.nan, np.nan
+                sig_sq_fit, sig_sq_err, sig_rad, sig_deg, intercept, r2 = np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
+
+        fit_records.append({
+            'state': s,
+            'state_label': s_lbl,
+            'Dr_rad2_s': dr_fit,
+            'Dr_err_rad2_s': dr_err,
+            'Dr_deg2_s': dr_deg,
+            'sigma_theta_sq_rad2': sig_sq_fit,
+            'sigma_theta_sq_err_rad2': sig_sq_err,
+            'sigma_theta_rad': sig_rad,
+            'sigma_theta_deg': sig_deg,
+            'intercept_rad2': intercept,
+            'r_squared': r2,
+            'fit_points': len(sub_df),
+        })
+
+    return pd.DataFrame(fit_records)
+
+
 def plot_emission_1d_distribution_6panel(
     fitted_results: Dict[str, dict],
     beads_info: List[dict],
@@ -1574,7 +1869,7 @@ def fit_autocorrelation_exponential(
     df_corr: pd.DataFrame,
     max_lag_s: Optional[float] = None,
     min_points: int = 3,
-    with_offset: bool = True,
+    with_offset: bool = False,
 ) -> Dict[str, Union[float, np.ndarray]]:
     """
     自己相関関数 C(tau) に対し、
@@ -1718,6 +2013,9 @@ def fit_autocorrelation_exponential(
             fit_t = np.array([])
             fit_corr = np.array([])
 
+    # 積分相関時間の計算
+    int_corr_res = calc_integral_correlation_time(df_corr, max_lag_s=max_lag_s, offset_A=offset_A if with_offset else 0.0)
+
     return {
         'tau_corr_s': tau_corr,
         'tau_err_s': tau_err,
@@ -1727,6 +2025,128 @@ def fit_autocorrelation_exponential(
         'fit_t': fit_t,
         'fit_corr': fit_corr,
         'count': len(t_data),
+        'tau_int_zero_s': int_corr_res['tau_int_zero_s'],
+        'tau_int_window_s': int_corr_res['tau_int_window_s'],
+        'tau_int_corrected_s': int_corr_res['tau_int_corrected_s'],
+        't_zero_crossing_s': int_corr_res['t_zero_crossing_s'],
+    }
+
+
+def calc_integral_correlation_time(
+    df_corr: pd.DataFrame,
+    max_lag_s: Optional[float] = None,
+    offset_A: Optional[float] = None,
+) -> Dict[str, float]:
+    """
+    自己相関関数 C(tau) に対する積分相関時間 (Integral Autocorrelation Time) を台形公式で計算する。
+
+    定義:
+    1. tau_int_zero : 最初に 0 を横切る点 (First zero-crossing) までの台形積分
+       tau_int_zero = \int_0^{t_{zero}} C(t) dt
+    2. tau_int_window : 指定ラグ (max_lag_s) までの全台形積分
+       tau_int_window = \int_0^{t_{max}} C(t) dt
+    3. tau_int_corrected : 残存オフセット A を差し引いた正規化減衰 C_decay(t) = (C(t) - A)/(1 - A) の
+       ゼロ交差までの台形積分
+       tau_int_corrected = \int_0^{t_{zero, corr}} \frac{C(t) - A}{1 - A} dt
+
+    Parameters
+    ----------
+    df_corr : pd.DataFrame
+        'lag_time_s', 'corr' を含む DataFrame
+    max_lag_s : Optional[float]
+        計算に含める最大ラグ時間 [s]
+    offset_A : Optional[float]
+        残存オフセット値 (None の場合は推定フィッティング値または 0)
+
+    Returns
+    -------
+    dict:
+        tau_int_zero_s, tau_int_window_s, tau_int_corrected_s, t_zero_crossing_s
+    """
+    if df_corr is None or df_corr.empty:
+        return {
+            'tau_int_zero_s': np.nan,
+            'tau_int_window_s': np.nan,
+            'tau_int_corrected_s': np.nan,
+            't_zero_crossing_s': np.nan,
+        }
+
+    df_sub = df_corr.copy().sort_values(by='lag_time_s')
+    if max_lag_s is not None:
+        df_sub = df_sub[df_sub['lag_time_s'] <= max_lag_s]
+
+    t_vals = df_sub['lag_time_s'].values.astype(float)
+    c_vals = df_sub['corr'].values.astype(float)
+
+    valid = np.isfinite(t_vals) & np.isfinite(c_vals)
+    t_vals = t_vals[valid]
+    c_vals = c_vals[valid]
+
+    if len(t_vals) == 0:
+        return {
+            'tau_int_zero_s': np.nan,
+            'tau_int_window_s': np.nan,
+            'tau_int_corrected_s': np.nan,
+            't_zero_crossing_s': np.nan,
+        }
+
+    # t=0 の点がない場合は C(0) = 1.0 を追加
+    if t_vals[0] > 1e-6:
+        t_vals = np.insert(t_vals, 0, 0.0)
+        c_vals = np.insert(c_vals, 0, 1.0)
+
+    def _integrate_to_zero(t_arr, c_arr):
+        """c_arr が初めて <= 0 になる点までの台形積分"""
+        total_int = 0.0
+        t_zero = float(t_arr[-1])
+        crossed = False
+        for i in range(len(t_arr) - 1):
+            t0, t1 = t_arr[i], t_arr[i + 1]
+            c0, c1 = c_arr[i], c_arr[i + 1]
+            if c0 <= 0:
+                crossed = True
+                t_zero = float(t0)
+                break
+            if c1 <= 0:
+                # 線形補間でゼロ交差時刻を算出
+                dt = t1 - t0
+                dc = c1 - c0
+                if abs(dc) > 1e-12:
+                    frac = -c0 / dc
+                    t_cross = t0 + frac * dt
+                else:
+                    t_cross = t0
+                # 区間 [t0, t_cross] の台形（三角形）面積
+                total_int += 0.5 * c0 * (t_cross - t0)
+                t_zero = float(t_cross)
+                crossed = True
+                break
+            else:
+                # 全体が正の区間の台形面積
+                total_int += 0.5 * (c0 + c1) * (t1 - t0)
+
+        if not crossed:
+            t_zero = float(t_arr[-1])
+        return float(total_int), t_zero
+
+    # 1. Raw zero-crossing integral
+    tau_int_zero, t_zero = _integrate_to_zero(t_vals, c_vals)
+
+    # 2. Window integral (全体台形積分)
+    tau_int_window = float(np.trapz(c_vals, t_vals)) if len(t_vals) > 1 else np.nan
+
+    # 3. Offset corrected integral
+    if offset_A is not None and np.isfinite(offset_A) and abs(1.0 - offset_A) > 1e-4:
+        c_corrected = (c_vals - offset_A) / (1.0 - offset_A)
+        tau_int_corrected, _ = _integrate_to_zero(t_vals, c_corrected)
+    else:
+        tau_int_corrected = tau_int_zero
+
+    return {
+        'tau_int_zero_s': tau_int_zero,
+        'tau_int_window_s': tau_int_window,
+        'tau_int_corrected_s': tau_int_corrected,
+        't_zero_crossing_s': t_zero,
     }
 
 
@@ -1844,6 +2264,102 @@ def fit_active_brownian_msd(
         'v0_um_s': v0,
         'D_eff_um2_s': D_eff,
         'lambda_p_um': lambda_p,
+        'r_squared': r2,
+        'fit_t': fit_t,
+        'fit_msd': fit_msd,
+        'count': len(t_data),
+    }
+
+
+def fit_tumble_brownian_msd(
+    lag_times: np.ndarray,
+    msd_vals: np.ndarray,
+    sem_vals: Optional[np.ndarray] = None,
+    fit_max_tau_s: Optional[float] = None,
+    min_points: int = 3,
+) -> dict:
+    """
+    Tumble 状態の MSD 曲線に対し、純粋ブラウン運動 (通常拡散) の理論 MSD:
+        <Δr^2(Δt)> = 4 * D_t * Δt
+    を原点通過線形最小二乗法でフィッティングし、並進拡散係数 D_t [µm^2/s] を推定する。
+
+    Parameters
+    ----------
+    lag_times : np.ndarray
+        ラグ時間 Δt [s]
+    msd_vals : np.ndarray
+        MSD 実測値 <Δr^2(Δt)> [µm^2]
+    sem_vals : Optional[np.ndarray]
+        MSD の標準誤差 (重み付け用)
+    fit_max_tau_s : Optional[float]
+        フィッティングに使用する最大ラグ時間 [s]
+    min_points : int, default 3
+
+    Returns
+    -------
+    dict:
+        Dt_um2_s, Dt_err_um2_s,
+        r_squared,
+        fit_t, fit_msd,
+        count
+    """
+    t_arr = np.asarray(lag_times, dtype=float)
+    m_arr = np.asarray(msd_vals, dtype=float)
+
+    valid = np.isfinite(t_arr) & np.isfinite(m_arr) & (t_arr > 0) & (m_arr > 0)
+    if fit_max_tau_s is not None:
+        valid = valid & (t_arr <= fit_max_tau_s + 1e-6)
+
+    t_data = t_arr[valid]
+    m_data = m_arr[valid]
+
+    if len(t_data) < min_points:
+        return {
+            'Dt_um2_s': np.nan,
+            'Dt_err_um2_s': np.nan,
+            'r_squared': np.nan,
+            'fit_t': np.array([]),
+            'fit_msd': np.array([]),
+            'count': len(t_data),
+        }
+
+    # 重み
+    if sem_vals is not None:
+        s_arr = np.asarray(sem_vals, dtype=float)[valid]
+        if np.all(s_arr > 0) and np.all(np.isfinite(s_arr)):
+            weights = 1.0 / (np.maximum(s_arr, 1e-6) ** 2)
+        else:
+            weights = np.ones_like(t_data)
+    else:
+        weights = np.ones_like(t_data)
+
+    # モデル: y = (4 * Dt) * t  =>  Dt = \sum(w * t * y) / (4 * \sum(w * t^2))
+    denom = 4.0 * np.sum(weights * (t_data ** 2))
+    numer = np.sum(weights * t_data * m_data)
+
+    if denom > 0:
+        Dt_fit = float(numer / denom)
+        # 残差と誤差
+        residuals = m_data - 4.0 * Dt_fit * t_data
+        n_pts = len(t_data)
+        dof = max(1, n_pts - 1)
+        s_sq = np.sum(weights * (residuals ** 2)) / dof
+        Dt_var = s_sq / (16.0 * np.sum(weights * (t_data ** 2)) + 1e-12)
+        Dt_err = float(np.sqrt(max(0.0, Dt_var)))
+
+        ss_res = np.sum((m_data - 4.0 * Dt_fit * t_data) ** 2)
+        ss_tot = np.sum((m_data - np.mean(m_data)) ** 2)
+        r2 = float(1.0 - ss_res / (ss_tot + 1e-12)) if ss_tot > 0 else np.nan
+
+        fit_t = np.logspace(np.log10(np.min(t_data) * 0.8), np.log10(np.max(t_data) * 1.5), 150)
+        fit_msd = 4.0 * Dt_fit * fit_t
+    else:
+        Dt_fit, Dt_err, r2 = np.nan, np.nan, np.nan
+        fit_t, fit_msd = np.array([]), np.array([])
+
+    return {
+        'Dt_um2_s': Dt_fit,
+        'Dt_err_um2_s': Dt_err,
         'r_squared': r2,
         'fit_t': fit_t,
         'fit_msd': fit_msd,
