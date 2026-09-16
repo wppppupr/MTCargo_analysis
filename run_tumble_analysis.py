@@ -1,18 +1,18 @@
 """
 run_tumble_analysis.py
 
-貨物微粒子（蛍光ビーズ）のRun (能動輸送/走行) と Tumble (停滞/方向転換) の
-セグメンテーションおよび持続時間分布を一括解析・可視化するスクリプトです。
+雋ｨ迚ｩ蠕ｮ邊貞ｭ撰ｼ郁寫蜈峨ン繝ｼ繧ｺ�峨�Run (閭ｽ蜍戊ｼｸ騾�/襍ｰ陦�) 縺ｨ Tumble (蛛懈ｻ�/譁ｹ蜷題ｻ｢謠�) 縺ｮ
+繧ｻ繧ｰ繝｡繝ｳ繝��繧ｷ繝ｧ繝ｳ縺翫ｈ縺ｳ謖∫ｶ壽凾髢灘�蟶�ｒ荳諡ｬ隗｣譫舌�蜿ｯ隕門喧縺吶ｋ繧ｹ繧ｯ繝ｪ繝励ヨ縺ｧ縺吶�
 
-全ビーズサイズ（0.63μm, 1.18μm, 3.37μm, 5.0μm, 7.24μm, 20μm）において、
-1. 粒子の平均速度より速いものをRun, 遅いものをTumbleとしてセグメンテーション
-2. 全粒子径の Run 時間分布 (PDF & CCDF) の比較プロット
-3. 全粒子径の Tumble 時間分布 (PDF & CCDF) の比較プロット
-4. 各粒子径ごとの Run/Tumble 分布 6パネル詳細プロット（指数フィッティング付き）
-5. 粒子径 vs 平均Run時間 / 平均Tumble時間 / Run比率のサマリープロット
-6. 実際の粒子軌跡における Run / Tumble セグメンテーションの可視化サンプル
-7. 統計サマリー CSV の出力
-を行います。
+蜈ｨ繝薙�繧ｺ繧ｵ繧､繧ｺ��0.63ﾎｼm, 1.18ﾎｼm, 3.37ﾎｼm, 5.0ﾎｼm, 7.24ﾎｼm, 20ﾎｼm�峨↓縺翫＞縺ｦ縲�
+1. 邊貞ｭ舌�蟷ｳ蝮�溷ｺｦ繧医ｊ騾溘＞繧ゅ�繧坦un, 驕�＞繧ゅ�繧探umble縺ｨ縺励※繧ｻ繧ｰ繝｡繝ｳ繝��繧ｷ繝ｧ繝ｳ
+2. 蜈ｨ邊貞ｭ仙ｾ�� Run 譎る俣蛻�ｸ� (PDF & CCDF) 縺ｮ豈碑ｼ��繝ｭ繝�ヨ
+3. 蜈ｨ邊貞ｭ仙ｾ�� Tumble 譎る俣蛻�ｸ� (PDF & CCDF) 縺ｮ豈碑ｼ��繝ｭ繝�ヨ
+4. 蜷�ｲ貞ｭ仙ｾ�＃縺ｨ縺ｮ Run/Tumble 蛻�ｸ� 6繝代ロ繝ｫ隧ｳ邏ｰ繝励Ο繝�ヨ�域欠謨ｰ繝輔ぅ繝�ユ繧｣繝ｳ繧ｰ莉倥″��
+5. 邊貞ｭ仙ｾ� vs 蟷ｳ蝮⑲un譎る俣 / 蟷ｳ蝮Ⅰumble譎る俣 / Run豈皮紫縺ｮ繧ｵ繝槭Μ繝ｼ繝励Ο繝�ヨ
+6. 螳滄圀縺ｮ邊貞ｭ占ｻ瑚ｷ｡縺ｫ縺翫￠繧� Run / Tumble 繧ｻ繧ｰ繝｡繝ｳ繝��繧ｷ繝ｧ繝ｳ縺ｮ蜿ｯ隕門喧繧ｵ繝ｳ繝励Ν
+7. 邨ｱ險医し繝槭Μ繝ｼ CSV 縺ｮ蜃ｺ蜉�
+繧定｡後＞縺ｾ縺吶�
 """
 
 import argparse
@@ -26,14 +26,14 @@ import matplotlib.colors as mcolors
 import numpy as np
 import pandas as pd
 
-# 親ディレクトリのパス設定
+# 隕ｪ繝�ぅ繝ｬ繧ｯ繝医Μ縺ｮ繝代せ險ｭ螳�
 current_dir = Path(__file__).parent.resolve()
 if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
 from libs import run_tumble as rt
 
-# スタイルの適用
+# 繧ｹ繧ｿ繧､繝ｫ縺ｮ驕ｩ逕ｨ
 style_path = current_dir / 'libs' / 'my_style.mplstyle'
 if style_path.exists():
     try:
@@ -44,7 +44,7 @@ if style_path.exists():
 else:
     style_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
 
-# ビーズ条件設定
+# 繝薙�繧ｺ譚｡莉ｶ險ｭ螳�
 BEADS_INFO = [
     {"name": "beads06um", "diameter_um": 0.63, "marker": "^", "color": style_colors[0]},
     {"name": "beads1um",  "diameter_um": 1.18, "marker": "o", "color": style_colors[1]},
@@ -112,7 +112,7 @@ def safe_save_csv(df, target_path, max_retries=5):
 
 
 def safe_savefig(fig, out_path_base, dpi=300):
-    """PNG と PDF の両方を安全に保存する"""
+    """PNG 縺ｨ PDF 縺ｮ荳｡譁ｹ繧貞ｮ牙�縺ｫ菫晏ｭ倥☆繧�"""
     out_base = Path(out_path_base)
     out_base.parent.mkdir(parents=True, exist_ok=True)
 
@@ -126,7 +126,7 @@ def safe_savefig(fig, out_path_base, dpi=300):
 
 def load_and_process_bead_condition(exp_dirs, scale=0.11, frame_interval=4.0, drop_edges=False, threshold_mode='bead_mean'):
     """
-    1つの粒子径条件の実験ディレクトリ群から全軌跡を読み込み、速度計算およびRun/Tumble抽出を行う。
+    1縺､縺ｮ邊貞ｭ仙ｾ�擅莉ｶ縺ｮ螳滄ｨ薙ョ繧｣繝ｬ繧ｯ繝医Μ鄒､縺九ｉ蜈ｨ霆瑚ｷ｡繧定ｪｭ縺ｿ霎ｼ縺ｿ縲�溷ｺｦ險育ｮ励♀繧医�Run/Tumble謚ｽ蜃ｺ繧定｡後≧縲�
     """
     all_dfs = []
     for d in exp_dirs:
@@ -142,14 +142,14 @@ def load_and_process_bead_condition(exp_dirs, scale=0.11, frame_interval=4.0, dr
         return None
 
     combined_df = pd.concat(all_dfs, ignore_index=True)
-    # particle ID の重複を回避
+    # particle ID 縺ｮ驥崎､�ｒ蝗樣∩
     if 'exp_dir' in combined_df.columns:
         combined_df['particle_unique'] = combined_df['exp_dir'].astype(str) + "_" + combined_df['particle'].astype(str)
         df_for_calc = combined_df.rename(columns={'particle': 'particle_orig', 'particle_unique': 'particle'})
     else:
         df_for_calc = combined_df
 
-    # 瞬時速度の計算
+    # 迸ｬ譎る溷ｺｦ縺ｮ險育ｮ�
     df_with_v = rt.calc_instantaneous_speeds(df_for_calc, scale=scale, frame_interval=frame_interval)
 
     valid_speeds = df_with_v['v'].dropna().values
@@ -160,7 +160,7 @@ def load_and_process_bead_condition(exp_dirs, scale=0.11, frame_interval=4.0, dr
     std_v = float(np.std(valid_speeds))
     median_v = float(np.median(valid_speeds))
 
-    # 閾値の決定
+    # 髢ｾ蛟､縺ｮ豎ｺ螳�
     if threshold_mode == 'bead_mean':
         threshold = mean_v
     elif threshold_mode == 'bead_median':
@@ -168,7 +168,7 @@ def load_and_process_bead_condition(exp_dirs, scale=0.11, frame_interval=4.0, dr
     else:
         threshold = mean_v
 
-    # Run / Tumble の抽出
+    # Run / Tumble 縺ｮ謚ｽ蜃ｺ
     run_durs, tumble_durs, states_dict = rt.extract_durations_from_df(
         df_with_v, threshold=threshold, frame_interval=frame_interval, drop_edges=drop_edges
     )
@@ -188,18 +188,18 @@ def load_and_process_bead_condition(exp_dirs, scale=0.11, frame_interval=4.0, dr
 
 def plot_duration_distributions(beads_results, out_dir, root_dir, frame_interval=4.0):
     """
-    全粒子径の Run 時間分布および Tumble 時間分布をプロット（線形 & 片対数 & CCDF）
+    全粒子径の Unbound 譎る俣蛻�ｸ�ｒ繝励Ο繝�ヨ�育ｷ壼ｽ｢ & 迚�ｯｾ謨ｰ & CCDF��
     """
-    # 1. Run 時間分布 (PDF, 片対数)
+    # 1. Bound 時間分布 (PDF, 片対数)
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
 
     ax_lin, ax_log = axes[0], axes[1]
-    ax_lin.set_title(r"Run Duration PDF $P(\tau_{\mathrm{run}})$ (Linear)", fontsize=14)
-    ax_lin.set_xlabel(r"Run Duration $\tau_{\mathrm{run}}$ [s]", fontsize=13)
+    ax_lin.set_title(r"Bound Duration PDF $P(\tau_{\mathrm{bound}})$ (Linear)", fontsize=14)
+    ax_lin.set_xlabel(r"Bound Duration $\tau_{\mathrm{bound}}$ [s]", fontsize=13)
     ax_lin.set_ylabel(r"Probability Density [$\mathrm{s}^{-1}$]", fontsize=13)
 
-    ax_log.set_title(r"Run Duration PDF $P(\tau_{\mathrm{run}})$ (Semi-log)", fontsize=14)
-    ax_log.set_xlabel(r"Run Duration $\tau_{\mathrm{run}}$ [s]", fontsize=13)
+    ax_log.set_title(r"Bound Duration PDF $P(\tau_{\mathrm{bound}})$ (Semi-log)", fontsize=14)
+    ax_log.set_xlabel(r"Bound Duration $\tau_{\mathrm{bound}}$ [s]", fontsize=13)
     ax_log.set_ylabel(r"Probability Density [$\mathrm{s}^{-1}$]", fontsize=13)
     ax_log.set_yscale('log')
 
@@ -220,7 +220,7 @@ def plot_duration_distributions(beads_results, out_dir, root_dir, frame_interval
         if not np.any(valid):
             continue
 
-        lbl = rf"{item['diameter_um']:.2f} $\mu\mathrm{{m}}$ ($\langle\tau\rangle={np.mean(durs):.1f}\mathrm{{s}}$, N={len(durs)})"
+        lbl = f"{item['diameter_um']:.2f} $\\mu\\mathrm{{m}}$ ($\\langle\\tau_{{\\mathrm{{bound}}}}\\rangle={np.mean(durs):.1f}\\mathrm{{s}}$, N={len(durs)})"
         ax_lin.plot(centers[valid], pdf[valid], marker=item['marker'], color=item['color'], label=lbl, linewidth=1.8, markersize=6)
         ax_log.plot(centers[valid], pdf[valid], marker=item['marker'], color=item['color'], label=lbl, linewidth=1.8, markersize=6)
 
@@ -232,16 +232,16 @@ def plot_duration_distributions(beads_results, out_dir, root_dir, frame_interval
     safe_savefig(fig, root_dir/out_dir / "run_duration_distribution_pdf")
     plt.close(fig)
 
-    # 2. Tumble 時間分布 (PDF, 片対数)
+    # 2. Unbound 時間分布 (PDF, 迚�ｯｾ謨ｰ)
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
 
     ax_lin, ax_log = axes[0], axes[1]
-    ax_lin.set_title(r"Tumble Duration PDF $P(\tau_{\mathrm{tumble}})$ (Linear)", fontsize=14)
-    ax_lin.set_xlabel(r"Tumble Duration $\tau_{\mathrm{tumble}}$ [s]", fontsize=13)
+    ax_lin.set_title(r"Unbound Duration PDF $P(\tau_{\mathrm{unbound}})$ (Linear)", fontsize=14)
+    ax_lin.set_xlabel(r"Unbound Duration $\tau_{\mathrm{unbound}}$ [s]", fontsize=13)
     ax_lin.set_ylabel(r"Probability Density [$\mathrm{s}^{-1}$]", fontsize=13)
 
-    ax_log.set_title(r"Tumble Duration PDF $P(\tau_{\mathrm{tumble}})$ (Semi-log)", fontsize=14)
-    ax_log.set_xlabel(r"Tumble Duration $\tau_{\mathrm{tumble}}$ [s]", fontsize=13)
+    ax_log.set_title(r"Unbound Duration PDF $P(\tau_{\mathrm{unbound}})$ (Semi-log)", fontsize=14)
+    ax_log.set_xlabel(r"Unbound Duration $\tau_{\mathrm{unbound}}$ [s]", fontsize=13)
     ax_log.set_ylabel(r"Probability Density [$\mathrm{s}^{-1}$]", fontsize=13)
     ax_log.set_yscale('log')
 
@@ -259,7 +259,7 @@ def plot_duration_distributions(beads_results, out_dir, root_dir, frame_interval
         if not np.any(valid):
             continue
 
-        lbl = rf"{item['diameter_um']:.2f} $\mu\mathrm{{m}}$ ($\langle\tau\rangle={np.mean(durs):.1f}\mathrm{{s}}$, N={len(durs)})"
+        lbl = f"{item['diameter_um']:.2f} $\\mu\\mathrm{{m}}$ ($\\langle\\tau_{{\\mathrm{{unbound}}}}\\rangle={np.mean(durs):.1f}\\mathrm{{s}}$, N={len(durs)})"
         ax_lin.plot(centers[valid], pdf[valid], marker=item['marker'], color=item['color'], label=lbl, linewidth=1.8, markersize=6)
         ax_log.plot(centers[valid], pdf[valid], marker=item['marker'], color=item['color'], label=lbl, linewidth=1.8, markersize=6)
 
@@ -271,17 +271,17 @@ def plot_duration_distributions(beads_results, out_dir, root_dir, frame_interval
     safe_savefig(fig, root_dir/out_dir / "tumble_duration_distribution_pdf")
     plt.close(fig)
 
-    # 3. CCDF (相補累積分布関数) 比較プロット (Run & Tumble)
+    # 3. CCDF (逶ｸ陬懃ｴｯ遨榊�蟶�未謨ｰ) 豈碑ｼ��繝ｭ繝�ヨ (Bound & Unbound)
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
 
     ax_run, ax_tum = axes[0], axes[1]
-    ax_run.set_title(r"Run Duration CCDF $P(T \geq \tau_{\mathrm{run}})$", fontsize=14)
-    ax_run.set_xlabel(r"Run Duration $\tau_{\mathrm{run}}$ [s]", fontsize=13)
+    ax_run.set_title(r"Bound Duration CCDF $P(T \geq \tau_{\mathrm{bound}})$", fontsize=14)
+    ax_run.set_xlabel(r"Bound Duration $\tau_{\mathrm{bound}}$ [s]", fontsize=13)
     ax_run.set_ylabel(r"CCDF $P(T \geq t)$", fontsize=13)
     ax_run.set_yscale('log')
 
-    ax_tum.set_title(r"Tumble Duration CCDF $P(T \geq \tau_{\mathrm{tumble}})$", fontsize=14)
-    ax_tum.set_xlabel(r"Tumble Duration $\tau_{\mathrm{tumble}}$ [s]", fontsize=13)
+    ax_tum.set_title(r"Unbound Duration CCDF $P(T \geq \tau_{\mathrm{unbound}})$", fontsize=14)
+    ax_tum.set_xlabel(r"Unbound Duration $\tau_{\mathrm{unbound}}$ [s]", fontsize=13)
     ax_tum.set_ylabel(r"CCDF $P(T \geq t)$", fontsize=13)
     ax_tum.set_yscale('log')
 
@@ -291,13 +291,13 @@ def plot_duration_distributions(beads_results, out_dir, root_dir, frame_interval
             continue
         res = beads_results[b_name]
 
-        # Run CCDF
+        # Bound CCDF
         r_durs = res['run_durations']
         if len(r_durs) > 0:
             s_t, ccdf = rt.calc_duration_ccdf(r_durs)
             ax_run.step(s_t, ccdf, where='post', color=item['color'], label=rf"{item['diameter_um']:.2f} $\mu\mathrm{{m}}$", linewidth=1.8)
 
-        # Tumble CCDF
+        # Unbound CCDF
         t_durs = res['tumble_durations']
         if len(t_durs) > 0:
             s_t, ccdf = rt.calc_duration_ccdf(t_durs)
@@ -316,7 +316,7 @@ def plot_duration_distributions(beads_results, out_dir, root_dir, frame_interval
 
 def plot_6panels_comparison(beads_results, out_dir, root_dir, frame_interval=4.0):
     """
-    6つの粒子径ごとに Run と Tumble の分布を並べて表示する 6 パネル図（指数フィット曲線付き）
+    6つの粒子径ごとに Bound と Unbound の分布を並べて表示する 6 パネル図（指数フィット曲線付き）
     """
     fig, axes = plt.subplots(2, 3, figsize=(16, 10), sharex=True, sharey=True)
     axes = axes.flatten()
@@ -338,29 +338,29 @@ def plot_6panels_comparison(beads_results, out_dir, root_dir, frame_interval=4.0
         r_durs = res['run_durations']
         t_durs = res['tumble_durations']
 
-        # Run
+        # Bound (Run)
         if len(r_durs) > 0:
             r_c, r_pdf, _ = rt.calc_duration_pdf(r_durs, bins=bins, density=True)
             r_valid = r_pdf > 0
-            ax.scatter(r_c[r_valid], r_pdf[r_valid], color='#d62728', marker='o', s=35, label=rf"Run ($\langle\tau\rangle={np.mean(r_durs):.1f}\mathrm{{s}}$)", alpha=0.85)
+            ax.scatter(r_c[r_valid], r_pdf[r_valid], color='#d62728', marker='o', s=35, label=f"Bound ($\\langle\\tau_{{\\mathrm{{bound}}}}\\rangle={np.mean(r_durs):.1f}\\mathrm{{s}}$)", alpha=0.85)
 
             # Fit
             r_fit = rt.fit_exponential(r_c, r_pdf)
             if np.isfinite(r_fit['tau']):
                 ax.plot(t_eval, rt.exp_decay_func(t_eval, r_fit['tau'], r_fit['a']), '--', color='#d62728', linewidth=1.5,
-                        label=rf"Run fit ($\tau_0={r_fit['tau']:.1f}\mathrm{{s}}, R^2={r_fit['r_squared']:.2f}$)")
+                        label=rf"Bound fit ($\tau_{{0,\mathrm{{bound}}}}={r_fit['tau']:.1f}\mathrm{{s}}, R^2={r_fit['r_squared']:.2f}$)")
 
-        # Tumble
+        # Unbound (Tumble)
         if len(t_durs) > 0:
             t_c, t_pdf, _ = rt.calc_duration_pdf(t_durs, bins=bins, density=True)
             t_valid = t_pdf > 0
-            ax.scatter(t_c[t_valid], t_pdf[t_valid], color='#1f77b4', marker='s', s=35, label=rf"Tumble ($\langle\tau\rangle={np.mean(t_durs):.1f}\mathrm{{s}}$)", alpha=0.85)
+            ax.scatter(t_c[t_valid], t_pdf[t_valid], color='#1f77b4', marker='s', s=35, label=rf"Unbound ($\langle\tau_{{\mathrm{{unbound}}}}\rangle={np.mean(t_durs):.1f}\mathrm{{s}}$)", alpha=0.85)
 
             # Fit
             t_fit = rt.fit_exponential(t_c, t_pdf)
             if np.isfinite(t_fit['tau']):
                 ax.plot(t_eval, rt.exp_decay_func(t_eval, t_fit['tau'], t_fit['a']), ':', color='#1f77b4', linewidth=1.5,
-                        label=rf"Tumble fit ($\tau_0={t_fit['tau']:.1f}\mathrm{{s}}, R^2={t_fit['r_squared']:.2f}$)")
+                        label=rf"Unbound fit ($\tau_{{0,\mathrm{{unbound}}}}={t_fit['tau']:.1f}\mathrm{{s}}, R^2={t_fit['r_squared']:.2f}$)")
 
         ax.set_yscale('log')
         ax.set_ylim(bottom=1e-4, top=1.0)
@@ -380,7 +380,7 @@ def plot_6panels_comparison(beads_results, out_dir, root_dir, frame_interval=4.0
 
 def plot_summary_vs_diameter(summary_df, out_dir, root_dir):
     """
-    粒子径 vs 平均持続時間・指数フィッティング時定数・Run時間比率のサマリープロット
+    邊貞ｭ仙ｾ� vs 蟷ｳ蝮�戟邯壽凾髢薙�謖�焚繝輔ぅ繝�ユ繧｣繝ｳ繧ｰ譎ょｮ壽焚繝ｻRun譎る俣豈皮紫縺ｮ繧ｵ繝槭Μ繝ｼ繝励Ο繝�ヨ
     """
     fig, axes = plt.subplots(1, 3, figsize=(18, 5.5))
 
@@ -388,7 +388,7 @@ def plot_summary_vs_diameter(summary_df, out_dir, root_dir):
 
     d_um = summary_df['diameter_um'].values
 
-    # 1. 平均持続時間 <tau>
+    # 1. 蟷ｳ蝮�戟邯壽凾髢� <tau>
     ax_dur.plot(d_um, summary_df['mean_run_dur_sec'], marker='o', color='#d62728', linewidth=2, markersize=8, label=r'Mean Run Duration $\langle \tau_{\mathrm{run}} \rangle$')
     ax_dur.plot(d_um, summary_df['mean_tumble_dur_sec'], marker='s', color='#1f77b4', linewidth=2, markersize=8, label=r'Mean Tumble Duration $\langle \tau_{\mathrm{tumble}} \rangle$')
     ax_dur.set_xscale('log')
@@ -398,7 +398,7 @@ def plot_summary_vs_diameter(summary_df, out_dir, root_dir):
     ax_dur.legend(frameon=True, fontsize=11)
     ax_dur.grid(True, linestyle='--', alpha=0.5)
 
-    # 2. 指数フィッティング時定数 tau_0
+    # 2. 謖�焚繝輔ぅ繝�ユ繧｣繝ｳ繧ｰ譎ょｮ壽焚 tau_0
     ax_tau.plot(d_um, summary_df['fit_tau_run_sec'], marker='o', color='#d62728', linestyle='--', linewidth=2, markersize=8, label=r'Run Lifetime $\tau_{0,\mathrm{run}}$')
     ax_tau.plot(d_um, summary_df['fit_tau_tumble_sec'], marker='s', color='#1f77b4', linestyle='--', linewidth=2, markersize=8, label=r'Tumble Lifetime $\tau_{0,\mathrm{tumble}}$')
     ax_tau.set_xscale('log')
@@ -408,7 +408,7 @@ def plot_summary_vs_diameter(summary_df, out_dir, root_dir):
     ax_tau.legend(frameon=True, fontsize=11)
     ax_tau.grid(True, linestyle='--', alpha=0.5)
 
-    # 3. Duty cycle (Run 比率) & 平均速度
+    # 3. Duty cycle (Run 豈皮紫) & 蟷ｳ蝮�溷ｺｦ
     ax_duty_v = ax_duty.twinx()
     l1 = ax_duty.plot(d_um, summary_df['run_duty_ratio'] * 100, marker='^', color='#2ca02c', linewidth=2, markersize=8, label='Run Fraction [%]')
     l2 = ax_duty_v.plot(d_um, summary_df['mean_speed_ums'], marker='d', color='#9467bd', linewidth=2, linestyle=':', markersize=8, label=r'Mean Speed $\langle v \rangle$ [$\mu\mathrm{m/s}$]')
@@ -431,7 +431,7 @@ def plot_summary_vs_diameter(summary_df, out_dir, root_dir):
 
 def plot_segmentation_sample(beads_results, out_dir, root_dir):
     """
-    代表的な粒子軌跡と速度時系列における Run / Tumble セグメンテーションの例を描画
+    莉｣陦ｨ逧�↑邊貞ｭ占ｻ瑚ｷ｡縺ｨ騾溷ｺｦ譎らｳｻ蛻励↓縺翫￠繧� Run / Tumble 繧ｻ繧ｰ繝｡繝ｳ繝��繧ｷ繝ｧ繝ｳ縺ｮ萓九ｒ謠冗判
     """
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
 
@@ -449,7 +449,7 @@ def plot_segmentation_sample(beads_results, out_dir, root_dir):
         if not states_dict:
             continue
 
-        # 最も長いトラックを1つ選択
+        # 譛繧る聞縺�ヨ繝ｩ繝�け繧�1縺､驕ｸ謚�
         longest_p = max(states_dict.keys(), key=lambda p: len(states_dict[p]['v']))
         p_data = states_dict[longest_p]
 
@@ -461,7 +461,7 @@ def plot_segmentation_sample(beads_results, out_dir, root_dir):
         ax.plot(t_axis, speeds, color='gray', alpha=0.6, linewidth=1.2, label='Speed $v(t)$')
         ax.axhline(threshold, color='black', linestyle='--', linewidth=1.2, label=rf'Threshold $v_{{\mathrm{{th}}}}={threshold:.3f}\mu\mathrm{{m/s}}$')
 
-        # Run 区間をハイライト
+        # Run 蛹ｺ髢薙ｒ繝上う繝ｩ繧､繝�
         run_mask = states == 1
         tum_mask = states == 0
         ax.scatter(t_axis[run_mask], speeds[run_mask], color='#d62728', s=25, label='Run', zorder=4)
@@ -525,7 +525,7 @@ def main():
         r_durs = res['run_durations']
         t_durs = res['tumble_durations']
 
-        # 指数フィッティング
+        # 謖�焚繝輔ぅ繝�ユ繧｣繝ｳ繧ｰ
         bins = np.arange(args.frame_interval, 120.0 + 2 * args.frame_interval, args.frame_interval)
         r_c, r_pdf, _ = rt.calc_duration_pdf(r_durs, bins=bins, density=True)
         t_c, t_pdf, _ = rt.calc_duration_pdf(t_durs, bins=bins, density=True)
@@ -578,12 +578,12 @@ def main():
     summary_df = pd.DataFrame(summary_rows)
     all_events_df = pd.DataFrame(all_events_rows)
 
-    # 保存
+    # 菫晏ｭ�
     safe_save_csv(summary_df, root_dir / output_dir / "run_tumble_summary.csv")
     safe_save_csv(all_events_df, root_dir / output_dir / "run_tumble_durations_all.csv")
     print(f"\nSaved CSV summaries to {output_dir}")
 
-    # プロット生成
+    # 繝励Ο繝�ヨ逕滓�
     print("\nGenerating plots...")
     plot_duration_distributions(beads_results, output_dir, root_dir, frame_interval=args.frame_interval)
     plot_6panels_comparison(beads_results, output_dir, root_dir, frame_interval=args.frame_interval)

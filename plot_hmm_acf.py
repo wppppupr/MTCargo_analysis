@@ -415,7 +415,7 @@ def plot_acf_grid(
             ax.set_xlim(0, xlim)
 
             if row_idx == 0:
-                ax.set_title(f"$d = {dia:.2f}\\,\\mu\\mathrm{{m}}$", fontsize=12, fontweight="bold")
+                ax.set_title(f"$2R_c = {dia:.2f}\\,\\mu\\mathrm{{m}}$", fontsize=12, fontweight="bold")
             if col_idx == 0:
                 ax.set_ylabel(ctitle, fontsize=10, fontweight="bold")
             if row_idx == 2:
@@ -454,7 +454,7 @@ def plot_timescales_vs_diameter(
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5.2))
     mode_colors = {"vacf": "#1f77b4", "oacf": "#2ca02c", "sacf": "#9467bd"}
-    mode_labels = {"vacf": "Velocity (VACF)", "oacf": "Orientation (OACF)", "sacf": "Speed (SACF)"}
+    mode_labels = {"vacf": "Velocity (VACF)", "oacf": r"Orientation ($\tau_{\mathrm{p}}$)", "sacf": "Speed (SACF)"}
     mode_markers = {"vacf": "o", "oacf": "^", "sacf": "s"}
 
     # (a) Run
@@ -485,14 +485,14 @@ def plot_timescales_vs_diameter(
             ax0.errorbar(
                 df_run_state["diameter_um"], df_run_state["tau_ccdf_s"], yerr=df_run_state.get("tau_ccdf_err_s", None),
                 fmt="--d", color="#e41a1c", lw=2.0, capsize=4, markersize=7,
-                label=r"Run Dwell $\tau_{\mathrm{Run}}^{\mathrm{dwell}}$", zorder=5
+                label=r"Bound Dwell $\tau_{\mathrm{bound}}$", zorder=5
             )
 
     ax0.set_xscale("log")
     ax0.set_yscale("log")
-    ax0.set_xlabel(r"Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=11)
+    ax0.set_xlabel(r"Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]", fontsize=11)
     ax0.set_ylabel(r"Relaxation Time $\tau$ [s]", fontsize=11)
-    ax0.set_title(r"(a) Run State Correlation Timescales", fontsize=12, fontweight="bold")
+    ax0.set_title(r"(a) Bound / Run State Correlation Timescales", fontsize=12, fontweight="bold")
     ax0.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
     ax0.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
     ax0.grid(True, which="both", linestyle="--", alpha=0.4)
@@ -526,14 +526,14 @@ def plot_timescales_vs_diameter(
             ax1.errorbar(
                 df_tum_state["diameter_um"], df_tum_state["tau_ccdf_s"], yerr=df_tum_state.get("tau_ccdf_err_s", None),
                 fmt="--d", color="#e41a1c", lw=2.0, capsize=4, markersize=7,
-                label=r"Tumble Dwell $\tau_{\mathrm{Tumble}}^{\mathrm{dwell}}$", zorder=5
+                label=r"Unbound Dwell $\tau_{\mathrm{unbound}}$", zorder=5
             )
 
     ax1.set_xscale("log")
     ax1.set_yscale("log")
-    ax1.set_xlabel(r"Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=11)
+    ax1.set_xlabel(r"Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]", fontsize=11)
     ax1.set_ylabel(r"Relaxation Time $\tau$ [s]", fontsize=11)
-    ax1.set_title(r"(b) Tumble State Correlation Timescales", fontsize=12, fontweight="bold")
+    ax1.set_title(r"(b) Unbound / Tumble State Correlation Timescales", fontsize=12, fontweight="bold")
     ax1.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
     ax1.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
     ax1.grid(True, which="both", linestyle="--", alpha=0.4)
@@ -572,16 +572,16 @@ def plot_timescales_vs_diameter(
 
     ax2.axhline(1.0, color="gray", linestyle=":", lw=1.2, label="Equal Ratio (1.0)")
     if dias:
-        ax2.plot(dias, ratio_vacf_int, marker="o", color="#1f77b4", lw=2.0, markersize=7, label=r"VACF Integral Ratio $\tau_{\mathrm{int}}^{\mathrm{Run}} / \tau_{\mathrm{int}}^{\mathrm{Tumble}}$")
-        ax2.plot(dias, ratio_oacf_int, marker="^", color="#2ca02c", lw=2.0, markersize=7, label=r"OACF Integral Ratio $\tau_{\mathrm{int}}^{\mathrm{Run}} / \tau_{\mathrm{int}}^{\mathrm{Tumble}}$")
-        ax2.plot(dias, ratio_vacf_fit, marker="o", markerfacecolor="none", color="#1f77b4", linestyle="--", lw=1.5, markersize=6.5, label=r"VACF Fit Ratio $\tau_{\mathrm{fit}}^{\mathrm{Run}} / \tau_{\mathrm{fit}}^{\mathrm{Tumble}}$")
-        ax2.plot(dias, ratio_oacf_fit, marker="^", markerfacecolor="none", color="#2ca02c", linestyle="--", lw=1.5, markersize=6.5, label=r"OACF Fit Ratio $\tau_{\mathrm{fit}}^{\mathrm{Run}} / \tau_{\mathrm{fit}}^{\mathrm{Tumble}}$")
+        ax2.plot(dias, ratio_vacf_int, marker="o", color="#1f77b4", lw=2.0, markersize=7, label=r"VACF Integral Ratio $\tau_{\mathrm{int}}^{\mathrm{bound}} / \tau_{\mathrm{int}}^{\mathrm{unbound}}$")
+        ax2.plot(dias, ratio_oacf_int, marker="^", color="#2ca02c", lw=2.0, markersize=7, label=r"OACF ($\tau_{\mathrm{p}}$) Integral Ratio $\tau_{\mathrm{p,int}}^{\mathrm{bound}} / \tau_{\mathrm{p,int}}^{\mathrm{unbound}}$")
+        ax2.plot(dias, ratio_vacf_fit, marker="o", markerfacecolor="none", color="#1f77b4", linestyle="--", lw=1.5, markersize=6.5, label=r"VACF Fit Ratio $\tau_{\mathrm{fit}}^{\mathrm{bound}} / \tau_{\mathrm{fit}}^{\mathrm{unbound}}$")
+        ax2.plot(dias, ratio_oacf_fit, marker="^", markerfacecolor="none", color="#2ca02c", linestyle="--", lw=1.5, markersize=6.5, label=r"OACF ($\tau_{\mathrm{p}}$) Fit Ratio $\tau_{\mathrm{p,fit}}^{\mathrm{bound}} / \tau_{\mathrm{p,fit}}^{\mathrm{unbound}}$")
 
     ax2.set_xscale("log")
     ax2.set_yscale("log")
-    ax2.set_xlabel(r"Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=11)
-    ax2.set_ylabel(r"Correlation Time Ratio $\tau_{\mathrm{Run}} / \tau_{\mathrm{Tumble}}$", fontsize=11)
-    ax2.set_title(r"(c) Run / Tumble Persistence Ratio", fontsize=12, fontweight="bold")
+    ax2.set_xlabel(r"Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]", fontsize=11)
+    ax2.set_ylabel(r"Persistence Ratio $\tau_{\mathrm{bound}} / \tau_{\mathrm{unbound}}$", fontsize=11)
+    ax2.set_title(r"(c) Bound / Unbound Persistence Ratio", fontsize=12, fontweight="bold")
     ax2.set_xticks([0.63, 1.18, 3.37, 5.0, 7.24, 20.0])
     ax2.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
     ax2.grid(True, which="both", linestyle="--", alpha=0.4)

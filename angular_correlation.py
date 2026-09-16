@@ -115,11 +115,17 @@ def load_condition_correlations(root_path, folder_name, particle_zarr="angular_c
         if bg_path.exists():
             ds_bg = xr.open_zarr(str(bg_path), consolidated=False)
             if 'angular_correlation' in ds_bg:
-                data['bg_total'].append(ds_bg.angular_correlation.mean(dim=['frame']))
+                da = ds_bg.angular_correlation
+                bg_dims = [d for d in da.dims if d != 'distance']
+                data['bg_total'].append(da.mean(dim=bg_dims))
             if 'angular_correlation_parallel' in ds_bg:
-                data['bg_par'].append(ds_bg.angular_correlation_parallel.mean(dim=['frame']))
+                da_par = ds_bg.angular_correlation_parallel
+                bg_par_dims = [d for d in da_par.dims if d != 'distance']
+                data['bg_par'].append(da_par.mean(dim=bg_par_dims))
             if 'angular_correlation_perpendicular' in ds_bg:
-                data['bg_perp'].append(ds_bg.angular_correlation_perpendicular.mean(dim=['frame']))
+                da_perp = ds_bg.angular_correlation_perpendicular
+                bg_perp_dims = [d for d in da_perp.dims if d != 'distance']
+                data['bg_perp'].append(da_perp.mean(dim=bg_perp_dims))
 
     return data
 

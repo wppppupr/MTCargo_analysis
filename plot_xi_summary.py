@@ -156,7 +156,7 @@ def main():
         )"""
 
         ax.set_title(t_title, fontsize=16)
-        ax.set_xlabel(r'Bead Diameter $d$ [$\mu$m]')
+        ax.set_xlabel(r'Cargo Diameter $2R_c$ [$\mu$m]')
         ax.set_xscale(args.xscale)
         ax.set_yscale(args.yscale)
         ax.set_xticks([0.6, 1, 3, 5, 7, 20])

@@ -68,8 +68,8 @@ def main():
     parser = argparse.ArgumentParser(description="Batch runner for local polar order and angular spatial correlation analysis.")
     parser.add_argument('--beads', type=str, nargs='+', default=['all'],
                         help="Beads conditions to analyze (e.g. beads06um beads1um beads3um beads5um beads7um beads20um, or 'all')")
-    parser.add_argument('--mode', type=str, default='polar', choices=['polar', 'corr', 'all'],
-                        help="Analysis mode: 'polar' (calc_local_polar + bg), 'corr' (calc_angular_spatial_correlation + bg), or 'all'")
+    parser.add_argument('--mode', type=str, default='polar', choices=['polar', 'corr', 'bg_corr', 'bg_polar', 'all'],
+                        help="Analysis mode: 'polar' (calc_local_polar + bg), 'corr' (calc_angular_spatial_correlation + bg), 'bg_corr' (calc_bg_angular_correlation only), or 'all'")
     parser.add_argument('--root_dir', type=str, default=None,
                         help="Root directory containing beads data. If None, checks default NAS paths.")
     parser.add_argument('--target_dir', type=str, default=None,
@@ -86,12 +86,15 @@ def main():
         p_radius = args.particle_radius if args.particle_radius is not None else 6
         print(f"Processing explicit directory: {target_path} (particle_radius={p_radius})")
 
-        if args.mode in ['polar', 'all']:
+        if args.mode in ['bg_polar', 'polar', 'all']:
             run_cmd([python_exec, "libs/calc_bg_polar.py", str(target_path)])
+        if args.mode in ['polar', 'all']:
             run_cmd([python_exec, "libs/calc_local_polar.py", str(target_path), "--particle_radius", str(p_radius)])
 
+        if args.mode in ['bg_corr', 'corr', 'all']:
+            mask_r = max(15, p_radius + 5)
+            run_cmd([python_exec, "libs/calc_bg_angular_correlation.py", str(target_path), "--particle_mask_radius", str(mask_r)])
         if args.mode in ['corr', 'all']:
-            run_cmd([python_exec, "libs/calc_bg_angular_correlation.py", str(target_path)])
             run_cmd([python_exec, "libs/calc_angular_spatial_correlation.py", str(target_path), "--particle_radius", str(p_radius)])
         return
 
@@ -134,12 +137,15 @@ def main():
             total_dirs += 1
             print(f"\n---> Processing: {d.relative_to(root_dir)}")
 
-            if args.mode in ['polar', 'all']:
+            if args.mode in ['bg_polar', 'polar', 'all']:
                 run_cmd([python_exec, "libs/calc_bg_polar.py", str(d)])
+            if args.mode in ['polar', 'all']:
                 run_cmd([python_exec, "libs/calc_local_polar.py", str(d), "--particle_radius", str(p_radius)])
 
+            if args.mode in ['bg_corr', 'corr', 'all']:
+                mask_r = max(15, p_radius + 5)
+                run_cmd([python_exec, "libs/calc_bg_angular_correlation.py", str(d), "--particle_mask_radius", str(mask_r)])
             if args.mode in ['corr', 'all']:
-                run_cmd([python_exec, "libs/calc_bg_angular_correlation.py", str(d)])
                 run_cmd([python_exec, "libs/calc_angular_spatial_correlation.py", str(d), "--particle_radius", str(p_radius)])
 
     print(f"\n[DONE] Batch processing completed. Total directories processed: {total_dirs}")

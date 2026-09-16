@@ -173,14 +173,27 @@ def extract_experiment_mode_flow_correlations(
 
     # 背景相関 Zarr のロード
     bg_flow_samples = np.empty((num_d, 0), dtype=np.float32)
+    bg_par_samples = np.empty((num_d, 0), dtype=np.float32)
+    bg_perp_samples = np.empty((num_d, 0), dtype=np.float32)
+
     if bg_zarr_path.exists():
         try:
             ds_bg = xr.open_zarr(str(bg_zarr_path), consolidated=False)
             if 'angular_correlation' in ds_bg:
-                bg_arr = ds_bg['angular_correlation'].values  # (D, frame)
-                # 距離座標が一致しているか確認
+                bg_arr = ds_bg['angular_correlation'].values
                 if len(bg_arr) == num_d:
-                    bg_flow_samples = bg_arr
+                    if bg_arr.ndim >= 2:
+                        bg_flow_samples = bg_arr.reshape(num_d, -1)
+            if 'angular_correlation_parallel' in ds_bg:
+                bg_p_arr = ds_bg['angular_correlation_parallel'].values
+                if len(bg_p_arr) == num_d:
+                    if bg_p_arr.ndim >= 2:
+                        bg_par_samples = bg_p_arr.reshape(num_d, -1)
+            if 'angular_correlation_perpendicular' in ds_bg:
+                bg_perp_arr = ds_bg['angular_correlation_perpendicular'].values
+                if len(bg_perp_arr) == num_d:
+                    if bg_perp_arr.ndim >= 2:
+                        bg_perp_samples = bg_perp_arr.reshape(num_d, -1)
         except Exception as e:
             print(f"[WARNING] Failed to load {bg_zarr_path}: {e}")
 
@@ -192,6 +205,8 @@ def extract_experiment_mode_flow_correlations(
         'tumble_flow': tumble_flow_samples,
         'all_flow': all_flow_samples,
         'bg_flow': bg_flow_samples,
+        'bg_par': bg_par_samples,
+        'bg_perp': bg_perp_samples,
         'run_par': run_par_samples,
         'tumble_par': tumble_par_samples,
         'run_perp': run_perp_samples,
@@ -226,6 +241,8 @@ def aggregate_flow_correlation_dataset(
         ('tumble', 'tumble_flow'),
         ('all', 'all_flow'),
         ('bg', 'bg_flow'),
+        ('bg_par', 'bg_par'),
+        ('bg_perp', 'bg_perp'),
         ('run_par', 'run_par'),
         ('tumble_par', 'tumble_par'),
         ('run_perp', 'run_perp'),

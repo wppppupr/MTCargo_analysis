@@ -389,7 +389,7 @@ def plot_mt_flow_by_condition_grid(
         bname = binfo['name']
         dia = binfo['diameter_um']
 
-        ax.set_title(f"$d = {dia:.2f}\\,\\mu\\mathrm{{m}}$ Background Flow", fontsize=12, fontweight='bold')
+        ax.set_title(f"$2R_c = {dia:.2f}\\,\\mu\\mathrm{{m}}$ Background Flow", fontsize=12, fontweight='bold')
         ax.plot(x_theory, p_theory_cos, 'k--', lw=1.2, alpha=0.5, label="Isotropic" if idx == 0 else "")
 
         b_data = flow_corr_by_bead_r.get(bname, {})
@@ -475,7 +475,7 @@ def plot_mt_flow_by_condition_grid(
                 c_pts.append(np.mean(vals))
 
         if r_pts:
-            ax_sum.plot(r_pts, c_pts, marker=m, color=col, lw=1.8, ms=6, label=f"{dia:.2f} $\\mu$m", alpha=0.85)
+            ax_sum.plot(r_pts, c_pts, marker=m, color=col, lw=1.8, ms=6, label=f"$2R_c = {dia:.2f}\\,\\mu\\mathrm{{m}}$", alpha=0.85)
 
     ax_sum.axhline(0, color='gray', linestyle='--', lw=1.0, alpha=0.6)
     ax_sum.set_xlim(0, max(r_targets) + 10)

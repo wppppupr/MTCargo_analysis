@@ -1004,30 +1004,30 @@ def main():
     ax_tau.plot(
         d_dense_tau, tau_theo_curve,
         color='#1f78b4', linestyle='-', linewidth=2.2,
-        label=rf'Theory: $\tau_{{\mathrm{{OACF}}}}(D_C) = \tau_0 \exp\left(-\frac{{2 D_C}}{{3 R_0}}\right)$' + '\n' + rf'  ($\tau_0 = {t0_fit:.2f}\,\mathrm{{s}},\ R_0 = {R0_vel:.2f}\,\mu\mathrm{{m}}$)',
+        label=rf'Theory: $\tau_{{\mathrm{{p}}}}(R_c) = \tau_0 \exp\left(-\frac{{4 R_c}}{{3 \xi}}\right)$' + '\n' + rf'  ($\tau_0 = {t0_fit:.2f}\,\mathrm{{s}},\ \xi = {R0_vel:.2f}\,\mu\mathrm{{m}}$)',
         zorder=3
     )
 
-    # 1. tau_OACF (Orientation 自己相関時間 / 積分時間)
+    # 1. tau_p (Orientation 持続時間 / 積分相関時間)
     if np.any(valid_oacf_sub):
         ax_tau.plot(
             d_sub[valid_oacf_sub], tau_oacf_sub[valid_oacf_sub],
             marker='o', color='#2b83ba', linewidth=1.8, linestyle=':', markersize=8.5,
-            label=r'$\tau_{\mathrm{OACF}}$ (Measured Orientation time)', zorder=4
+            label=r'$\tau_{\mathrm{p}}$ (Measured Orientation persistence time)', zorder=4
         )
 
-    # 2. tau_dwell (Run 状態滞在時間 / 走行持続時間)
+    # 2. tau_bound (Run 状態滞在時間 / 結合持続時間)
     ax_tau.plot(
         d_sub, tau_dwell_sub,
         marker='^', color='#4dac26', linewidth=1.8, linestyle='--', markersize=8.5,
-        label=r'$\tau_{\mathrm{dwell}}$ (Run dwell time: $\tau_{\mathrm{run}}$)', zorder=5
+        label=r'$\tau_{\mathrm{bound}}$ (Bound/Run dwell time)', zorder=5
     )
 
-    # 3. tau_eff (有効緩和時間 1/tau_eff = 1/tau_OACF + 1/tau_dwell)
+    # 3. tau_eff (有効緩和時間 1/tau_eff = 1/tau_p + 1/tau_bound)
     ax_tau.plot(
         d_sub, tau_eff_sub,
         marker='s', color='#d7191c', linewidth=2.5, linestyle='-', markersize=9.0,
-        label=r'$\tau_{\mathrm{eff}} = \left(\tau_{\mathrm{OACF}}^{-1} + \tau_{\mathrm{dwell}}^{-1}\right)^{-1}$', zorder=6
+        label=r'$\tau_{\mathrm{eff}} = \left(\tau_{\mathrm{p}}^{-1} + \tau_{\mathrm{bound}}^{-1}\right)^{-1}$', zorder=6
     )
 
     # tau_eff の数値注釈
@@ -1052,9 +1052,9 @@ def main():
     ax_tau.yaxis.set_major_locator(ticker.FixedLocator([0.05, 0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200]))
     ax_tau.yaxis.set_major_formatter(ticker.FuncFormatter(lambda y, _: f"{y:g}"))
 
-    ax_tau.set_xlabel(r'Particle Diameter $D_C$ [$\mu\mathrm{m}$]', fontsize=12, fontweight='bold')
+    ax_tau.set_xlabel(r'Particle Diameter $2R_c$ [$\mu\mathrm{m}$]', fontsize=12, fontweight='bold')
     ax_tau.set_ylabel(r'Timescale $\tau$ [s]', fontsize=12, fontweight='bold')
-    ax_tau.set_title(r'Relaxation Times $\tau_{\mathrm{OACF}}, \tau_{\mathrm{dwell}}, \tau_{\mathrm{eff}}$ vs Particle Diameter' + '\n' + rf'($\tau_0 = {t0_fit:.2f}\,\mathrm{{s}},\ R_0 = {R0_vel:.2f}\,\mu\mathrm{{m}},\ x \in [0, 25]\,\mu\mathrm{{m}}$)', fontsize=12, fontweight='bold', pad=10)
+    ax_tau.set_title(r'Relaxation Times $\tau_{\mathrm{p}}, \tau_{\mathrm{bound}}, \tau_{\mathrm{eff}}$ vs Particle Diameter' + '\n' + rf'($\tau_0 = {t0_fit:.2f}\,\mathrm{{s}},\ \xi = {R0_vel:.2f}\,\mu\mathrm{{m}},\ x \in [0, 25]\,\mu\mathrm{{m}}$)', fontsize=12, fontweight='bold', pad=10)
     ax_tau.grid(True, which='both', linestyle='--', alpha=0.4)
     ax_tau.legend(frameon=True, fontsize=9.0, loc='upper right', framealpha=0.92)
 
@@ -1069,7 +1069,7 @@ def main():
                  [popt_06um[0], popt_1um[0], popt_3um[0], popt_5um[0], popt_7um[0], popt_20um[0]], 
                  yerr=[err_popt_06um[0], err_popt_1um[0], err_popt_3um[0], err_popt_5um[0], err_popt_7um[0], err_popt_20um[0]], 
                  marker='o')
-    ax2.set(xlabel='Cargo Diameter $D_C$ [\u03bcm]', ylabel='$\\alpha$')
+    ax2.set(xlabel=r'Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]', ylabel=r'$\alpha$')
     save_figure_to_all(fig2, "alpha", out_dirs)
     
     # ---------------------------------------------------------

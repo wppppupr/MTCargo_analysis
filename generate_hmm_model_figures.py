@@ -219,7 +219,7 @@ def plot_trajectories_hybrid(
             ax.plot(x_pts[-1], y_pts[-1], marker='s', markersize=4.0, color='black', alpha=0.85, zorder=5)
 
         mode_str = f" ($K={k}$)"
-        ax.set_title(f"$d = {dia:.2f}\\,\\mu\\mathrm{{m}}${mode_str}", fontsize=13, fontweight='bold', pad=8)
+        ax.set_title(f"$2R_c = {dia:.2f}\\,\\mu\\mathrm{{m}}${mode_str}", fontsize=13, fontweight='bold', pad=8)
         ax.set_xlim(0, 285)
         ax.set_ylim(0, 240)
         ax.set_aspect('equal', adjustable='box')
@@ -331,7 +331,7 @@ def plot_emission_density_hybrid(
 
         fit_label = r'Mixture Fit $\sum \pi_k \mathcal{N}_k$' if k > 1 else r'Gaussian Fit $\mathcal{N}$'
         ax.plot(x_grid, total_pdf, color='#111111', lw=1.8, linestyle='--', label=fit_label, zorder=4)
-        ax.set_title(f"$d = {dia:.2f}\\,\\mu\\mathrm{{m}}$ ($K={k}$, $N={len(X):,}$)", fontsize=12, fontweight='bold')
+        ax.set_title(f"$2R_c = {dia:.2f}\\,\\mu\\mathrm{{m}}$ ($K={k}$, $N={len(X):,}$)", fontsize=12, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.4)
         ax.legend(loc='upper right', fontsize=8.0, frameon=True, framealpha=0.92)
 
@@ -369,7 +369,7 @@ def plot_turning_angle_polar_hybrid(
         k = binfo['k']
 
         if bname not in fitted_results:
-            ax.set_title(f"$d = {dia:.2f}\\,\\mu\\mathrm{{m}}$ (No data)", fontsize=11)
+            ax.set_title(f"$2R_c = {dia:.2f}\\,\\mu\\mathrm{{m}}$ (No data)", fontsize=11)
             ax.axis('off')
             continue
 
@@ -404,7 +404,7 @@ def plot_turning_angle_polar_hybrid(
         ax.plot(th_circ, np.full_like(th_circ, u_val), color='gray', linestyle=':', lw=1.2, label=r'Uniform $1/(2\pi)$', zorder=1)
 
         ax.set_theta_zero_location('E')
-        ax.set_title(f"$d = {dia:.2f}\\,\\mu\\mathrm{{m}}$ ($K={k}$)", fontsize=11, fontweight='bold', pad=12)
+        ax.set_title(f"$2R_c = {dia:.2f}\\,\\mu\\mathrm{{m}}$ ($K={k}$)", fontsize=11, fontweight='bold', pad=12)
         ax.grid(True, linestyle='--', alpha=0.5)
         ax.legend(loc='lower left', bbox_to_anchor=(-0.15, -0.2), fontsize=7.5, frameon=True, framealpha=0.9)
 
@@ -504,7 +504,7 @@ def plot_state_msd_hybrid(
 
         ax.set_xscale('log')
         ax.set_yscale('log')
-        ax.set_title(f"$d = {dia:.2f}\\,\\mu\\mathrm{{m}}$ ($K={k}$)", fontsize=12, fontweight='bold')
+        ax.set_title(f"$2R_c = {dia:.2f}\\,\\mu\\mathrm{{m}}$ ($K={k}$)", fontsize=12, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.4)
         ax.legend(loc='lower right', fontsize=8.5, frameon=True)
 
@@ -535,7 +535,7 @@ def plot_autocorrelation_grid_hybrid(
     fig, axes = plt.subplots(3, 6, figsize=(22, 10.5), sharex=True)
     corr_types = [
         ('vacf', r'VACF $\langle \mathbf{v}(t)\cdot\mathbf{v}(t+\tau) \rangle / \langle v^2 \rangle$', 'Velocity Vector'),
-        ('oacf', r'OACF $\langle \hat{\mathbf{e}}(t)\cdot\hat{\mathbf{e}}(t+\tau) \rangle$', 'Orientation Unit Vector'),
+        ('oacf', r'OACF ($\tau_{\mathrm{p}}$) $\langle \hat{\mathbf{e}}(t)\cdot\hat{\mathbf{e}}(t+\tau) \rangle$', 'Orientation Unit Vector'),
         ('sacf', r'SACF $\langle \delta v(t)\delta v(t+\tau) \rangle / \langle \delta v^2 \rangle$', 'Speed Fluctuation'),
     ]
 
@@ -595,7 +595,7 @@ def plot_autocorrelation_grid_hybrid(
             ax.set_ylim(-0.25, 1.05)
 
             if row_idx == 0:
-                ax.set_title(f"$d = {dia:.2f}\\,\\mu\\mathrm{{m}}$ ($K={k}$)", fontsize=12, fontweight='bold')
+                ax.set_title(f"$2R_c = {dia:.2f}\\,\\mu\\mathrm{{m}}$ ($K={k}$)", fontsize=12, fontweight='bold')
             if col_idx == 0:
                 ax.set_ylabel(ctitle, fontsize=10, fontweight='bold')
             if row_idx == 2:

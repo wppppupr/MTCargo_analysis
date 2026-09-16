@@ -176,19 +176,19 @@ def plot_run_velocity(df: pd.DataFrame, out_dir: Path):
     ss_res = np.sum((np.log(v_run_g) - ln_y_pred)**2)
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 1.0
 
-    print(f"\n[フィッティング結果: ln(y) = - 1/(3*R_0) * x + B]")
-    print(f"  R_0 = {R0:.4f} μm  (3*R_0 = {two_R0:.4f} μm)")
+    print(f"\n[フィッティング結果: ln(y) = - 1/(3*xi) * (2*Rc) + B]")
+    print(f"  xi = {R0:.4f} μm  (3*xi = {two_R0:.4f} μm)")
     print(f"  B = {B:.4f}")
     print(f"  v0 = exp(B) = {v0:.4f} μm/s")
     print(f"  R^2 = {r2:.4f}")
-    print(f"  式: ln(v_run) = - 1/(3 * {R0:.3f}) * d + ({B:.4f})  =>  v_run(d) = {v0:.4f} * exp(-d / {two_R0:.3f})\n")
+    print(f"  式: ln(v_run) = - 1/(3 * {R0:.3f}) * (2Rc) + ({B:.4f})  =>  v_run(Rc) = {v0:.4f} * exp(-4 Rc / (3 * {R0:.3f}))\n")
 
     x_fit = np.linspace(0.0, 20.0, 300)
     y_fit = v0 * np.exp(-x_fit / two_R0)
 
     fit_label = (
-        r'Fit: $\ln(v_{\mathrm{run}}) = -\frac{1}{3R_0} d + B$' + '\n'
-        rf'  $R_0 = {R0:.2f}\,\mu\mathrm{{m}}\ (3R_0 = {two_R0:.2f}\,\mu\mathrm{{m}})$' + '\n'
+        r'Fit: $\ln(v_{\mathrm{run}}) = -\frac{4 R_c}{3\xi} + B$' + '\n'
+        rf'  $\xi = {R0:.2f}\,\mu\mathrm{{m}}$' + '\n'
         rf'  $B = {B:.4f}\ (v_0 = {v0:.3f}\,\mu\mathrm{{m/s}})$' + '\n'
         rf'  $R^2 = {r2:.3f}$'
     )
@@ -221,7 +221,7 @@ def plot_run_velocity(df: pd.DataFrame, out_dir: Path):
             label=fit_label, zorder=5
         )
 
-        ax.set_xlabel(r'Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]', fontsize=13, fontweight='bold')
+        ax.set_xlabel(r'Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]', fontsize=13, fontweight='bold')
         ax.set_ylabel(r'Run Velocity $v_{\mathrm{run}}$ [$\mu\mathrm{m/s}$]', fontsize=13, fontweight='bold')
         ax.set_title(f'({scale_type} Scale, $x \in [0, 20]\,\mu\mathrm{{m}}$)', fontsize=14, fontweight='bold', pad=8)
         ax.set_xlim(0, 20.0)
@@ -243,7 +243,7 @@ def plot_run_velocity(df: pd.DataFrame, out_dir: Path):
             ax.yaxis.set_minor_formatter(ticker.NullFormatter())
             ax.legend(frameon=True, fontsize=9.2, loc='upper right', framealpha=0.92)
 
-    fig.suptitle(r'Cargo Run Velocity vs Diameter with Fit $\ln(y) = -\frac{1}{3R_0} x + B$ (0.6, 1, 3 $\mu\mathrm{m}$)', fontsize=15, fontweight='bold', y=0.98)
+    fig.suptitle(r'Cargo Run Velocity vs Diameter with Fit $\ln(y) = -\frac{4 R_c}{3\xi} + B$ (0.6, 1, 3 $\mu\mathrm{m}$)', fontsize=15, fontweight='bold', y=0.98)
     plt.tight_layout()
 
     comp_svg = out_dir / 'run_velocity_vs_diameter_2panel.svg'
@@ -282,9 +282,9 @@ def plot_run_velocity(df: pd.DataFrame, out_dir: Path):
     ax_g.set_yscale('log')
     ax_g.set_xlim(0, 20.0)
     ax_g.set_ylim(0.01, 0.30)
-    ax_g.set_xlabel(r'Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]', fontsize=14, fontweight='bold')
+    ax_g.set_xlabel(r'Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]', fontsize=14, fontweight='bold')
     ax_g.set_ylabel(r'Run Mean Velocity $v_{\mathrm{run}}$ [$\mu\mathrm{m/s}$]', fontsize=14, fontweight='bold')
-    ax_g.set_title(r'Cargo Run Velocity vs Diameter (Log Scale with Fit $\ln(y) = -\frac{1}{3R_0} x + B$)', fontsize=13, fontweight='bold', pad=10)
+    ax_g.set_title(r'Cargo Run Velocity vs Diameter (Log Scale with Fit $\ln(y) = -\frac{4 R_c}{3\xi} + B$)', fontsize=13, fontweight='bold', pad=10)
 
     ax_g.xaxis.set_major_locator(ticker.MultipleLocator(2.0))
     ax_g.xaxis.set_minor_locator(ticker.MultipleLocator(1.0))
@@ -297,9 +297,9 @@ def plot_run_velocity(df: pd.DataFrame, out_dir: Path):
     # 詳細なフィッティング情報テキストボックス
     fit_info_text = (
         r"$\mathbf{Fitting\ Model:}$" + "\n"
-        r"$\ln(v_{\mathrm{run}}) = -\frac{1}{3R_0} d + B$" + "\n"
-        r"$v_{\mathrm{run}}(d) = v_0 \exp\left(-\frac{d}{3R_0}\right)$" + "\n"
-        rf"$R_0 = {R0:.3f}\ \mu\mathrm{{m}}\quad (3R_0 = {two_R0:.3f}\ \mu\mathrm{{m}})$" + "\n"
+        r"$\ln(v_{\mathrm{run}}) = -\frac{4 R_c}{3\xi} + B$" + "\n"
+        r"$v_{\mathrm{run}}(R_c) = v_0 \exp\left(-\frac{4 R_c}{3\xi}\right)$" + "\n"
+        rf"$\xi = {R0:.3f}\ \mu\mathrm{{m}}$" + "\n"
         rf"$B = {B:.4f}\quad (v_0 = \mathrm{{e}}^B = {v0:.4f}\ \mu\mathrm{{m/s}})$" + "\n"
         rf"$R^2 = {r2:.4f}$"
     )
@@ -336,9 +336,9 @@ def plot_run_velocity(df: pd.DataFrame, out_dir: Path):
     ax_l.plot(d, v_run_g, color='#d62728', linestyle=':', linewidth=2.0, alpha=0.7, zorder=4)
     ax_l.plot(x_fit, y_fit, color='#d62728', linestyle='-', linewidth=2.8, label=fit_label, zorder=5)
 
-    ax_l.set_xlabel(r'Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]', fontsize=14, fontweight='bold')
+    ax_l.set_xlabel(r'Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]', fontsize=14, fontweight='bold')
     ax_l.set_ylabel(r'Run Mean Velocity $v_{\mathrm{run}}$ [$\mu\mathrm{m/s}$]', fontsize=14, fontweight='bold')
-    ax_l.set_title(r'Cargo Run Velocity vs Diameter (Linear Scale with Fit $y = v_0 \mathrm{e}^{-d/(3R_0)}$)', fontsize=13, fontweight='bold', pad=10)
+    ax_l.set_title(r'Cargo Run Velocity vs Diameter (Linear Scale with Fit $y = v_0 \mathrm{e}^{-4 R_c / (3\xi)}$)', fontsize=13, fontweight='bold', pad=10)
     ax_l.set_xlim(0, 20.0)
     ax_l.set_ylim(0, 0.25)
     ax_l.xaxis.set_major_locator(ticker.MultipleLocator(2.0))
@@ -372,7 +372,7 @@ def plot_run_velocity(df: pd.DataFrame, out_dir: Path):
         )
         # フィット線
         ax.plot(x_fit, y_fit, color='#d62728', linestyle='--', linewidth=2.2, alpha=0.85,
-                label=rf'Run Fit: $\ln(v) = -\frac{{1}}{{3R_0}} d + B$ ($R_0={R0:.2f}\,\mu\mathrm{{m}}$)', zorder=5)
+                label=rf'Run Fit: $\ln(v) = -\frac{{4 R_c}}{{3\xi}} + B$ ($\xi={R0:.2f}\,\mu\mathrm{{m}}$)', zorder=5)
 
         # 全体平均（外れ値除去なし）
         ax.errorbar(
@@ -381,7 +381,7 @@ def plot_run_velocity(df: pd.DataFrame, out_dir: Path):
             label=r'Overall Mean $\langle v \rangle_{\mathrm{raw}}$ (All steps, with outliers)', zorder=4
         )
 
-        ax.set_xlabel(r'Cargo Particle Diameter $d$ [$\mu\mathrm{m}$]', fontsize=13, fontweight='bold')
+        ax.set_xlabel(r'Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]', fontsize=13, fontweight='bold')
         ax.set_ylabel(r'Velocity [$\mu\mathrm{m/s}$]', fontsize=13, fontweight='bold')
         ax.set_title(f'({scale_type} Scale, $x \in [0, 20]\,\mu\mathrm{{m}}$)', fontsize=14, fontweight='bold', pad=8)
         ax.set_xlim(0, 20.0)

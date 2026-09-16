@@ -584,13 +584,13 @@ def plot_effective_diffusion_comparison(
         linewidth=1.6,
         linestyle='--',
         markersize=6.5,
-        label=r'Active Term: $\frac{1}{2}f_{\mathrm{run}} v_R^2 \tau_{\mathrm{eff}}$',
+        label=r'Active Term: $\frac{1}{2}f_{\mathrm{run}} v_{\mathrm{run}}^2 \tau_{\mathrm{eff}}$',
         zorder=5
     )
 
-    ax.set_xlabel(r'Particle Diameter $d$ [$\mu\mathrm{m}$]', fontsize=12, fontweight='bold')
+    ax.set_xlabel(r'Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]', fontsize=12, fontweight='bold')
     ax.set_ylabel(r'Diffusion Coefficient $D$ [$\mu\mathrm{m}^2/\mathrm{s}$]', fontsize=12, fontweight='bold')
-    ax.set_title(r'Effective Diffusion: Green-Kubo Median vs $D_{\mathrm{eff}} = D_{\mathrm{SE}} + \frac{1}{2} f_{\mathrm{run}} v_R^2 \tau_{\mathrm{eff}}$', fontsize=11, fontweight='bold', pad=10)
+    ax.set_title(r'Effective Diffusion: Green-Kubo Median vs $D_{\mathrm{eff}} = D_{\mathrm{SE}} + \frac{1}{2} f_{\mathrm{run}} v_{\mathrm{run}}^2 \tau_{\mathrm{eff}}$', fontsize=11, fontweight='bold', pad=10)
     
     if use_log_scale:
         ax.set_xscale('log')
@@ -619,7 +619,7 @@ def plot_effective_diffusion_comparison(
     fig_lin, ax_lin = plt.subplots(figsize=(7.5, 5.6))
     ax_lin.plot(
         d_dense, d_0_dense, color='#999999', linestyle=':', linewidth=1.6,
-        label=r'Stokes-Einstein ($D_{\mathrm{SE}} \propto d^{-1}$)', zorder=2
+        label=r'Stokes-Einstein ($D_{\mathrm{SE}} \propto (2R_c)^{-1}$)', zorder=2
     )
     if d_gk_full is not None:
         ax_lin.plot(
@@ -635,13 +635,13 @@ def plot_effective_diffusion_comparison(
     )
     ax_lin.plot(
         d, d_eff_theo, marker='s', color='#d95f02', linewidth=2.2, linestyle='-',
-        markersize=7.5, label=r'Model: $D_{\mathrm{eff}} = D_{\mathrm{SE}} + \frac{1}{2}f_{\mathrm{run}} v_R^2 \tau_{\mathrm{eff}}$', zorder=7
+        markersize=7.5, label=r'Model: $D_{\mathrm{eff}} = D_{\mathrm{SE}} + \frac{1}{2}f_{\mathrm{run}} v_{\mathrm{run}}^2 \tau_{\mathrm{eff}}$', zorder=7
     )
     ax_lin.plot(
         d, d_active, marker='^', color='#2b83ba', linewidth=1.6, linestyle='--',
-        markersize=6.5, label=r'Active Term: $\frac{1}{2}f_{\mathrm{run}} v_R^2 \tau_{\mathrm{eff}}$', zorder=5
+        markersize=6.5, label=r'Active Term: $\frac{1}{2}f_{\mathrm{run}} v_{\mathrm{run}}^2 \tau_{\mathrm{eff}}$', zorder=5
     )
-    ax_lin.set_xlabel(r'Particle Diameter $d$ [$\mu\mathrm{m}$]', fontsize=12, fontweight='bold')
+    ax_lin.set_xlabel(r'Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]', fontsize=12, fontweight='bold')
     ax_lin.set_ylabel(r'Diffusion Coefficient $D$ [$\mu\mathrm{m}^2/\mathrm{s}$]', fontsize=12, fontweight='bold')
     ax_lin.set_title(r'Effective Diffusion vs Diameter (Linear Scale - Green-Kubo Median)', fontsize=11, fontweight='bold', pad=10)
     ax_lin.set_xlim(0, 22)
