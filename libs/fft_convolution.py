@@ -522,3 +522,177 @@ class FFTConvolver:
             'bg_par': c_vals_par,
             'bg_perp': c_vals_perp
         }
+
+
+class FullField2DAutocorrelation:
+    """
+    Computes full-field 2-point spatial autocorrelation of 2D vector fields using 2D FFT
+    (Wiener-Khinchin theorem) with proper zero-padding and extracts azimuthally-averaged
+    (radial) correlation profiles C(r) for:
+      - Total orientational correlation: <u(x) · u(x+r)>
+      - 1st principal component (Parallel to nematic axis theta): <u_par(x) u_par(x+r)>
+      - 2nd principal component (Perpendicular to nematic axis): <u_perp(x) u_perp(x+r)>
+    """
+    def __init__(self, shape, distances, shell_width=2.0, device=None):
+        self.H, self.W = shape
+        self.distances = np.array(distances, dtype=np.float32)
+        self.shell_width = float(shell_width)
+
+        # Zero-padding size to avoid periodic boundary wrap-around
+        self.pad_H = int(scipy.fft.next_fast_len(2 * self.H))
+        self.pad_W = int(scipy.fft.next_fast_len(2 * self.W))
+
+        # Check GPU availability
+        if device is None:
+            if HAS_TORCH and TORCH_CUDA:
+                try:
+                    free_mem = torch.cuda.mem_get_info()[0] / (1024**2)
+                    self.device_type = 'cuda' if free_mem > 200 else 'scipy'
+                except Exception:
+                    self.device_type = 'scipy'
+            else:
+                self.device_type = 'scipy'
+        else:
+            self.device_type = device
+
+        self.device = torch.device(self.device_type) if (HAS_TORCH and self.device_type == 'cuda') else None
+
+        # Precompute frequency/displacement radial distance grid
+        y_freq = np.fft.fftfreq(self.pad_H, d=1.0) * self.pad_H
+        x_freq = np.fft.fftfreq(self.pad_W, d=1.0) * self.pad_W
+        yy, xx = np.meshgrid(y_freq, x_freq, indexing='ij')
+        self.r_map_np = np.hypot(yy, xx).astype(np.float32)
+
+        # Precompute radial masks for each target distance
+        half_w = self.shell_width / 2.0
+        self.radial_masks_np = []
+        self.radial_indices_np = []
+        for d in self.distances:
+            if d == 0:
+                mask = (self.r_map_np < 0.5)
+            else:
+                mask = (self.r_map_np >= (d - half_w)) & (self.r_map_np <= (d + half_w))
+                if not np.any(mask):
+                    closest = np.argmin(np.abs(self.r_map_np - d))
+                    mask = np.zeros_like(self.r_map_np, dtype=bool)
+                    mask.flat[closest] = True
+            self.radial_masks_np.append(mask)
+            self.radial_indices_np.append(np.where(mask))
+
+        if HAS_TORCH and self.device_type == 'cuda':
+            self.radial_masks_torch = [
+                torch.from_numpy(m).to(self.device, non_blocking=True) for m in self.radial_masks_np
+            ]
+
+    def compute_frame(self, m_ux: np.ndarray, m_uy: np.ndarray, valid_mask: np.ndarray = None, theta: float = 0.0) -> dict:
+        """
+        Compute full-field 2-point autocorrelation for a single frame.
+
+        Parameters
+        ----------
+        m_ux, m_uy : np.ndarray
+            2D arrays of vector components (H, W).
+        valid_mask : np.ndarray, optional
+            2D boolean or float array (H, W) indicating valid flow pixels.
+            If None, inferred from non-zero vector magnitudes.
+        theta : float
+            Global nematic director angle (radians) for parallel/perpendicular decomposition.
+
+        Returns
+        -------
+        dict with keys: 'corr_total', 'corr_par', 'corr_perp' (each is 1D array of shape (len(distances),))
+        """
+        if valid_mask is None:
+            valid_mask = ((m_ux**2 + m_uy**2) > 1e-8).astype(np.float32)
+        else:
+            valid_mask = valid_mask.astype(np.float32)
+
+        cos_th = float(np.cos(theta))
+        sin_th = float(np.sin(theta))
+
+        # Parallel and perpendicular projections
+        u_par = m_ux * cos_th + m_uy * sin_th
+        u_perp = -m_ux * sin_th + m_uy * cos_th
+
+        num_d = len(self.distances)
+        res_total = np.full(num_d, np.nan, dtype=np.float32)
+        res_par = np.full(num_d, np.nan, dtype=np.float32)
+        res_perp = np.full(num_d, np.nan, dtype=np.float32)
+
+        if self.device_type == 'cuda':
+            try:
+                with torch.no_grad():
+                    d_ux = torch.from_numpy(m_ux).to(self.device, non_blocking=True)
+                    d_uy = torch.from_numpy(m_uy).to(self.device, non_blocking=True)
+                    d_par = torch.from_numpy(u_par).to(self.device, non_blocking=True)
+                    d_perp = torch.from_numpy(u_perp).to(self.device, non_blocking=True)
+                    d_mask = torch.from_numpy(valid_mask).to(self.device, non_blocking=True)
+
+                    # 2D RFFT with zero-padding
+                    f_ux = torch.fft.rfft2(d_ux, s=(self.pad_H, self.pad_W))
+                    f_uy = torch.fft.rfft2(d_uy, s=(self.pad_H, self.pad_W))
+                    f_par = torch.fft.rfft2(d_par, s=(self.pad_H, self.pad_W))
+                    f_perp = torch.fft.rfft2(d_perp, s=(self.pad_H, self.pad_W))
+                    f_mask = torch.fft.rfft2(d_mask, s=(self.pad_H, self.pad_W))
+
+                    # Autocorrelation numerators (Wiener-Khinchin)
+                    g_total = torch.fft.irfft2(torch.abs(f_ux)**2 + torch.abs(f_uy)**2, s=(self.pad_H, self.pad_W))
+                    g_par = torch.fft.irfft2(torch.abs(f_par)**2, s=(self.pad_H, self.pad_W))
+                    g_perp = torch.fft.irfft2(torch.abs(f_perp)**2, s=(self.pad_H, self.pad_W))
+                    weight = torch.fft.irfft2(torch.abs(f_mask)**2, s=(self.pad_H, self.pad_W))
+
+                    # Normalized correlation maps
+                    valid_w = weight > 1e-6
+                    inv_w = torch.where(valid_w, 1.0 / weight, torch.tensor(0.0, device=self.device))
+                    c_map_total = g_total * inv_w
+                    c_map_par = g_par * inv_w
+                    c_map_perp = g_perp * inv_w
+
+                    for idx, t_mask in enumerate(self.radial_masks_torch):
+                        active_mask = t_mask & valid_w
+                        if torch.any(active_mask):
+                            res_total[idx] = float(torch.mean(c_map_total[active_mask]).cpu().numpy())
+                            res_par[idx] = float(torch.mean(c_map_par[active_mask]).cpu().numpy())
+                            res_perp[idx] = float(torch.mean(c_map_perp[active_mask]).cpu().numpy())
+
+                return {
+                    'corr_total': res_total,
+                    'corr_par': res_par,
+                    'corr_perp': res_perp,
+                }
+            except torch.OutOfMemoryError:
+                warnings.warn("GPU Out of Memory in FullField2DAutocorrelation. Falling back to CPU SciPy.")
+                torch.cuda.empty_cache()
+                self.device_type = 'scipy'
+
+        # Multi-threaded SciPy CPU FFT
+        f_ux = scipy.fft.rfft2(m_ux, s=(self.pad_H, self.pad_W), workers=4)
+        f_uy = scipy.fft.rfft2(m_uy, s=(self.pad_H, self.pad_W), workers=4)
+        f_par = scipy.fft.rfft2(u_par, s=(self.pad_H, self.pad_W), workers=4)
+        f_perp = scipy.fft.rfft2(u_perp, s=(self.pad_H, self.pad_W), workers=4)
+        f_mask = scipy.fft.rfft2(valid_mask, s=(self.pad_H, self.pad_W), workers=4)
+
+        g_total = scipy.fft.irfft2(np.abs(f_ux)**2 + np.abs(f_uy)**2, s=(self.pad_H, self.pad_W), workers=4)
+        g_par = scipy.fft.irfft2(np.abs(f_par)**2, s=(self.pad_H, self.pad_W), workers=4)
+        g_perp = scipy.fft.irfft2(np.abs(f_perp)**2, s=(self.pad_H, self.pad_W), workers=4)
+        weight = scipy.fft.irfft2(np.abs(f_mask)**2, s=(self.pad_H, self.pad_W), workers=4)
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            valid_w = weight > 1e-6
+            inv_w = np.where(valid_w, 1.0 / weight, 0.0)
+            c_map_total = g_total * inv_w
+            c_map_par = g_par * inv_w
+            c_map_perp = g_perp * inv_w
+
+        for idx, mask in enumerate(self.radial_masks_np):
+            active_mask = mask & valid_w
+            if np.any(active_mask):
+                res_total[idx] = np.mean(c_map_total[active_mask])
+                res_par[idx] = np.mean(c_map_par[active_mask])
+                res_perp[idx] = np.mean(c_map_perp[active_mask])
+
+        return {
+            'corr_total': res_total,
+            'corr_par': res_par,
+            'corr_perp': res_perp,
+        }

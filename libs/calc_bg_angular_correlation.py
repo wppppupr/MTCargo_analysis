@@ -17,9 +17,9 @@ if str(current_dir.parent) not in sys.path:
     sys.path.insert(0, str(current_dir.parent))
 
 try:
-    from libs.fft_convolution import FFTConvolver
+    from libs.fft_convolution import FFTConvolver, FullField2DAutocorrelation
 except ImportError:
-    from fft_convolution import FFTConvolver
+    from fft_convolution import FFTConvolver, FullField2DAutocorrelation
 
 
 def parse_distances(distance_args):
@@ -92,17 +92,15 @@ def load_nematic_thetas(base_path, num_frames, flow_data=None, channel_first=Tru
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Calculate angular spatial correlation for background / ROI.')
+    parser = argparse.ArgumentParser(description='Calculate full-field 2-point angular spatial correlation for background / bulk MT flow using 2D FFT.')
     parser.add_argument('base_path', type=str, help='Path to the directory containing hdf5 and csv')
     parser.add_argument('--h5_file', type=str, default='GFP_flows.h5', help='H5 file name')
-    parser.add_argument('--roi_x', type=int, default=None, help='X coordinate of the ROI center (optional)')
-    parser.add_argument('--roi_y', type=int, default=None, help='Y coordinate of the ROI center (optional)')
     parser.add_argument('--tracks_csv', type=str, default='beads_tracks.csv', help='Trackpy csv file name')
     parser.add_argument('--distances', '--windows', dest='distances', type=str, nargs='+', default=['2:100:2', '120:500:20'], 
                         help='Distance ranges / radii in pixels. Accepts space/comma separated numbers, or start:stop:step')
-    parser.add_argument('--shell_width', type=float, default=2.0, help='Width of the annular shell for ring kernel (pixels).')
-    parser.add_argument('--kernel_type', type=str, default='ring', choices=['ring', 'disk', 'gaussian'],
-                        help='Kernel type: "ring" (annular shell, default), "disk" (circular window), or "gaussian".')
+    parser.add_argument('--shell_width', type=float, default=2.0, help='Width of the annular shell for radial averaging (pixels).')
+    parser.add_argument('--mask_particles', action='store_true', help='If True, mask out particle regions in flow field.')
+    parser.add_argument('--particle_mask_radius', type=float, default=15.0, help='Mask radius around particles in pixels if mask_particles is set.')
     parser.add_argument('--out_name', type=str, default='angular_correlation_bg.zarr', help='Output zarr directory name')
     parser.add_argument('--device', type=str, default=None, choices=['cuda', 'cpu', 'torch_cpu', 'scipy'],
                         help='Compute backend (cuda/cpu/scipy). Default: auto-detect GPU.')
@@ -120,11 +118,9 @@ def main():
     print(f"Distances to compute: {distances}")
 
     df_tracks = None
-    if csv_path.exists():
-        print(f"Loading tracks from {csv_path} for overlap checking...")
+    if args.mask_particles and csv_path.exists():
+        print(f"Loading tracks from {csv_path} for particle masking...")
         df_tracks = pd.read_csv(csv_path)
-    else:
-        print(f"Warning: Track file not found at {csv_path}. Particle overlap checking will be skipped.")
 
     with h5py.File(str(h5_path), 'r') as f:
         dataset_key = list(f.keys())[0]
@@ -142,58 +138,17 @@ def main():
 
         thetas = load_nematic_thetas(base_path, num_frames, flow_data=flow_data, channel_first=channel_first)
 
-        max_dist = max(distances)
-        half_w = max_dist
-
-        if args.roi_x is None or args.roi_y is None:
-            if df_tracks is None:
-                raise ValueError("Error: Track CSV is required to automatically find an empty ROI.")
-
-            print("Automatically searching for the safest particle-free ROI...")
-            y_all = np.clip(np.round(df_tracks['y'].values).astype(int), 0, rows - 1)
-            x_all = np.clip(np.round(df_tracks['x'].values).astype(int), 0, cols - 1)
-            particle_mask = np.zeros((rows, cols), dtype=bool)
-            particle_mask[y_all, x_all] = True
-
-            from scipy.ndimage import distance_transform_edt
-            dist_map = distance_transform_edt(~particle_mask)
-
-            max_available = dist_map.max()
-            if max_available <= half_w:
-                print(f"Warning: Safe radius to nearest particle is {max_available:.1f} px, which is smaller than max distance ({half_w}).")
-
-            roi_y, roi_x = np.unravel_index(dist_map.argmax(), dist_map.shape)
-            print(f"Automatically selected ROI center at ({roi_x}, {roi_y}) with a safe radius of {max_available:.1f} px to the nearest particle.")
-        else:
-            roi_y = int(np.clip(args.roi_y, 0, rows - 1))
-            roi_x = int(np.clip(args.roi_x, 0, cols - 1))
-
-            if df_tracks is not None:
-                in_roi = df_tracks[
-                    (df_tracks['x'] >= roi_x - half_w) & (df_tracks['x'] <= roi_x + half_w) &
-                    (df_tracks['y'] >= roi_y - half_w) & (df_tracks['y'] <= roi_y + half_w)
-                ]
-                if not in_roi.empty:
-                    frames_with_particles = in_roi['frame'].unique()
-                    print(
-                        f"Warning: Particle(s) detected inside the manual ROI at ({roi_x}, {roi_y}) "
-                        f"with the maximum window size ({max_dist}).\n"
-                        f"Frames with overlap: {frames_with_particles}"
-                    )
-                else:
-                    print("No particles overlap with the specified ROI. Proceeding...")
-
         num_d = len(distances)
         corr_bg_array = np.full((num_d, num_frames), np.nan, dtype=np.float32)
         corr_bg_par_array = np.full((num_d, num_frames), np.nan, dtype=np.float32)
         corr_bg_perp_array = np.full((num_d, num_frames), np.nan, dtype=np.float32)
 
-        # FFTConvolver 初期化
-        print(f"Initializing Fast FFT Convolver ({len(distances)} distances, kernel={args.kernel_type}, device={args.device or 'auto'})...")
-        convolver = FFTConvolver(shape=(rows, cols), sizes=distances, kernel_type=args.kernel_type, shell_width=args.shell_width, device=args.device)
-        print(f"Using backend: {convolver.device_type}")
+        # FullField2DAutocorrelation 初期化
+        print(f"Initializing Full-Field 2D FFT Autocorrelation Engine ({len(distances)} distances, shell_width={args.shell_width}, device={args.device or 'auto'})...")
+        correlator = FullField2DAutocorrelation(shape=(rows, cols), distances=distances, shell_width=args.shell_width, device=args.device)
+        print(f"Using backend: {correlator.device_type}")
 
-        print(f"Calculating background angular spatial correlation (Total, 1st PC Parallel, 2nd PC Perpendicular) across {num_frames} frames...")
+        print(f"Calculating full-field 2-point angular spatial correlation across {num_frames} frames...")
         for t in tqdm(range(num_frames)):
             if channel_first:
                 m_x = flow_data[t, 0, ...].astype(np.float32)
@@ -203,16 +158,30 @@ def main():
                 m_y = flow_data[t, ..., 1].astype(np.float32)
 
             v_mag = np.hypot(m_x, m_y)
+            valid_mask = (v_mag > 1e-4)
+
+            # オプション: 粒子領域の除外マスク
+            if df_tracks is not None:
+                df_f = df_tracks[df_tracks['frame'] == t]
+                if not df_f.empty:
+                    y_pts = df_f['y'].values
+                    x_pts = df_f['x'].values
+                    r_sq = args.particle_mask_radius**2
+                    yy, xx = np.ogrid[:rows, :cols]
+                    for py, px in zip(y_pts, x_pts):
+                        p_dist_sq = (yy - py)**2 + (xx - px)**2
+                        valid_mask[p_dist_sq <= r_sq] = False
+
             with np.errstate(divide='ignore', invalid='ignore'):
-                m_ux = np.where(v_mag > 0, m_x / v_mag, 0.0).astype(np.float32)
-                m_uy = np.where(v_mag > 0, m_y / v_mag, 0.0).astype(np.float32)
+                m_ux = np.where(valid_mask, m_x / np.maximum(v_mag, 1e-6), 0.0).astype(np.float32)
+                m_uy = np.where(valid_mask, m_y / np.maximum(v_mag, 1e-6), 0.0).astype(np.float32)
 
             th_t = thetas[t] if t < len(thetas) else 0.0
-            res = convolver.convolve_and_sample_bg_angular_correlation(m_ux=m_ux, m_uy=m_uy, roi_y=roi_y, roi_x=roi_x, theta=th_t)
-            
-            corr_bg_array[:, t] = res['bg_total']
-            corr_bg_par_array[:, t] = res['bg_par']
-            corr_bg_perp_array[:, t] = res['bg_perp']
+            res = correlator.compute_frame(m_ux=m_ux, m_uy=m_uy, valid_mask=valid_mask.astype(np.float32), theta=th_t)
+
+            corr_bg_array[:, t] = res['corr_total']
+            corr_bg_par_array[:, t] = res['corr_par']
+            corr_bg_perp_array[:, t] = res['corr_perp']
 
     print("\nConsolidating background data into xarray...")
     ds_bg = xr.Dataset(
@@ -240,10 +209,9 @@ def main():
         }
     )
 
-    ds_bg.attrs['description'] = f'Angular spatial correlation analysis for Background ROI at ({roi_x}, {roi_y}) (Total, 1st PC Parallel, 2nd PC Perpendicular)'
-    ds_bg.attrs['roi_center'] = [int(roi_x), int(roi_y)]
+    ds_bg.attrs['description'] = 'Full-field 2-point angular spatial correlation analysis for Background / Bulk MT flow (Total, 1st PC Parallel, 2nd PC Perpendicular)'
+    ds_bg.attrs['method'] = '2D FFT Wiener-Khinchin Autocorrelation with Radial Averaging'
     ds_bg.attrs['distances'] = distances
-    ds_bg.attrs['kernel_type'] = args.kernel_type
     ds_bg.attrs['shell_width'] = args.shell_width
 
     out_bg = base_path / args.out_name
@@ -251,7 +219,7 @@ def main():
         shutil.rmtree(out_bg, ignore_errors=True)
 
     ds_bg.to_zarr(str(out_bg), mode='w', consolidated=False)
-    print(f"Success! Background angular correlation saved to {out_bg}")
+    print(f"Success! Background full-field 2-point angular correlation saved to {out_bg}")
 
 
 if __name__ == "__main__":
