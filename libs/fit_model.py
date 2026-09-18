@@ -82,3 +82,65 @@ def log_rtp_2state_msd(dt, D0, sigma_noise_sq, f_run=0.0, v_R=0.0, tau_eff=np.na
     """
     msd_val = rtp_2state_msd(dt, D0, sigma_noise_sq, f_run, v_R, tau_eff)
     return np.log10(np.maximum(msd_val, 1e-12))
+
+
+# Caged / Hopping diffusion MSD model: <dr^2(t)> = L_cage^2 * (1 - exp(-t / tau_r)) + 4 * D_eff * t
+def caged_msd(dt, L_cage_sq, tau_r, D_eff):
+    """
+    Caged diffusion MSD model:
+    <dr^2(t)> = L_cage^2 * (1 - exp(-t / tau_r)) + 4 * D_eff * t
+    """
+    tr = np.maximum(tau_r, 1e-12)
+    return L_cage_sq * (1.0 - np.exp(-dt / tr)) + 4.0 * D_eff * dt
+
+
+def log_caged_msd(dt, L_cage_sq, tau_r, D_eff):
+    """
+    Log10 of caged diffusion MSD for log-log curve fitting.
+    """
+    msd_val = caged_msd(dt, L_cage_sq, tau_r, D_eff)
+    return np.log10(np.maximum(msd_val, 1e-12))
+
+
+# Nematic flow universal master scaling function g(x) = (2 / x^2) * [1 - (1 + x) * exp(-x)]
+def master_function(x):
+    """
+    Theoretical master function:
+    g(x) = (2 / x^2) * [1 - (1 + x) * exp(-x)]   (x = R_c / xi)
+    For x -> 0, Taylor expansion is used for numerical stability:
+    g(x) = 1 - (2/3)x + (1/4)x^2 - (1/15)x^3 + ...
+    """
+    x_arr = np.asarray(x, dtype=float)
+    res = np.zeros_like(x_arr)
+    
+    small = x_arr < 1e-4
+    large = ~small
+    
+    if np.any(small):
+        xs = x_arr[small]
+        res[small] = 1.0 - (2.0 / 3.0) * xs + 0.25 * (xs**2) - (xs**3) / 15.0 + (xs**4) / 72.0
+    
+    if np.any(large):
+        xl = x_arr[large]
+        res[large] = (2.0 / (xl**2)) * (1.0 - (1.0 + xl) * np.exp(-xl))
+        
+    return float(res) if np.ndim(x) == 0 else res
+
+
+# Unified Dynamic Ising Diffusion Model:
+# D(x) = 0.5 * v0^2 * [ 1 / (1 + (8 / 3pi)*x + 0.5*x^2) ] * [ (tau0 * tau_xi) / (tau_xi * g(x) + tau0) ]
+def unified_diffusion(x, v0=0.207, tau0=14.00, tau_xi=3.00):
+    """
+    Unified Dynamic Ising Diffusion Theory:
+    D(x) = (1/2) * v0^2 * S(x) * tau_corr(x)
+    where:
+      S(x) = 1 / (1 + (8 / (3 * pi)) * x + 0.5 * x^2)  (Padé geometric shape factor)
+      tau_corr(x) = (tau0 * tau_xi) / (tau_xi * g(x) + tau0)  (Parallel relaxation time)
+      g(x) = (2 / x^2) * [1 - (1 + x) * exp(-x)]
+    """
+    x_arr = np.asarray(x, dtype=float)
+    gx = master_function(x_arr)
+    s_x = 1.0 / (1.0 + (8.0 / (3.0 * np.pi)) * x_arr + 0.5 * (x_arr ** 2))
+    tau_corr_x = (tau0 * tau_xi) / (tau_xi * gx + tau0)
+    d_x = 0.5 * (v0 ** 2) * s_x * tau_corr_x
+    return float(d_x) if np.ndim(x) == 0 else d_x

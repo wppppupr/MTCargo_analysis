@@ -55,6 +55,7 @@ hmm_flow_corr_small = "python hmm_flow_correlation_analysis.py --beads beads06um
 hmm_polar = "python hmm_polar_order_analysis.py"
 hmm_polar_small = "python hmm_polar_order_analysis.py --beads beads06um beads1um beads3um"
 hmm_acf = "python plot_hmm_acf.py"
+diffusion_scaling = "python plot_diffusion_scaling_master_curve.py"
 
 
 

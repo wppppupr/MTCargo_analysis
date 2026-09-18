@@ -27,7 +27,7 @@ POSSIBLE_ROOTS = [
     Path('/Volumes/data-1/Sasaki/MTsingleBeads'),
     Path('/Volumes/data-1/sasaki/MTsingleBeads'),
     Path('/Volumes/data/Sasaki/MTsingleBeads'),
-    Path('/Volumes/data/sasaki/MTsingleBeads'),
+    Path('/mnt/NAS-Ebanaru/sasaki/MTsingleBeads'),
     Path('/Volumes/data/Sasaki/MTSingleBeads'),
 ]
 
@@ -430,6 +430,111 @@ def fit_rtp_2state_msd(
     return summary
 
 
+def fit_caged_msd(
+    pool_df: pd.DataFrame,
+    stats_df: pd.DataFrame,
+    min_t: float = 4.0,
+    max_t: float = 300.0,
+    min_particles: int = 2
+) -> dict:
+    """
+    ケージ拡散モデルに基づいてプール粒子のアンサンブル平均MSD（対数Log-Log空間）にフィッティングを実施し、
+    L_cage^2, tau_r, D_eff を推定・算出する。
+    <dr^2(t)> = L_cage^2 * (1 - exp(-t / tau_r)) + 4 * D_eff * t
+    """
+    # 1. 個別粒子ごとのフィッティング
+    part_results = []
+    for p_id in pool_df['unique_particle_id'].unique():
+        sub_df = pool_df[pool_df['unique_particle_id'] == p_id]
+        mask_p = (sub_df['lag time'] >= min_t) & (sub_df['lag time'] <= max_t)
+        if np.sum(mask_p) < 3:
+            continue
+        dt_vals = sub_df['lag time'][mask_p].to_numpy(dtype=float)
+        msd_vals = sub_df['MSD'][mask_p].to_numpy(dtype=float)
+        target_p = np.log10(np.maximum(msd_vals, 1e-12))
+        p0_p = [msd_vals[0], 4.5, msd_vals[-1] / (4.0 * dt_vals[-1])]
+        bounds_p = ([0.0, 3.0, 0.0], [1e4, 6.0, 10.0])
+        try:
+            popt_p, _ = curve_fit(
+                fm.log_caged_msd, dt_vals, target_p,
+                p0=p0_p, bounds=bounds_p, maxfev=5000
+            )
+            part_results.append({
+                "unique_particle_id": p_id,
+                "L_cage_sq": popt_p[0],
+                "L_cage": np.sqrt(popt_p[0]),
+                "tau_r": popt_p[1],
+                "D_eff": popt_p[2]
+            })
+        except Exception:
+            pass
+            
+    df_part_res = pd.DataFrame(part_results)
+    
+    # 2. プール粒子のアンサンブル平均MSDに対するフィッティング
+    mask_ens = (stats_df.index >= min_t) & (stats_df.index <= max_t) & (stats_df['count'] >= min_particles)
+    dt_ens = stats_df.index[mask_ens].to_numpy(dtype=float)
+    msd_ens = stats_df['mean'][mask_ens].to_numpy(dtype=float)
+    target_ens = np.log10(np.maximum(msd_ens, 1e-12))
+    
+    p0_ens = [msd_ens[0], 4.5, msd_ens[-1] / (4.0 * dt_ens[-1])]
+    bounds_ens = ([0.0, 3.0, 0.0], [1e4, 6.0, 10.0])
+    
+    try:
+        popt_ens, pcov_ens = curve_fit(
+            fm.log_caged_msd, dt_ens, target_ens,
+            p0=p0_ens, bounds=bounds_ens, maxfev=10000
+        )
+        L_cage_sq_ens = float(popt_ens[0])
+        L_cage_ens = float(np.sqrt(L_cage_sq_ens))
+        tau_r_ens = float(popt_ens[1])
+        D_eff_ens = float(popt_ens[2])
+        perr_ens = np.sqrt(np.diag(pcov_ens)) if pcov_ens is not None else [np.nan, np.nan, np.nan]
+        L_cage_sq_err = float(perr_ens[0]) if np.isfinite(perr_ens[0]) else np.nan
+        tau_r_err = float(perr_ens[1]) if np.isfinite(perr_ens[1]) else np.nan
+        D_eff_err = float(perr_ens[2]) if np.isfinite(perr_ens[2]) else np.nan
+        
+        pred_target = fm.log_caged_msd(dt_ens, L_cage_sq_ens, tau_r_ens, D_eff_ens)
+        ss_res = np.sum((target_ens - pred_target)**2)
+        ss_tot = np.sum((target_ens - np.mean(target_ens))**2)
+        r2_ens = 1.0 - ss_res / (ss_tot + 1e-12) if ss_tot > 0 else np.nan
+    except Exception:
+        L_cage_sq_ens, L_cage_sq_err = np.nan, np.nan
+        L_cage_ens = np.nan
+        tau_r_ens, tau_r_err = np.nan, np.nan
+        D_eff_ens, D_eff_err = np.nan, np.nan
+        r2_ens = np.nan
+        
+    fit_t_dense = np.logspace(np.log10(4.0), np.log10(1000.0), 300)
+    fit_msd_dense = fm.caged_msd(fit_t_dense, L_cage_sq_ens, tau_r_ens, D_eff_ens) if np.isfinite(D_eff_ens) else np.array([])
+    
+    summary = {
+        "model_name": "Caged Diffusion",
+        "L_cage_sq_ens": L_cage_sq_ens,
+        "L_cage_sq_err": L_cage_sq_err,
+        "L_cage_ens": L_cage_ens,
+        "tau_r_ens": tau_r_ens,
+        "tau_r_err": tau_r_err,
+        "D0_ens": np.nan,
+        "D0_err": np.nan,
+        "sigma_noise_sq_ens": np.nan,
+        "sigma_noise_sq_err": np.nan,
+        "sigma_noise_ens": np.nan,
+        "D_active": np.nan,
+        "D_eff_ens": D_eff_ens,
+        "D_eff_err": D_eff_err,
+        "r2_ens": r2_ens,
+        "D0_mean_part": np.nan,
+        "D0_std_part": np.nan,
+        "D_eff_mean_part": df_part_res["D_eff"].mean() if not df_part_res.empty else np.nan,
+        "D_eff_std_part": df_part_res["D_eff"].std() if not df_part_res.empty else np.nan,
+        "fit_t": fit_t_dense,
+        "fit_msd": fit_msd_dense,
+        "df_part": df_part_res
+    }
+    return summary
+
+
 def calc_stokes_einstein_diffusion(diameter_um, temperature_K=298.15, viscosity_Pa_s=1.0e-3):
     """
     ストークス・アインシュタイン理論熱拡散係数 D_SE [um^2/s]
@@ -461,6 +566,208 @@ def save_csv_to_all(df: pd.DataFrame, filename: str, out_dirs: list[Path]):
                 df.to_csv(d / filename, index=False)
         except Exception as e:
             print(f"Warning: Failed to save {filename} to {d}: {e}")
+
+
+def extract_long_time_diffusion(
+    df: pd.DataFrame,
+    min_t: float = 100.0,
+    max_t: float = 300.0
+) -> float:
+    """
+    モデルフリーな長時間拡散係数 D_long を生データの線形スロープから直接抽出する:
+    D_long = lim_{dt -> large} <dr^2(dt)> / (4 * dt)
+    """
+    if df.empty:
+        return np.nan
+    
+    # 1. 指定ラグ時間範囲でのフィルタリング
+    mask = (df['lag time'] >= min_t) & (df['lag time'] <= max_t) & (df['MSD'] > 0)
+    if np.sum(mask) < 3:
+        mask = (df['lag time'] >= 60.0) & (df['lag time'] <= 350.0) & (df['MSD'] > 0)
+    if np.sum(mask) < 2:
+        mask = (df['MSD'] > 0)
+    if np.sum(mask) < 2:
+        return np.nan
+        
+    dt = df['lag time'][mask].to_numpy(dtype=float)
+    msd = df['MSD'][mask].to_numpy(dtype=float)
+    
+    # 2. 一次線形フィッティング MSD = 4 * D * dt + const
+    try:
+        slope, _ = np.polyfit(dt, msd, 1)
+        d_val = slope / 4.0
+        if d_val > 0:
+            return float(d_val)
+    except Exception:
+        pass
+        
+    # 3. フォールバック: <MSD / (4 * dt)>
+    d_ratio = np.mean(msd / (4.0 * dt))
+    return float(d_ratio) if d_ratio > 0 else np.nan
+
+
+def plot_diffusion_scaling_master_curve(
+    beads_data: list,
+    df_rtp_summary: pd.DataFrame,
+    out_dirs: list[Path],
+    v0: float = 0.207,
+    xi: float = 2.7774,
+    tau0: float = 14.00,
+    tau_xi: float = 3.00,
+):
+    """
+    モデルフリーな長時間拡散係数 D_long vs スケール半径 x = R_c / xi のスケーリングマスターカーブを描画・保存する。
+    Layer 1: 個別粒子 D_long,i の半透明散布図（横軸 Jitter 付き）
+    Layer 2: ビーズサイズごとの統計代表値（Mean ± SEM）＋ 不透明マーカー
+    Layer 3: 統一理論線 D(x) = (1/2) v0^2 S(x) tau_corr(x) および小粒子・大粒子漸近線
+    """
+    fig, ax = plt.subplots(figsize=(8.5, 6.2))
+    rng = np.random.default_rng(42)
+    
+    # --- Layer 3 (理論曲線) を先に描画 (背景) ---
+    x_dense = np.logspace(np.log10(0.04), np.log10(6.5), 500)
+    
+    # 1. 統一理論式: Unified Dynamic Ising Diffusion Model
+    # D(x) = (1/2) * v0^2 * [ 1 / (1 + (8 / 3pi)*x + 0.5*x^2) ] * [ (tau0 * tau_xi) / (tau_xi * g(x) + tau0) ]
+    #d_unified_theo = fm.unified_diffusion(x_dense, v0=v0, tau0=tau0, tau_xi=tau_xi)
+    #ax.plot(
+    #    x_dense, d_unified_theo,
+    #    color='#111111', linestyle='-', linewidth=3.0, zorder=4,
+    #    label=r'Unified Theory: $D(x) = \frac{1}{2} v_0^2 \left[\frac{1}{1 + \frac{8}{3\pi}x + \frac{1}{2}x^2}\right]\left[\frac{\tau_0 \tau_\xi}{\tau_\xi g(x) + \tau_0}\right]$'
+    #)
+
+    # 2. 小粒子側 漸近線 (RTP 普遍スケーリング予測)
+    g_x = fm.master_function(x_dense)
+    tau_p_x = tau0 * np.exp(-4.0 * x_dense / 3.0)
+    d_active_theo = 0.5 * (v0 ** 2) * (g_x ** 2) * tau_p_x
+    ax.plot(
+        x_dense, d_active_theo,
+        color='#1f78b4', linestyle=':', linewidth=2.0, zorder=3,
+        label=r'Small-cargo RTP asymptote: $D(x) \approx \frac{1}{2} v_0^2 [g(x)]^2 \tau_{\mathrm{p}}(x)$'
+    )
+    
+    # 3. 大粒子側 漸近線 (動的イジング相殺予測)
+    d_ising_theo = (v0 ** 2) * tau_xi * (x_dense ** -2)
+    ax.plot(
+        x_dense, d_ising_theo,
+        color='#d62728', linestyle='--', linewidth=2.0, zorder=3,
+        label=rf'Large-cargo Ising asymptote: $D(x) \approx v_0^2 \tau_\xi \cdot x^{{-2}}$'
+    )
+    
+    # 漸近線の傾きガイド (x^-2)
+    x_guide = np.array([1.5, 4.8])
+    y_guide = 0.08 * (x_guide / 1.5) ** -2
+    ax.plot(x_guide, y_guide, color='#666666', linestyle='-.', linewidth=1.4, zorder=2)
+    ax.text(
+        2.7, 0.08 * (2.7 / 1.5) ** -2 * 1.35,
+        r'$\propto x^{-2}$',
+        color='#444444', fontsize=11, fontweight='bold', ha='center', va='bottom'
+    )
+
+    ax.axvline(x=1, linestyle='-', linewidth=1.0, color='#333333', zorder = -1)
+    ax.text(1, 0.01, 'critical point')
+
+    # --- Layer 1 & Layer 2: 実験データ (モデルフリー D_long) ---
+    has_l1_label = False
+    
+    for item in beads_data:
+        d_um = item["d_um"]
+        r_c = d_um / 2.0
+        x_val = r_c / xi
+        marker = item["marker"]
+        color = item["color"]
+        pool_df = item["pool_df"]
+        stats_df = item["stats"]
+        
+        # 個別粒子ごとの D_long,i を直接抽出
+        d_long_parts = []
+        for pid, grp in pool_df.groupby('unique_particle_id'):
+            d_p = extract_long_time_diffusion(grp, min_t=100.0, max_t=300.0)
+            if np.isfinite(d_p) and d_p > 0:
+                d_long_parts.append(d_p)
+                
+        d_long_arr = np.array(d_long_parts, dtype=float)
+        
+        # アンサンブル平均 MSD に対する D_long,ens の直接抽出
+        if not stats_df.empty:
+            df_stats_ens = pd.DataFrame({
+                'lag time': stats_df.index.values,
+                'MSD': stats_df['mean'].values
+            })
+            d_long_ens = extract_long_time_diffusion(df_stats_ens, min_t=100.0, max_t=300.0)
+        else:
+            d_long_ens = np.nan
+            
+        # Layer 1: 生データ (各粒子 D_long,i)
+        if len(d_long_arr) > 0:
+            jitter_offsets = rng.normal(loc=0.0, scale=0.022, size=len(d_long_arr))
+            x_jittered = x_val * (10.0 ** jitter_offsets)
+            
+            l1_label = r"Individual particle $D_{\mathrm{long}, i}$ ($\alpha=0.35$)" if not has_l1_label else None
+            ax.scatter(
+                x_jittered, d_long_arr,
+                s=36, color=color, alpha=0.35, edgecolors='none', zorder=2,
+                label=l1_label
+            )
+            has_l1_label = True
+            
+            # Layer 2: 統計代表値 (Mean +/- SEM)
+            mean_d = float(np.mean(d_long_arr))
+            sem_d = float(np.std(d_long_arr) / np.sqrt(len(d_long_arr))) if len(d_long_arr) > 1 else 0.0
+            plot_d_val = d_long_ens if (np.isfinite(d_long_ens) and d_long_ens > 0) else mean_d
+                
+            ax.errorbar(
+                x_val, plot_d_val, yerr=sem_d,
+                fmt=marker, color=color, ecolor='black', elinewidth=1.6, capsize=4.5, capthick=1.2,
+                markersize=9.5, markeredgecolor='black', markeredgewidth=1.2, zorder=5,
+                label=rf"$2R_c = {d_um:.2f}\,\mu\mathrm{{m}}\ (x = {x_val:.2f})$"
+            )
+
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlim(0.06, 6.0)
+    ax.set_ylim(2e-3, 0.8)
+    
+    ax.set_xlabel(r'Scaled Cargo Radius $x = R_c / \xi$', fontsize=12, fontweight='bold')
+    ax.set_ylabel(r'Long-time Diffusion Coefficient $D_{\mathrm{long}}\ [\mu\mathrm{m}^2/\mathrm{s}]$', fontsize=12, fontweight='bold')
+    ax.set_title(r'Macroscopic Diffusion Coefficient $D_{\mathrm{long}}$ vs Scaled Radius $x = R_c / \xi$', fontsize=13, fontweight='bold', pad=12)
+    
+    # 理論パラメータ注釈ボックス
+    param_str = (
+        r"$\bf{Parameters:}$" + "\n"
+        rf"$v_0 = {v0:.3f}\,\mu\mathrm{{m/s}}$" + "\n"
+        rf"$\xi = {xi:.2f}\,\mu\mathrm{{m}}$" + "\n"
+        rf"$\tau_0 = {tau0:.2f}\,\mathrm{{s}}$" + "\n"
+        rf"$\tau_\xi = {tau_xi:.2f}\,\mathrm{{s}}$" + "\n"
+        r"$D_{\mathrm{long}} \equiv \lim_{\Delta t \to \mathrm{large}} \frac{\langle \Delta r^2 \rangle}{4 \Delta t}$"
+    )
+    ax.text(
+        0.04, 0.05, param_str,
+        transform=ax.transAxes, verticalalignment='bottom', horizontalalignment='left',
+        fontsize=9.2, bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.92, edgecolor='#bbbbbb'),
+        zorder=6
+    )
+    
+    ax.grid(True, which='both', linestyle='--', alpha=0.35)
+    
+    # 凡例
+    ax.legend(
+        loc='upper right', frameon=True, framealpha=0.92, fontsize=8.8,
+        edgecolor='#cccccc', labelspacing=0.28
+    )
+    
+    # 出力先ディレクトリ（scaling ディレクトリも追加）
+    scaling_dirs = []
+    for d in out_dirs:
+        scaling_dirs.append(d)
+        if d.name == "msd":
+            scaling_dirs.append(d.parent / "scaling")
+            scaling_dirs.append(d.parent / "effective_diffusion")
+            
+    save_figure_to_all(fig, "diffusion_scaling_master_curve", scaling_dirs)
+    save_figure_to_all(fig, "D_vs_scaled_radius_master_curve", scaling_dirs)
+    save_figure_to_all(fig, "D_long_scaling_master_curve", scaling_dirs)
+    plt.close(fig)
 
 
 def clean_redundant_files(out_dirs: list[Path]):
@@ -563,9 +870,9 @@ def main():
     ]
     
     rtp_fit_results = []
-    print(f"\n[Filtered Ensemble Mean MSD RTP Fits (\u03b1 > 0.5)]")
-    print(f"{'Name':<10} {'D_C [um]':<10} {'N_parts':<10} {'Model':<18} {'f_run':<8} {'v_R [um/s]':<12} {'tau_eff [s]':<14} {'D0 [um^2/s]':<14} {'D_active':<12} {'D_eff [um^2/s]':<14} {'R^2':<8}")
-    print("-" * 140)
+    print(f"\n[Filtered Ensemble Mean MSD Fits (\u03b1 > 0.5)]")
+    print(f"{'Name':<10} {'D_C [um]':<10} {'N_parts':<10} {'Model':<18} {'f_run':<8} {'v_R [um/s]':<12} {'tau_eff [s]':<14} {'L_cage [um]':<14} {'tau_r [s]':<12} {'D_eff [um^2/s]':<14} {'R^2':<8}")
+    print("-" * 155)
     
     for item in beads_data:
         d_um = item["d_um"]
@@ -573,17 +880,38 @@ def main():
         n_filt = item["n_filt"]
         n_tot = item["n_tot"]
         
-        fit_res = fit_rtp_2state_msd(
-            item["pool_df"],
-            item["stats"],
-            f_run=p["f_run"],
-            v_R=p["v_R"],
-            tau_eff=p["tau_eff"],
-            min_t=4.0,
-            max_t=300.0,
-            min_particles=2
-        )
+        if d_um <= 3.5:
+            # 0.63, 1.18, 3.37 um: 2状態 RTP フィッティング
+            fit_res = fit_rtp_2state_msd(
+                item["pool_df"],
+                item["stats"],
+                f_run=p["f_run"],
+                v_R=p["v_R"],
+                tau_eff=p["tau_eff"],
+                min_t=4.0,
+                max_t=300.0,
+                min_particles=2
+            )
+            model_type = "2-State RTP"
+            L_cage_sq = np.nan
+            L_cage = np.nan
+            tau_r = np.nan
+        else:
+            # 5.00, 7.24, 20.0 um: ケージ拡散フィッティング <dr^2(t)> = L_cage^2 * (1 - exp(-t/tau_r)) + 4 * D_eff * t
+            fit_res = fit_caged_msd(
+                item["pool_df"],
+                item["stats"],
+                min_t=4.0,
+                max_t=300.0,
+                min_particles=2
+            )
+            model_type = "Caged Diffusion"
+            L_cage_sq = fit_res["L_cage_sq_ens"]
+            L_cage = fit_res["L_cage_ens"]
+            tau_r = fit_res["tau_r_ens"]
+            
         item["rtp_fit"] = fit_res
+        item["model_type"] = model_type
         
         rtp_fit_results.append({
             "bead_name": item["name"],
@@ -591,12 +919,15 @@ def main():
             "n_filtered_particles": n_filt,
             "n_total_particles": n_tot,
             "alpha_threshold": alpha_thresh,
-            "model_type": p["model_type"],
-            "f_run": p["f_run"],
-            "v_R_um_s": p["v_R"],
-            "tau_Run_dwell_s": p["tau_dwell"],
-            "tau_OACF_int_s": p["tau_oacf_int"],
-            "tau_eff_s": p["tau_eff"],
+            "model_type": model_type,
+            "f_run": p["f_run"] if model_type == "2-State RTP" else np.nan,
+            "v_R_um_s": p["v_R"] if model_type == "2-State RTP" else np.nan,
+            "tau_Run_dwell_s": p["tau_dwell"] if model_type == "2-State RTP" else np.nan,
+            "tau_OACF_int_s": p["tau_oacf_int"] if model_type == "2-State RTP" else np.nan,
+            "tau_eff_s": p["tau_eff"] if model_type == "2-State RTP" else np.nan,
+            "L_cage_sq_um2": L_cage_sq,
+            "L_cage_um": L_cage,
+            "tau_r_s": tau_r,
             "D0_ens_um2_s": fit_res["D0_ens"],
             "D0_ens_err_um2_s": fit_res["D0_err"],
             "sigma_noise_sq_um2": fit_res["sigma_noise_sq_ens"],
@@ -611,9 +942,14 @@ def main():
             "D_SE_um2_s": calc_stokes_einstein_diffusion(d_um)
         })
         
-        tau_str = f"{p['tau_eff']:.2f}" if np.isfinite(p['tau_eff']) else "NaN (4D0t)"
         parts_str = f"{n_filt}/{n_tot}"
-        print(f"{item['name']:<10} {d_um:<10.2f} {parts_str:<10} {p['model_type']:<18} {p['f_run']:<8.3f} {p['v_R']:<12.3f} {tau_str:<14} {fit_res['D0_ens']:<14.4e} {fit_res['D_active']:<12.4e} {fit_res['D_eff_ens']:<14.4e} {fit_res['r2_ens']:<8.4f}")
+        if model_type == "2-State RTP":
+            tau_str = f"{p['tau_eff']:.2f}" if np.isfinite(p['tau_eff']) else "NaN (4D0t)"
+            print(f"{item['name']:<10} {d_um:<10.2f} {parts_str:<10} {model_type:<18} {p['f_run']:<8.3f} {p['v_R']:<12.3f} {tau_str:<14} {'-':<14} {'-':<12} {fit_res['D_eff_ens']:<14.4e} {fit_res['r2_ens']:<8.4f}")
+        else:
+            lc_str = f"{L_cage:.3f}" if np.isfinite(L_cage) else "NaN"
+            tr_str = f"{tau_r:.2f}" if np.isfinite(tau_r) else "NaN"
+            print(f"{item['name']:<10} {d_um:<10.2f} {parts_str:<10} {model_type:<18} {'-':<8} {'-':<12} {'-':<14} {lc_str:<14} {tr_str:<12} {fit_res['D_eff_ens']:<14.4e} {fit_res['r2_ens']:<8.4f}")
         
     df_rtp_summary = pd.DataFrame(rtp_fit_results)
     save_csv_to_all(df_rtp_summary, "rtp_2state_msd_fit_summary.csv", out_dirs)
@@ -724,7 +1060,7 @@ def main():
     save_figure_to_all(fig, "MSD", out_dirs)
 
     # ---------------------------------------------------------
-    # 図1-B: 2状態RTPフィッティング重畳 MSD プロット (D_eff 注釈付き)
+    # 図1-B: モデルフィッティング重畳 MSD プロット (D_eff 注釈付き)
     # ---------------------------------------------------------
     fig_rtp, ax_rtp = plt.subplots(figsize=(8.5, 6.2))
     for item in beads_data:
@@ -744,7 +1080,7 @@ def main():
         
         ax_rtp.fill_between(lags, q25, q75, color=color, alpha=0.18, edgecolor='none')
         ax_rtp.plot(lags, mean_v, marker=marker, linestyle='none', markersize=7.5,
-                    label=f'{d_um:.2f} \u03bcm ($N={n_filt}$, $D_{{\\mathrm{{eff}}}}={deff_val:.2f}$ \u03bcm$^2$/s)', color=color)
+                    label=f'{d_um:.2f} \u03bcm ($N={n_filt}$, $D_{{\\mathrm{{eff}}}}={deff_val:.2e}$ \u03bcm$^2$/s)', color=color)
         if len(fit_res["fit_t"]) > 0:
             ax_rtp.plot(fit_res["fit_t"], fit_res["fit_msd"], color=color, linestyle='-', linewidth=2.0)
 
@@ -756,12 +1092,12 @@ def main():
         yscale='log',
         xlabel='Lag time $\\Delta t$ [s]',
         ylabel='MSD $\\langle \\Delta \\boldsymbol{r}^2 \\rangle$ [$\\mu\\mathrm{m}^2$]',
-        title='2-State RTP Fit on Filtered Ensemble Mean MSD ($\u03b1 > 0.5$)'
+        title='Model Fits on Filtered Ensemble Mean MSD ($\u03b1 > 0.5$)'
     )
     save_figure_to_all(fig_rtp, "MSD_RTP_fit", out_dirs)
 
     # ---------------------------------------------------------
-    # 図1-C: 粒子種別ごとの 2状態RTPフィッティング個別パネル (2x3)
+    # 図1-C: 粒子種別ごとの フィッティング個別パネル (2x3)
     # ---------------------------------------------------------
     fig_panels, axes_panels = plt.subplots(2, 3, figsize=(15.0, 9.5), sharex=True, sharey=True)
     axes_flat = axes_panels.flatten()
@@ -777,13 +1113,13 @@ def main():
         n_filt = item["n_filt"]
         n_tot = item["n_tot"]
         fit_res = item["rtp_fit"]
+        m_type = item["model_type"]
         p = rtp_params[d_um]
         
         # 1. フィルタ除外された粒子 (alpha <= 0.5) を薄いグレー点線で表示
         removed_ids = set(raw_df['unique_particle_id']) - set(pool_df['unique_particle_id'])
         for p_id in removed_ids:
             sub_rem = raw_df[raw_df['unique_particle_id'] == p_id]
-            a_rem = sub_rem['alpha'].iloc[0] if 'alpha' in sub_rem.columns else np.nan
             ax_p.plot(sub_rem['lag time'], sub_rem['MSD'], color='#999999', alpha=0.35, linewidth=0.8, linestyle=':')
             
         # 2. 採用された全個別軌跡 (alpha > 0.5)
@@ -806,9 +1142,10 @@ def main():
         # 4. 主線: アンサンブル平均 Mean（実線＋マーカー）
         ax_p.plot(lags, mean_v, marker=marker, linestyle='-', color=color, markersize=6.5, linewidth=2.0, label=f'Mean ($N={n_filt}/{n_tot}$)', zorder=5)
         
-        # 5. 2状態RTP理論線
+        # 5. 理論フィッティング線
         if len(fit_res["fit_t"]) > 0:
-            ax_p.plot(fit_res["fit_t"], fit_res["fit_msd"], color='#111111', linestyle='-', linewidth=2.2, label='2-State RTP Fit', zorder=6)
+            fit_label = '2-State RTP Fit' if m_type == "2-State RTP" else 'Caged Diffusion Fit'
+            ax_p.plot(fit_res["fit_t"], fit_res["fit_msd"], color='#111111', linestyle='-', linewidth=2.2, label=fit_label, zorder=6)
             
         # 6. 長時間漸近拡散線
         if np.isfinite(fit_res["D_eff_ens"]) and fit_res["D_eff_ens"] > 0:
@@ -817,20 +1154,34 @@ def main():
             ax_p.plot(t_asymp, msd_asymp, color='#666666', linestyle='--', linewidth=1.5, label=r'$4 D_{\mathrm{eff}} \Delta t$', zorder=5)
             
         deff_val = fit_res["D_eff_ens"]
-        d0_val = fit_res["D0_ens"]
-        dact_val = fit_res["D_active"]
-        teff_val = p["tau_eff"]
         r2_val = fit_res["r2_ens"]
         r2_str = f"{r2_val:.3f}" if (np.isfinite(r2_val) and r2_val >= -10) else "N/A"
         
-        param_text = (
-            f"$D_C = {d_um:.2f}\\,\\mu\\mathrm{{m}}$ ($N={n_filt}/{n_tot}$)\n"
-            f"$D_{{\\mathrm{{eff}}}} = {deff_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
-            f"$D_0 = {d0_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
-            f"$D_{{\\mathrm{{active}}}} = {dact_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
-            f"$\\tau_{{\\mathrm{{eff}}}} = {teff_val:.2f}\\,\\mathrm{{s}}$\n"
-            f"$R^2 = {r2_str}$"
-        )
+        if m_type == "2-State RTP":
+            d0_val = fit_res["D0_ens"]
+            dact_val = fit_res["D_active"]
+            teff_val = p["tau_eff"]
+            param_text = (
+                f"$D_C = {d_um:.2f}\\,\\mu\\mathrm{{m}}$ ($N={n_filt}/{n_tot}$)\n"
+                f"Model: 2-State RTP\n"
+                f"$D_{{\\mathrm{{eff}}}} = {deff_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
+                f"$D_0 = {d0_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
+                f"$D_{{\\mathrm{{active}}}} = {dact_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
+                f"$\\tau_{{\\mathrm{{eff}}}} = {teff_val:.2f}\\,\\mathrm{{s}}$\n"
+                f"$R^2 = {r2_str}$"
+            )
+        else:
+            lc_val = fit_res["L_cage_ens"]
+            tr_val = fit_res["tau_r_ens"]
+            param_text = (
+                f"$D_C = {d_um:.2f}\\,\\mu\\mathrm{{m}}$ ($N={n_filt}/{n_tot}$)\n"
+                f"Model: Caged Diffusion\n"
+                f"$D_{{\\mathrm{{eff}}}} = {deff_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
+                f"$\\ell_{{\\mathrm{{cage}}}} = {lc_val:.3f}\\,\\mu\\mathrm{{m}}$\n"
+                f"$\\tau_r = {tr_val:.2f}\\,\\mathrm{{s}}$\n"
+                f"$R^2 = {r2_str}$"
+            )
+            
         ax_p.text(0.04, 0.96, param_text, transform=ax_p.transAxes, verticalalignment='top', fontsize=9.0,
                   bbox=dict(boxstyle='round,pad=0.4', facecolor='white', alpha=0.88, edgecolor='#cccccc'))
         
@@ -838,9 +1189,9 @@ def main():
             xlim=(4e-0, 1000),
             ylim=(1e-2, 1e4),
             xscale='log',
-            yscale='log',
-            title=f'{item["name"]} ($D_C = {d_um:.2f}\\,\\mu\\mathrm{{m}}$, $N={n_filt}/{n_tot}$ parts)'
+            yscale='log'
         )
+        ax_p.set_title(f'{item["name"]} ($D_C = {d_um:.2f}\\,\\mu\\mathrm{{m}}$)', fontsize=12, fontweight='bold', pad=8)
         ax_p.legend(fontsize=8.0, loc='lower right', framealpha=0.85)
         
         if idx >= 3:
@@ -860,6 +1211,7 @@ def main():
         color = item["color"]
         marker = item["marker"]
         fit_res = item["rtp_fit"]
+        m_type = item["model_type"]
         p = rtp_params[d_um]
         pool_df = item["pool_df"]
         raw_df = item["raw_df"]
@@ -892,7 +1244,8 @@ def main():
         ax_s.plot(lags, mean_v, marker=marker, linestyle='-', color=color, markersize=8, linewidth=2.0, label=f'Mean ($N={n_filt}/{n_tot}$)', zorder=5)
         
         if len(fit_res["fit_t"]) > 0:
-            ax_s.plot(fit_res["fit_t"], fit_res["fit_msd"], color='#111111', linestyle='-', linewidth=2.4, label='2-State RTP Fit', zorder=6)
+            fit_label = '2-State RTP Fit' if m_type == "2-State RTP" else r'Caged Fit: $\ell_{\mathrm{cage}}^2(1-e^{-t/\tau_r}) + 4D_{\mathrm{eff}}t$'
+            ax_s.plot(fit_res["fit_t"], fit_res["fit_msd"], color='#111111', linestyle='-', linewidth=2.4, label=fit_label, zorder=6)
             
         if np.isfinite(fit_res["D_eff_ens"]) and fit_res["D_eff_ens"] > 0:
             t_asymp = np.logspace(1.0, 3.0, 50)
@@ -900,20 +1253,34 @@ def main():
             ax_s.plot(t_asymp, msd_asymp, color='#666666', linestyle='--', linewidth=1.6, label=r'Asymptotic $4 D_{\mathrm{eff}} \Delta t$', zorder=5)
 
         deff_val = fit_res["D_eff_ens"]
-        d0_val = fit_res["D0_ens"]
-        dact_val = fit_res["D_active"]
-        teff_val = p["tau_eff"]
         r2_val = fit_res["r2_ens"]
         r2_str = f"{r2_val:.3f}" if (np.isfinite(r2_val) and r2_val >= -10) else "N/A"
         
-        param_text = (
-            f"$D_C = {d_um:.2f}\\,\\mu\\mathrm{{m}}$ ($N={n_filt}/{n_tot}$ particles)\n"
-            f"$D_{{\\mathrm{{eff}}}} = {deff_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
-            f"$D_0 = {d0_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
-            f"$D_{{\\mathrm{{active}}}} = {dact_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
-            f"$\\tau_{{\\mathrm{{eff}}}} = {teff_val:.2f}\\,\\mathrm{{s}}$\n"
-            f"$R^2 = {r2_str}$"
-        )
+        if m_type == "2-State RTP":
+            d0_val = fit_res["D0_ens"]
+            dact_val = fit_res["D_active"]
+            teff_val = p["tau_eff"]
+            param_text = (
+                f"$D_C = {d_um:.2f}\\,\\mu\\mathrm{{m}}$ ($N={n_filt}/{n_tot}$ particles)\n"
+                f"Model: 2-State RTP\n"
+                f"$D_{{\\mathrm{{eff}}}} = {deff_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
+                f"$D_0 = {d0_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
+                f"$D_{{\\mathrm{{active}}}} = {dact_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
+                f"$\\tau_{{\\mathrm{{eff}}}} = {teff_val:.2f}\\,\\mathrm{{s}}$\n"
+                f"$R^2 = {r2_str}$"
+            )
+        else:
+            lc_val = fit_res["L_cage_ens"]
+            tr_val = fit_res["tau_r_ens"]
+            param_text = (
+                f"$D_C = {d_um:.2f}\\,\\mu\\mathrm{{m}}$ ($N={n_filt}/{n_tot}$ particles)\n"
+                f"Model: Caged Diffusion\n"
+                f"$D_{{\\mathrm{{eff}}}} = {deff_val:.3e}\\,\\mu\\mathrm{{m}}^2/\\mathrm{{s}}$\n"
+                f"$\\ell_{{\\mathrm{{cage}}}} = {lc_val:.3f}\\,\\mu\\mathrm{{m}}$\n"
+                f"$\\tau_r = {tr_val:.2f}\\,\\mathrm{{s}}$\n"
+                f"$R^2 = {r2_str}$"
+            )
+            
         ax_s.text(0.04, 0.96, param_text, transform=ax_s.transAxes, verticalalignment='top', fontsize=10.0,
                   bbox=dict(boxstyle='round,pad=0.4', facecolor='white', alpha=0.88, edgecolor='#cccccc'))
         
@@ -949,14 +1316,16 @@ def main():
     # 能動輸送項 D_active (2-State RTP が適用された粒子のみ)
     valid_active = (d_active > 0) & np.isfinite(d_active)
     if np.any(valid_active):
-        ax_deff.plot(d_vals[valid_active], d_active[valid_active], marker='^', linestyle='--', color='#2ca02c', markersize=7, label=r'Active Contribution $D_{\mathrm{active}} = \frac{1}{2} f_{\mathrm{run}} v_R^2 \tau_{\mathrm{eff}}$')
+        ax_deff.plot(d_vals[valid_active], d_active[valid_active], marker='^', linestyle='--', color='#2ca02c', markersize=7, label=r'RTP Active Contribution $D_{\mathrm{active}} = \frac{1}{2} f_{\mathrm{run}} v_R^2 \tau_{\mathrm{eff}}$')
     
-    # フィッティング熱拡散項 D_0
-    ax_deff.plot(d_vals, d0_ens, marker='v', linestyle=':', color='#9467bd', markersize=7, label=r'Fitted Thermal $D_0$')
+    # フィッティング熱拡散項 D_0 (2-State RTP のみ)
+    valid_d0 = (d0_ens > 0) & np.isfinite(d0_ens)
+    if np.any(valid_d0):
+        ax_deff.plot(d_vals[valid_d0], d0_ens[valid_d0], marker='v', linestyle=':', color='#9467bd', markersize=7, label=r'RTP Thermal $D_0$')
     
-    # 2状態RTP 有効拡散係数 D_eff (アンサンブル大域フィッティング + 粒子間エラーバー)
+    # 全粒子径の有効拡散係数 D_eff (アンサンブル大域フィッティング + 粒子間エラーバー)
     yerr_vals = np.where(np.isfinite(deff_std_part), deff_std_part, 0.0)
-    ax_deff.errorbar(d_vals, deff_ens, yerr=yerr_vals, marker='o', linestyle='-', color='#d62728', linewidth=2.0, markersize=8, capsize=4, label=r'2-State RTP Fit $D_{\mathrm{eff}} = D_0 + D_{\mathrm{active}}$')
+    ax_deff.errorbar(d_vals, deff_ens, yerr=yerr_vals, marker='o', linestyle='-', color='#d62728', linewidth=2.0, markersize=8, capsize=4, label=r'Fitted $D_{\mathrm{eff}}$ (RTP for $\leq 3.4\,\mu\mathrm{m}$, Caged for $\geq 5\,\mu\mathrm{m}$)')
 
     ax_deff.set(
         xscale='log',
@@ -1060,6 +1429,19 @@ def main():
 
     save_figure_to_all(fig_tau, "relaxation_times_vs_diameter", out_dirs)
     save_figure_to_all(fig_tau, "tau_eff_vs_diameter", out_dirs)
+
+    # ---------------------------------------------------------
+    # 図: 巨視的拡散係数 D vs スケール半径 x = R_c / \xi
+    # ---------------------------------------------------------
+    plot_diffusion_scaling_master_curve(
+        beads_data=beads_data,
+        df_rtp_summary=df_rtp_summary,
+        out_dirs=out_dirs,
+        v0=0.207,
+        xi=R0_vel,
+        tau0=t0_fit,
+        tau_xi=3.00
+    )
 
     # ---------------------------------------------------------
     # 図2: alpha vs Cargo Diameter
