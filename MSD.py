@@ -645,27 +645,9 @@ def plot_diffusion_scaling_master_curve(
         color='#1f78b4', linestyle=':', linewidth=2.0, zorder=3,
         label=r'Small-cargo RTP asymptote: $D(x) \approx \frac{1}{2} v_0^2 [g(x)]^2 \tau_{\mathrm{p}}(x)$'
     )
-    
-    # 3. 大粒子側 漸近線 (動的イジング相殺予測)
-    d_ising_theo = (v0 ** 2) * tau_xi * (x_dense ** -2)
-    ax.plot(
-        x_dense, d_ising_theo,
-        color='#d62728', linestyle='--', linewidth=2.0, zorder=3,
-        label=rf'Large-cargo Ising asymptote: $D(x) \approx v_0^2 \tau_\xi \cdot x^{{-2}}$'
-    )
-    
-    # 漸近線の傾きガイド (x^-2)
-    x_guide = np.array([1.5, 4.8])
-    y_guide = 0.08 * (x_guide / 1.5) ** -2
-    ax.plot(x_guide, y_guide, color='#666666', linestyle='-.', linewidth=1.4, zorder=2)
-    ax.text(
-        2.7, 0.08 * (2.7 / 1.5) ** -2 * 1.35,
-        r'$\propto x^{-2}$',
-        color='#444444', fontsize=11, fontweight='bold', ha='center', va='bottom'
-    )
 
     ax.axvline(x=1, linestyle='-', linewidth=1.0, color='#333333', zorder = -1)
-    ax.text(1, 0.01, 'critical point')
+    #ax.text(1, 0.01, 'critical point')
 
     # --- Layer 1 & Layer 2: 実験データ (モデルフリー D_long) ---
     has_l1_label = False

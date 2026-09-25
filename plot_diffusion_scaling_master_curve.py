@@ -106,15 +106,6 @@ def plot_diffusion_scaling_curve(
     # Layer 3: 理論曲線 (背景側 zorder=3, 4)
     # -------------------------------------------------------------
     x_dense = np.logspace(np.log10(0.04), np.log10(6.5), 500)
-    
-    # 1. 統一理論式: Unified Dynamic Ising Diffusion Model
-    # D(x) = (1/2) * v0^2 * [ 1 / (1 + (8 / 3pi)*x + 0.5*x^2) ] * [ (tau0 * tau_xi) / (tau_xi * g(x) + tau0) ]
-    d_unified_theo = fm.unified_diffusion(x_dense, v0=v0, tau0=tau0, tau_xi=tau_xi)
-    ax.plot(
-        x_dense, d_unified_theo,
-        color='#111111', linestyle='-', linewidth=3.0, zorder=4,
-        label=r'Unified Theory: $D(x) = \frac{1}{2} v_0^2 \left[\frac{1}{1 + \frac{8}{3\pi}x + \frac{1}{2}x^2}\right]\left[\frac{\tau_0 \tau_\xi}{\tau_\xi g(x) + \tau_0}\right]$'
-    )
 
     # 2. 小粒子側 漸近線 (RTP 普遍スケーリング予測)
     g_x = fm.master_function(x_dense)
@@ -126,25 +117,6 @@ def plot_diffusion_scaling_curve(
         label=r'Small-cargo RTP asymptote: $D(x) \approx \frac{1}{2} v_0^2 [g(x)]^2 \tau_{\mathrm{p}}(x)$'
     )
     
-    # 3. 大粒子側 漸近線 (動的イジング相殺予測)
-    d_ising_theo = (v0 ** 2) * tau_xi * (x_dense ** -2)
-    ax.plot(
-        x_dense, d_ising_theo,
-        color='#d62728', linestyle='--', linewidth=2.0, zorder=3,
-        label=rf'Large-cargo Ising asymptote: $D(x) \approx v_0^2 \tau_\xi \cdot x^{{-2}}$'
-    )
-    
-    # 漸近線の傾きガイド (x^-2)
-    x_guide = np.array([1.5, 4.8])
-    y_guide = 0.08 * (x_guide / 1.5) ** -2
-    ax.plot(x_guide, y_guide, color='#666666', linestyle='-.', linewidth=1.4, zorder=2)
-    ax.text(
-        2.7, 0.08 * (2.7 / 1.5) ** -2 * 1.35,
-        r'$\propto x^{-2}$',
-        color='#444444', fontsize=11, fontweight='bold', ha='center', va='bottom'
-    )
-
-
     # -------------------------------------------------------------
     # Layer 1 (生データ) & Layer 2 (統計代表値) (前面 zorder=2, 5)
     # -------------------------------------------------------------
@@ -224,7 +196,7 @@ def plot_diffusion_scaling_curve(
     
     save_figure_to_all(fig, "diffusion_scaling_master_curve", out_dirs)
     save_figure_to_all(fig, "D_vs_scaled_radius_master_curve", out_dirs)
-    save_figure_to_all(fig, "D_long_scaling_master_curve", scaling_dirs if 'scaling_dirs' in locals() else out_dirs)
+    #save_figure_to_all(fig, "D_long_scaling_master_curve", scaling_dirs if 'scaling_dirs' in locals() else out_dirs)
     plt.close(fig)
     print(f"Saved diffusion scaling master curve to {len(out_dirs)} output directories.")
 
