@@ -70,6 +70,8 @@ flowchart TD
 | `msd` | `pixi run msd` | MSD / 無次元化 MSD / 局所異常拡散指数 $\alpha(t)$ のプロット |
 | `plot_corr` | `pixi run plot_corr` | 3成分 $\times$ 3対象の $3 \times 3$ 角度相関プロット & 相関長フィッティング |
 | `plot_polar` | `pixi run plot_polar` | 局所ポーラーオーダーの全ビーズ比較プロット |
+| `mt_orientation` | `pixi run mt_orientation` | 光学フロー配向角のネマチック主軸基準ヒストグラム & レーダーチャート（$\Delta\theta$ が 0 / $\pi$ にピーク） |
+| `mt_orientation_quick` | `pixi run mt_orientation_quick` | 上記の高速確認版（フレーム / 画素を間引いて全条件を一括処理） |
 
 ### 2. 角度空間相関タスク（全体・第1主成分・第2主成分を GPU で自動計算）
 | タスク名 | コマンド例 | 対象 |
@@ -148,6 +150,30 @@ pixi run python libs/calcAFT.py \
 ### 光学的流速場推定 (Optical Flow)
 RAFT モデル等を用いて微小管の連続フレーム間の変位流速場 $\mathbf{u}(x, y, t) = (u_x, u_y)$ をピクセル単位で高密度推定します。
 - 出力: `GFP_flows.h5`（shape: `(frames, 2, height, width)`）
+
+### 光学フロー配向角のネマチック主軸分解 (`plot_mt_orientation_distribution.py`)
+`GFP_flows.h5` の各画素の配向角 $\phi(x,y,t) = \arctan_2(u_y, u_x)$ と、そのフレームの大域ネマチック主軸角 $\theta_{\mathrm{nem}}(t)$（`MTs_im_theta.zarr` を 2 テンソル平均、無ければフロー配向から算出）の差
+
+$$
+\Delta\theta(x,y,t) = \mathrm{wrap}_{[-\pi,\pi)}\left[\phi(x,y,t) - \theta_{\mathrm{nem}}(t)\right]
+$$
+
+の確率密度 $P(\Delta\theta)$ をヒストグラム・レーダーチャート（極座標ローズ図）として可視化します。ネマチック軸は向きを持たない（headless）ため、$\Delta\theta$ は **0 と $\pm\pi$ に 2 つのローブ**を持ち、$\pm\pi/2$ 付近はほぼ空になります。
+```bash
+pixi run mt_orientation                      # 既定（frame_stride 5 / pixel_stride 8）
+pixi run mt_orientation_quick                # 全条件の高速確認（frame_stride 20 / pixel_stride 16）
+pixi run python plot_mt_orientation_distribution.py \
+    --beads beads06um beads1um --frame_stride 1 --pixel_stride 1   # 全サンプル使用
+# NAS が遅い場合はキャッシュをローカルディスクへ（再実行が ~11 倍高速）
+pixi run python plot_mt_orientation_distribution.py \
+    --flow_cache_dir /tmp/mt_flow_cache --flow_cache auto
+```
+- **主軸の時間変化を導入済み**: $\theta_{\mathrm{nem}}(t)$ は**フレームごと**に算出し、$\Delta\theta$ は各フレーム自身の主軸を基準に計算します（固定軸ではありません）。時系列は図 `mt_orientation_theta_time_series`、long 形式 CSV `mt_orientation_theta_nem_timeseries.csv`（`frame` / `time_s` / `theta_nem_deg`）、実験別 CSV の `theta_nem_std_deg_continuous` / `theta_nem_range_deg` / `theta_nem_drift_deg` / `theta_nem_axis_order`（$|\langle e^{i2\theta}\rangle|$）で定量化します。headless 軸の $\pi$ 周期性を考慮して $2\theta$ を unwrap して連続化し、時間軸は `--frame_interval`（既定 4.0 s）で与えます。
+- **ネマチック折り返し分布** $P(\Delta\theta \bmod \pi)$（ピークは 0 の 1 つ、等方分布は $1/\pi$）と、円統計 $\langle\cos\Delta\theta\rangle, \langle\cos 2\Delta\theta\rangle, \langle|\Delta\theta|\rangle$、平行 / 反平行比も同時に出力します。
+- **角度規約の自動整合**: `MTs_im_theta.zarr` の角度規約は光学フローの座標系とミラー関係にある場合があります（`libs/AFT_tools.py` は least-moment 角を `-1` 倍する実装）。本スクリプトは $\pm\theta_{\mathrm{nem}}$ の両方で $\langle\cos 2\Delta\theta\rangle$ を評価し、$\Delta\theta = 0 / \pi$ に鋭くピークが出る側を自動採用（`--theta_sign auto`、既定）した上で、採用符号を CSV・図タイトルに記録します。`--theta_sign +1` / `-1` で強制指定も可能です。
+- 出力図: `mt_orientation_histogram_panels` / `mt_orientation_histogram_overlay` / `mt_orientation_radar_panels` / `mt_orientation_radar_overlay` / `mt_orientation_nematic_folded` / `mt_orientation_theta_time_series`（`.png` / `.svg`）、出力 CSV: `mt_orientation_per_experiment`, `mt_orientation_histogram`, `mt_orientation_nematic_folded_histogram`, `mt_orientation_theta_nem_timeseries`, `mt_orientation_summary`
+- **計算コスト（実測）**: `GFP_flows.h5` のチャンクは 1 フレーム = 22 MB（2160×2560 float16）で、ストライド読み出しでも「使用フレーム数 × フレームサイズ」のバイト数を読むため（`pixel_stride` を下げても I/O はほぼ不変、計算のみ増加）、実行時間は **I/O 支配（>95%）**です。角度計算＋ビン集計は単一パス `O(使用フレーム数 × 使用画素数)` で 6.1 ms/frame（2160×2560, `pixel_stride 8`）。最適化として (1) ch0/ch1 を 1 アクセスでまとめて読む（別アクセスだと同一チャンクを 2 回読み 581 ms → 292 ms/frame）、(2) `np.bincount` ベースの一様ビンヒストグラム（12.9 → 6.1 ms/frame）、(3) 間引きフローキャッシュ `--flow_cache auto`（初回パス中に作成＝追加 I/O なし、再実行は実測 187.7 s → 17.1 s / 106 フレーム = **11 倍高速**）を実装しています。NAS が遅い場合は `--flow_cache_dir /tmp/mt_flow_cache` のようにローカルディスクを指定してください。複数実験の並列読みは本 NAS では逆効果（実測: 3 並列で合計 16.6 MB/s < 単一 69 MB/s）のため並列化は行いません。
+- 出力図: `mt_orientation_histogram_panels` / `mt_orientation_histogram_overlay` / `mt_orientation_radar_panels` / `mt_orientation_radar_overlay` / `mt_orientation_nematic_folded` / `mt_orientation_theta_time_series`（`.png` / `.svg`）、出力 CSV: `mt_orientation_per_experiment`, `mt_orientation_histogram`, `mt_orientation_nematic_folded_histogram`, `mt_orientation_theta_nem_timeseries`, `mt_orientation_summary`
 
 ---
 
