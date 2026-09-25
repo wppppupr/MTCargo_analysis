@@ -284,9 +284,19 @@ def fit_correlation_length(
     model_type: str = 'exponential',
     max_fit_dist: Optional[float] = None,
     allow_offset: bool = False,
+    min_corr_threshold: float = 0.01,
 ) -> Dict[str, Union[float, np.ndarray]]:
     """
-    C(r) 曲線に対して指数減衰モデルをフィッティングし、配向相関長 xi を算出する。
+    C(r) 曲線の縦軸の対数をとって ln C(r) をフィッティングし、配向相関長 xi を算出する。
+
+    指数減衰モデル C(r) = a * exp(-r / xi) は両辺の対数をとると
+        ln C(r) = ln a - r / xi
+    となり r の1次関数になる。そこで ln C(r) を目的変数とする重み付き線形回帰
+    （重みは誤差伝播 sigma_lnC = SEM_C / C）を行い、
+        xi = -1 / slope,  a = exp(intercept)
+    を求める。ガウス減衰モデル C(r) = a * exp(-(r / xi)^2) の場合も同様に
+        ln C(r) = ln a - r^2 / xi^2
+    を r^2 に対して線形回帰する。
 
     Parameters
     ----------
@@ -298,22 +308,140 @@ def fit_correlation_length(
         フィッティングに使用する最大距離 (um)
     allow_offset : bool, default False
         Trueの場合、一定オフセット c0 を含めてフィッティング
+        （オフセット付きモデルは対数をとって線形化できないため、この場合のみ非線形最小二乗法を用いる）
+    min_corr_threshold : float, default 0.01
+        対数をとるために必要な相関値の最小閾値。C(r) < min_corr_threshold の点は除外する。
 
     Returns
     -------
     fit_res : dict
-        'xi_um', 'xi_err_um', 'amplitude', 'c0', 'r2', 'fit_r', 'fit_c'
+        'xi_um', 'xi_err_um', 'amplitude', 'c0', 'r2', 'r2_log', 'fit_r', 'fit_c'
+        ('r2' は線形スケール、'r2_log' は対数スケールでの決定係数)
     """
-    if df_mode_curve.empty:
-        return {'xi_um': np.nan, 'xi_err_um': np.nan, 'amplitude': np.nan, 'c0': np.nan, 'r2': np.nan}
+    empty_res = {
+        'xi_um': np.nan, 'xi_err_um': np.nan, 'amplitude': np.nan,
+        'c0': np.nan, 'r2': np.nan, 'r2_log': np.nan,
+    }
 
-    df_fit = df_mode_curve.copy()
+    if df_mode_curve.empty:
+        return dict(empty_res)
+
+    df_fit = df_mode_curve.dropna(subset=['distance_um', 'mean_correlation'])
     if max_fit_dist is not None:
         df_fit = df_fit[df_fit['distance_um'] <= max_fit_dist]
-
-    df_fit = df_fit.dropna(subset=['distance_um', 'mean_correlation'])
     if len(df_fit) < 3:
-        return {'xi_um': np.nan, 'xi_err_um': np.nan, 'amplitude': np.nan, 'c0': np.nan, 'r2': np.nan}
+        return dict(empty_res)
+
+    if allow_offset:
+        # オフセット付きモデルは対数をとれないため、非線形最小二乗フィットにフォールバック
+        return _fit_correlation_length_offset(df_fit, model_type=model_type)
+
+    r_vals = df_fit['distance_um'].to_numpy(dtype=float)
+    c_vals = df_fit['mean_correlation'].to_numpy(dtype=float)
+    if 'sem_correlation' in df_fit.columns:
+        sem_vals = np.nan_to_num(df_fit['sem_correlation'].to_numpy(dtype=float), nan=0.0)
+    else:
+        sem_vals = np.zeros_like(c_vals)
+
+    # 縦軸の対数 ln C(r) をとれる正の相関値のみをフィッティングに使用
+    valid = np.isfinite(r_vals) & np.isfinite(c_vals) & (c_vals >= min_corr_threshold)
+    if np.count_nonzero(valid) < 3:
+        return dict(empty_res)
+
+    r_use = r_vals[valid]
+    c_use = c_vals[valid]
+    sem_use = sem_vals[valid]
+    log_c = np.log(c_use)
+
+    # 誤差伝播による重み: sigma_lnC = SEM_C / C
+    sigma_log = np.where(sem_use > 1e-6, sem_use / c_use, 0.1)
+    w = 1.0 / np.maximum(sigma_log, 1e-4)
+
+    # 対数空間における線形回帰 (exponential: x = r, gaussian: x = r^2)
+    x_lin = r_use if model_type == 'exponential' else r_use ** 2
+
+    try:
+        poly, cov = np.polyfit(x_lin, log_c, deg=1, w=w, cov=True)
+    except Exception:
+        return dict(empty_res)
+
+    slope = float(poly[0])
+    intercept = float(poly[1])
+    if not np.isfinite(slope) or slope >= -1e-6:
+        return dict(empty_res)
+
+    cov00 = float(cov[0, 0]) if cov is not None and np.isfinite(cov[0, 0]) else np.nan
+
+    if model_type == 'exponential':
+        xi_val = float(-1.0 / slope)
+        xi_err = float((xi_val ** 2) * np.sqrt(cov00)) if np.isfinite(cov00) else np.nan
+    else:
+        xi_val = float(np.sqrt(-1.0 / slope))
+        xi_err = float(0.5 * np.power(-slope, -1.5) * np.sqrt(cov00)) if np.isfinite(cov00) else np.nan
+
+    a_val = float(np.exp(intercept))
+
+    def _model(rr: np.ndarray) -> np.ndarray:
+        xi_safe = max(xi_val, 1e-9)
+        if model_type == 'exponential':
+            return a_val * np.exp(-rr / xi_safe)
+        return a_val * np.exp(-((rr / xi_safe) ** 2))
+
+    # 線形スケールでの決定係数（フィット曲線の当てはまり指標）
+    c_pred = _model(r_use)
+    ss_res = float(np.sum((c_use - c_pred) ** 2))
+    ss_tot = float(np.sum((c_use - np.mean(c_use)) ** 2))
+    r2 = float(1.0 - (ss_res / ss_tot)) if ss_tot > 0 else np.nan
+
+    # 対数スケールでの決定係数（実際に最小二乗した空間の当てはまり指標）
+    log_pred = intercept + slope * x_lin
+    ss_res_log = float(np.sum((log_c - log_pred) ** 2))
+    ss_tot_log = float(np.sum((log_c - np.mean(log_c)) ** 2))
+    r2_log = float(1.0 - (ss_res_log / ss_tot_log)) if ss_tot_log > 0 else np.nan
+
+    fit_r = np.linspace(float(np.min(r_use)), float(np.max(r_use)), 100)
+
+    return {
+        'xi_um': xi_val,
+        'xi_err_um': xi_err,
+        'amplitude': a_val,
+        'c0': 0.0,
+        'r2': r2,
+        'r2_log': r2_log,
+        'fit_r': fit_r,
+        'fit_c': _model(fit_r),
+    }
+
+
+def _fit_correlation_length_offset(
+    df_mode_curve: pd.DataFrame,
+    model_type: str = 'exponential',
+) -> Dict[str, Union[float, np.ndarray]]:
+    """
+    オフセット c0 を含む減衰モデル C(r) = a * exp(-(r / xi)^n) + c0 を
+    非線形最小二乗法 (curve_fit) でフィッティングし、配向相関長 xi を算出する。
+
+    オフセット付きモデルは縦軸の対数をとっても線形化できないため、
+    本関数（allow_offset=True の場合）のみ対数変換を行わない。
+
+    Parameters
+    ----------
+    df_mode_curve : pd.DataFrame
+        'distance_um', 'mean_correlation', 'sem_correlation' を含むDataFrame（max_fit_dist で絞り込み済み）
+    model_type : str, default 'exponential'
+        'exponential' または 'gaussian'
+
+    Returns
+    -------
+    fit_res : dict
+        'xi_um', 'xi_err_um', 'amplitude', 'c0', 'r2', 'r2_log', 'fit_r', 'fit_c'
+    """
+    if df_mode_curve.empty:
+        return {'xi_um': np.nan, 'xi_err_um': np.nan, 'amplitude': np.nan, 'c0': np.nan, 'r2': np.nan, 'r2_log': np.nan}
+
+    df_fit = df_mode_curve.dropna(subset=['distance_um', 'mean_correlation'])
+    if len(df_fit) < 3:
+        return {'xi_um': np.nan, 'xi_err_um': np.nan, 'amplitude': np.nan, 'c0': np.nan, 'r2': np.nan, 'r2_log': np.nan}
 
     r_vals = df_fit['distance_um'].to_numpy()
     c_vals = df_fit['mean_correlation'].to_numpy()
@@ -324,19 +452,9 @@ def fit_correlation_length(
     init_a = float(np.clip(c_vals[0] if len(c_vals) > 0 else 1.0, 0.05, 1.0))
     init_xi = 15.0
 
-    if allow_offset:
-        fit_func = exp_decay_model if model_type == 'exponential' else gaussian_decay_model
-        p0 = [init_xi, init_a, 0.0]
-        bounds = ([0.1, 0.0, -1.0], [500.0, 2.0, 1.0])
-    else:
-        if model_type == 'exponential':
-            def fit_func(r, xi, a):
-                return exp_decay_model(r, xi, a, 0.0)
-        else:
-            def fit_func(r, xi, a):
-                return gaussian_decay_model(r, xi, a, 0.0)
-        p0 = [init_xi, init_a]
-        bounds = ([0.1, 0.0], [500.0, 2.0])
+    fit_func = exp_decay_model if model_type == 'exponential' else gaussian_decay_model
+    p0 = [init_xi, init_a, 0.0]
+    bounds = ([0.1, 0.0, -1.0], [500.0, 2.0, 1.0])
 
     try:
         popt, pcov = curve_fit(
@@ -352,7 +470,7 @@ def fit_correlation_length(
         xi_val = float(popt[0])
         xi_err = float(perr[0])
         a_val = float(popt[1])
-        c0_val = float(popt[2]) if allow_offset else 0.0
+        c0_val = float(popt[2])
 
         # R^2 算出
         c_pred = fit_func(r_vals, *popt)
@@ -369,11 +487,12 @@ def fit_correlation_length(
             'amplitude': a_val,
             'c0': c0_val,
             'r2': r2,
+            'r2_log': np.nan,
             'fit_r': fit_r,
             'fit_c': fit_c,
         }
     except Exception:
-        return {'xi_um': np.nan, 'xi_err_um': np.nan, 'amplitude': np.nan, 'c0': np.nan, 'r2': np.nan}
+        return {'xi_um': np.nan, 'xi_err_um': np.nan, 'amplitude': np.nan, 'c0': np.nan, 'r2': np.nan, 'r2_log': np.nan}
 
 
 def compute_short_range_order(

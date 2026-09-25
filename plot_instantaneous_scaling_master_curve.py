@@ -75,29 +75,32 @@ def master_function(x):
     return g
 
 
-def exp_decay_model(r, xi, a=1.0):
-    return a * np.exp(-r / xi)
+def fit_instantaneous_xi(r_um, c_curve, min_r, max_r=25.0, min_corr_threshold=0.05):
+    """
+    局所空間配向相関 C(r) の縦軸の対数をとってフィッティングし、相関長 xi を推定する。
 
-
-def fit_instantaneous_xi(r_um, c_curve, min_r, max_r=25.0):
-    mask = (r_um >= min_r) & (r_um <= max_r) & np.isfinite(c_curve) & (c_curve > 0.05)
+    指数減衰 C(r) = a * exp(-r / xi) の両辺の対数をとると
+        ln C(r) = ln a - r / xi
+    となるため、ln C(r) の r に対する線形回帰の傾きから xi = -1 / slope を得る。
+    対数をとれない C(r) <= 0 の点や C(r) < min_corr_threshold の点は除外する。
+    """
+    r_arr = np.asarray(r_um, dtype=float)
+    c_arr = np.asarray(c_curve, dtype=float)
+    mask = (r_arr >= min_r) & (r_arr <= max_r) & np.isfinite(c_arr) & (c_arr >= min_corr_threshold)
     if np.sum(mask) < 4:
         return np.nan
-    r_fit = r_um[mask]
-    c_fit = c_curve[mask]
+    r_fit = r_arr[mask]
+    c_fit = c_arr[mask]
     try:
-        popt, _ = curve_fit(exp_decay_model, r_fit, c_fit, p0=[5.0, 1.0], bounds=([0.1, 0.3], [50.0, 1.5]), maxfev=400)
-        return popt[0]
+        slope, _ = np.polyfit(r_fit, np.log(c_fit), 1)
     except Exception:
-        try:
-            slope, _ = np.polyfit(r_fit, np.log(c_fit), 1)
-            if slope < -0.01:
-                xi_val = -1.0 / slope
-                if 0.1 <= xi_val <= 50.0:
-                    return xi_val
-        except Exception:
-            pass
         return np.nan
+    if not np.isfinite(slope) or slope >= -0.01:
+        return np.nan
+    xi_val = -1.0 / slope
+    if 0.1 <= xi_val <= 50.0:
+        return float(xi_val)
+    return np.nan
 
 
 def extract_instantaneous_frame_pairs():

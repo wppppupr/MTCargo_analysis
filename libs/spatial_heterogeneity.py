@@ -582,12 +582,13 @@ def calc_dot_product_distribution_and_ngp(
 if HAS_NUMBA:
     @njit(fastmath=True)
     def _fit_single_curve_numba(x_v: np.ndarray, y_v: np.ndarray, scale: float) -> Tuple[float, float, float]:
-        """1本の相関減衰曲線に対する高速 Gauss-Newton 非線形フィッティング"""
+        """1本の相関減衰曲線を縦軸の対数領域 ln C(r) = ln a - r / xi で線形フィッティングする"""
         n = len(x_v)
         if n < 3 or y_v[0] <= 0.05:
             return np.nan, np.nan, np.nan
 
-        # 初期値推定 (対数線形回帰)
+        # 縦軸の対数 ln C(r) = ln a - r / xi をとった線形回帰
+        # （指数減衰モデルは対数領域で線形になるため、この最小二乗解が解析解となる）
         sum_w = 0.0
         sum_x = 0.0
         sum_xx = 0.0
@@ -596,65 +597,29 @@ if HAS_NUMBA:
 
         for i in range(n):
             yi = y_v[i]
-            if yi > 0.01:
-                xi = x_v[i]
+            if yi > 1e-3:
+                xv = x_v[i]
                 ly = np.log(yi)
                 sum_w += 1.0
-                sum_x += xi
-                sum_xx += xi * xi
+                sum_x += xv
+                sum_xx += xv * xv
                 sum_y += ly
-                sum_xy += xi * ly
+                sum_xy += xv * ly
 
         delta = sum_w * sum_xx - sum_x * sum_x
-        if delta > 1e-7 and sum_w >= 2.0:
-            b_init = -(sum_w * sum_xy - sum_x * sum_y) / delta
-            log_a = (sum_xx * sum_y - sum_x * sum_xy) / delta
-            a_est = np.exp(log_a)
-            if b_init > 1e-4:
-                xi_est = 1.0 / b_init
-            else:
-                xi_est = 10.0 * scale
-        else:
-            xi_est = 10.0 * scale
-            a_est = y_v[0]
+        if delta <= 1e-7 or sum_w < 3.0:
+            return np.nan, np.nan, np.nan
 
-        a_est = min(max(a_est, 0.1), 1.5)
+        slope = (sum_w * sum_xy - sum_x * sum_y) / delta  # 傾き = -1 / xi
+        if slope >= -1e-6:
+            return np.nan, np.nan, np.nan
+
+        log_a = (sum_xx * sum_y - sum_x * sum_xy) / delta
+        xi_est = 1.0 / (-slope)
+        a_est = np.exp(log_a)
+
+        a_est = min(max(a_est, 0.0), 1.5)
         xi_est = min(max(xi_est, 0.05 * scale), 200.0 * scale)
-
-        # Gauss-Newton / LM 反復
-        lam = 1e-3
-        for _ in range(8):
-            b = 1.0 / max(xi_est, 1e-6)
-            h00, h11, h01, g0, g1 = 0.0, 0.0, 0.0, 0.0, 0.0
-
-            for i in range(n):
-                xi = x_v[i]
-                yi = y_v[i]
-                exp_term = np.exp(-b * xi)
-                y_hat = a_est * exp_term
-                res = y_hat - yi
-
-                ja = exp_term
-                jxi = a_est * xi * (1.0 / (xi_est * xi_est)) * exp_term
-
-                h00 += ja * ja
-                h11 += jxi * jxi
-                h01 += ja * jxi
-                g0 += ja * res
-                g1 += jxi * res
-
-            h00 += lam
-            h11 += lam
-            det = h00 * h11 - h01 * h01
-
-            if det > 1e-9:
-                da = -(h11 * g0 - h01 * g1) / det
-                dxi = -(h00 * g1 - h01 * g0) / det
-
-                a_est = min(max(a_est + da, 0.0), 1.5)
-                xi_est = min(max(xi_est + dxi, 0.05 * scale), 200.0 * scale)
-                if abs(da) < 1e-4 and abs(dxi) < 1e-4 * scale:
-                    break
 
         # R^2 の算出
         ss_res = 0.0
@@ -755,8 +720,9 @@ def _fit_grid_torch(
     sub_mask = valid_mask[:, fit_eligible].float()  # (num_fit, M)
     M = sub_y.shape[1]
 
-    # 対数線形回帰による初期値推定
-    pos_mask = sub_mask * (sub_y > 0.01).float()
+    # 縦軸の対数 ln C(r) = ln a - r / xi をとった線形回帰
+    # （指数減衰モデルは対数領域で線形になるため、この最小二乗解が解析解となる）
+    pos_mask = sub_mask * (sub_y > 1e-3).float()
     safe_y = torch.where(pos_mask > 0, sub_y, torch.tensor(1.0, device=device))
     log_y = torch.log(safe_y) * pos_mask
 
@@ -767,40 +733,20 @@ def _fit_grid_torch(
     sxy = (x * log_y).sum(dim=0)
 
     delta = sw * sxx - sx * sx
-    valid_delta = (delta > 1e-7) & (sw >= 2)
+    valid_delta = (delta > 1e-7) & (sw >= 3)
 
-    b_init = torch.where(valid_delta, -(sw * sxy - sx * sy) / torch.clamp(delta, min=1e-7), torch.tensor(1.0 / (10.0 * scale), device=device))
-    log_a = torch.where(valid_delta, (sxx * sy - sx * sxy) / torch.clamp(delta, min=1e-7), torch.tensor(0.0, device=device))
-    a_init = torch.where(valid_delta, torch.exp(log_a), sub_y[0])
+    slope = torch.where(valid_delta, (sw * sxy - sx * sy) / torch.clamp(delta, min=1e-7), torch.zeros_like(delta))
+    log_a = torch.where(valid_delta, (sxx * sy - sx * sxy) / torch.clamp(delta, min=1e-7), torch.zeros_like(delta))
 
-    a = torch.clamp(a_init, 0.1, 1.5).view(1, M)
-    xi = torch.clamp(1.0 / torch.clamp(b_init, min=1e-4), 0.05 * scale, 200.0 * scale).view(1, M)
+    # 減衰 (slope < 0) のみを有効なフィットとみなす
+    fit_ok = valid_delta & (slope < -1e-6)
 
-    # Gauss-Newton バッチ反復 (6ステップ)
-    lam = 1e-3
-    for _ in range(6):
-        b = 1.0 / torch.clamp(xi, min=1e-6)  # (1, M)
-        exp_term = torch.exp(-b * x)  # (num_fit, M)
-        y_hat = a * exp_term  # (num_fit, M)
-        res = (y_hat - sub_y) * sub_mask  # (num_fit, M)
-
-        ja = exp_term * sub_mask
-        jxi = (a * x / torch.clamp(xi ** 2, min=1e-8)) * exp_term * sub_mask
-
-        h00 = (ja * ja).sum(dim=0) + lam  # (M,)
-        h11 = (jxi * jxi).sum(dim=0) + lam
-        h01 = (ja * jxi).sum(dim=0)
-        g0 = (ja * res).sum(dim=0)
-        g1 = (jxi * res).sum(dim=0)
-
-        det = h00 * h11 - h01 * h01
-        det_safe = torch.clamp(det, min=1e-9)
-
-        da = -(h11 * g0 - h01 * g1) / det_safe
-        dxi = -(h00 * g1 - h01 * g0) / det_safe
-
-        a = torch.clamp(a + da.view(1, M), 0.0, 1.5)
-        xi = torch.clamp(xi + dxi.view(1, M), 0.05 * scale, 200.0 * scale)
+    a = torch.clamp(torch.where(fit_ok, torch.exp(log_a), torch.zeros_like(log_a)), 0.0, 1.5).view(1, M)
+    xi = torch.clamp(
+        torch.where(fit_ok, -1.0 / torch.clamp(slope, max=-1e-6), torch.full_like(slope, 10.0 * scale)),
+        0.05 * scale,
+        200.0 * scale,
+    ).view(1, M)
 
     # R^2 算出
     b_fin = 1.0 / torch.clamp(xi, min=1e-6)
@@ -812,7 +758,7 @@ def _fit_grid_torch(
 
     a_res = a.view(-1)
     xi_res = xi.view(-1)
-    passed = (r2 >= min_r2) | ((r2 < min_r2) & (xi_res < 2.0 * scale))
+    passed = ((r2 >= min_r2) | ((r2 < min_r2) & (xi_res < 2.0 * scale))) & fit_ok
 
     # 結果をテンソルに書き戻し
     xi_sub = torch.where(passed, xi_res, torch.tensor(float('nan'), device=device))
@@ -976,7 +922,7 @@ def calc_local_correlation_length_map(
     if HAS_NUMBA:
         xi_map, amp_map, r2_map = _fit_grid_numba(local_corr_grid, distances_um, fit_mask, scale, min_r2)
     else:
-        # SciPy curve_fit fallback
+        # SciPy フォールバック: 縦軸の対数 ln C(r) = ln a - r / xi をとった線形回帰
         xi_map = np.full((nY, nX), np.nan, dtype=np.float32)
         amp_map = np.full((nY, nX), np.nan, dtype=np.float32)
         r2_map = np.full((nY, nX), np.nan, dtype=np.float32)
@@ -990,13 +936,19 @@ def calc_local_correlation_length_map(
                     continue
                 x_v = x_fit_all[valid_pt]
                 y_v = y_curve[valid_pt]
-                a_init = float(np.clip(y_v[0], 0.1, 1.0))
-                p0 = [10.0 * scale, a_init]
-                bounds = ([0.05 * scale, 0.0], [200.0 * scale, 1.5])
+
+                # 対数をとれる正の相関値のみを使用
+                log_pt = y_v > 1e-3
+                if np.count_nonzero(log_pt) < 3:
+                    continue
+
                 try:
-                    popt, _ = curve_fit(exp_decay_model, x_v, y_v, p0=p0, bounds=bounds, maxfev=400)
-                    xi_est, a_est = popt
-                    residuals = y_v - exp_decay_model(x_v, *popt)
+                    slope, intercept = np.polyfit(x_v[log_pt], np.log(y_v[log_pt]), 1)
+                    if not np.isfinite(slope) or slope >= -1e-6:
+                        continue
+                    xi_est = float(np.clip(-1.0 / slope, 0.05 * scale, 200.0 * scale))
+                    a_est = float(np.clip(np.exp(intercept), 0.0, 1.5))
+                    residuals = y_v - a_est * np.exp(-x_v / max(xi_est, 1e-6))
                     ss_res = np.sum(residuals ** 2)
                     ss_tot = np.sum((y_v - np.mean(y_v)) ** 2)
                     r2 = 1.0 - (ss_res / (ss_tot + 1e-9)) if ss_tot > 1e-9 else 0.0

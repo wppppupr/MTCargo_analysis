@@ -58,6 +58,7 @@
 ### 2.3 空間配向相関関数
 - **微小管アクティブフローの空間相関**:
   $$C(r) = \langle \hat{\mathbf{u}}(\mathbf{r}_0) \cdot \hat{\mathbf{u}}(\mathbf{r}_0 + \mathbf{r}) \rangle = a \exp\left( -\frac{r}{\xi} \right)$$
+  - 相関長 $\xi$ は縦軸の対数をとってからフィッティングする（$\ln C(r) = \ln a - r/\xi$ の線形回帰より $\xi = -1/\mathrm{slope}$）。
 
 ---
 
@@ -72,6 +73,7 @@
 | **Run速度** | `Run Velocity $v_{\mathrm{run}}$ [$\mu\mathrm{m/s}$]` | `Fit: $\ln(v_{\mathrm{run}}) = -\frac{4 R_c}{3\xi} + B$` |
 | **空間距離横軸** | `Distance $r$ [$\mu\mathrm{m}$]` | `$r = 2\,\mu\mathrm{m}$`, `$r = 16\,\mu\mathrm{m}$` |
 | **空間相関縦軸** | `Spatial Correlation $C(r)$` | `Fit: $a \exp(-r/\xi)$ ($\xi = 2.78\,\mu\mathrm{m}$)` |
+| **局所相関長 vs 速度** | `Cargo Velocity $v_{i,t}$ [$\mu\mathrm{m/s}$]` / `MT Correlation Length $\xi_{i,t}$ [$\mu\mathrm{m}$]` | `All $\xi_{i,t}$ ($N=...$)`, `Binned median ($\pm$IQR)` |
 | **MSD 縦軸・横軸** | `MSD $\langle \Delta r^2 \rangle$ [$\mu\mathrm{m}^2$]` / `Lag time $\Delta t$ [s]` | `Bound ($\alpha=1.65$)`, `Unbound ($\alpha=0.98$)` |
 | **有効拡散係数** | `Diffusion Coefficient $D$ [$\mu\mathrm{m}^2/\mathrm{s}$]` | `Model $D_{\mathrm{eff}}$`, `Green-Kubo Median` |
 
@@ -87,4 +89,5 @@
 - **[plot_xi_summary.py](file:///home/sasaki/MTCargo_analysis/plot_xi_summary.py)**: 空間相関長 $\xi$ vs $2R_c$
 - **[angular_correlation.py](file:///home/sasaki/MTCargo_analysis/angular_correlation.py)**: 2D-FFT 角度空間相関 $C(r), C_\parallel(r), C_\perp(r)$
 - **[plot_mt_spatial_correlation_histograms.py](file:///home/sasaki/MTCargo_analysis/plot_mt_spatial_correlation_histograms.py)**: 微小管フロー空間配向相関ヒストグラム
+- **[plot_xi_vs_velocity.py](file:///home/sasaki/MTCargo_analysis/plot_xi_vs_velocity.py)**: 各粒子 $i$・各フレーム $t$ の局所相関長 $\xi_{i,t}$ vs 貨物粒子速度 $v_{i,t}$（粒子径ごとの散布図）
 - **[libs/effective_diffusion.py](file:///home/sasaki/MTCargo_analysis/libs/effective_diffusion.py)**: Green-Kubo 積分および RTP 理論モデル有効拡散解析

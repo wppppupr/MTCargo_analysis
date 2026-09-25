@@ -28,31 +28,53 @@ def exp_decay(r, xi, a=1.0):
     """Exponential decay: a * exp(-r / xi) with zero offset (c=0)."""
     return a * np.exp(-r / xi)
 
-def fit_correlation_length(distances_um, mean_corr, max_fit_dist=None):
+def fit_correlation_length(distances_um, mean_corr, max_fit_dist=None, min_corr_threshold=0.01):
     """
-    Fit exponential decay C(r) = a * exp(-r / xi) (with c=0 fixed) to extract correlation length xi.
-    Excludes NaN values.
-    """
-    mask = ~np.isnan(mean_corr)
-    if max_fit_dist is not None:
-        mask = mask & (distances_um <= max_fit_dist)
+    Fit the exponential decay C(r) = a * exp(-r / xi) (with c=0 fixed) by taking the
+    logarithm of the vertical axis:
+        ln C(r) = ln a - r / xi
+    A linear regression of ln C(r) against r yields the slope -1 / xi, hence xi = -1 / slope.
 
-    x = np.array(distances_um)[mask]
-    y = np.array(mean_corr)[mask]
+    Correlation values that cannot be logarithmized (C(r) <= 0, e.g. produced by the
+    particle mask near r = 0) or that fall below min_corr_threshold are excluded.
+
+    Returns
+    -------
+    xi : float or None
+        Correlation length in um.
+    popt : np.ndarray or None
+        Fitted parameters [xi, a] with a = exp(intercept); None when the fit fails.
+    """
+    dist = np.asarray(distances_um, dtype=float)
+    corr = np.asarray(mean_corr, dtype=float)
+
+    mask = np.isfinite(dist) & np.isfinite(corr) & (corr >= min_corr_threshold)
+    if max_fit_dist is not None:
+        mask = mask & (dist <= max_fit_dist)
+
+    # Exponential decay region only: keep points from the correlation maximum onwards
+    if np.any(mask):
+        idx = np.where(mask)[0]
+        peak_idx = idx[int(np.argmax(corr[idx]))]
+        mask[:peak_idx] = False
+
+    x = dist[mask]
+    y = corr[mask]
 
     if len(x) < 3:
         return None, None
 
-    # Estimate initial amplitude from first valid point (capped at 1.0)
-    a_init = float(np.clip(y[0], 0.01, 1.0))
-    p0 = [10.0, a_init]
-    bounds = ([0.1, 0.0], [200.0, 1.5])
-
+    log_y = np.log(y)
     try:
-        popt, pcov = curve_fit(exp_decay, x, y, p0=p0, bounds=bounds)
-        xi = popt[0]
-        return xi, popt
-    except Exception as e:
+        slope, intercept = np.polyfit(x, log_y, 1)
+        if not np.isfinite(slope) or slope >= -1e-6:
+            return None, None
+        xi = float(-1.0 / slope)
+        if not np.isfinite(xi) or xi <= 0.0:
+            return None, None
+        a = float(np.exp(intercept))
+        return xi, np.array([xi, a])
+    except Exception:
         return None, None
 
 def load_condition_correlations(root_path, folder_name, particle_zarr="angular_correlation_w.zarr", bg_zarr="angular_correlation_bg.zarr"):
