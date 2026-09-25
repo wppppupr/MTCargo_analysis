@@ -60,6 +60,16 @@
   $$C(r) = \langle \hat{\mathbf{u}}(\mathbf{r}_0) \cdot \hat{\mathbf{u}}(\mathbf{r}_0 + \mathbf{r}) \rangle = a \exp\left( -\frac{r}{\xi} \right)$$
   - 相関長 $\xi$ は縦軸の対数をとってからフィッティングする（$\ln C(r) = \ln a - r/\xi$ の線形回帰より $\xi = -1/\mathrm{slope}$）。
 
+### 2.4 長時間輸送特性のスケーリング（MSD, 変位減衰長）
+- **変位 PDF の指数減衰長** $\lambda(\Delta t)$:
+  $$P(|\Delta \mathbf{r}|) = A \exp\left( -\frac{|\Delta \mathbf{r}|}{\lambda(\Delta t)} \right), \qquad
+  \ln P(|\Delta \mathbf{r}|) = \ln A - \frac{|\Delta \mathbf{r}|}{\lambda(\Delta t)}$$
+  - 指数分布では $\lambda(\Delta t) \simeq \langle |\Delta \mathbf{r}| \rangle$ が成り立つため、フィット値が平均変位から大きく外れる場合は統計不足として棄却する。
+- **スケール半径**: $x = R_c / \xi$（$\xi$ は各実験の $\xi_{i,t}$ 中央値、または固定値 $2.78\,\mu\mathrm{m}$）。
+- **長時間輸送特性のサイズ依存性**:
+  $$\mathrm{MSD}(\Delta t = 300\,\mathrm{s}) = \langle \Delta r^2(\Delta t) \rangle, \qquad \lambda(\Delta t = 100\,\mathrm{s})$$
+  いずれも $x$ の増加とともに単調減少する（大粒子ほど流動配向の空間平均化により駆動がキャンセルされる）。
+
 ---
 
 ## 3. グラフ・プロットにおける表記ガイドライン
@@ -75,6 +85,8 @@
 | **空間相関縦軸** | `Spatial Correlation $C(r)$` | `Fit: $a \exp(-r/\xi)$ ($\xi = 2.78\,\mu\mathrm{m}$)` |
 | **局所相関長 vs 速度** | `Cargo Velocity $v_{i,t}$ [$\mu\mathrm{m/s}$]` / `MT Correlation Length $\xi_{i,t}$ [$\mu\mathrm{m}$]` | `All $\xi_{i,t}$ ($N=...$)`, `Binned median ($\pm$IQR)` |
 | **MSD 縦軸・横軸** | `MSD $\langle \Delta r^2 \rangle$ [$\mu\mathrm{m}^2$]` / `Lag time $\Delta t$ [s]` | `Bound ($\alpha=1.65$)`, `Unbound ($\alpha=0.98$)` |
+| **MSD・変位減衰長 vs スケール半径** | (左軸) `MSD $\langle \Delta r^2(\Delta t = 300\,\mathrm{s}) \rangle$ [$\mu\mathrm{m}^2$]` / (右軸) `Displacement Decay Length $\lambda(\Delta t = 100\,\mathrm{s})$ [$\mu\mathrm{m}$]` / (横軸) `Scaled Cargo Radius $x = R_c / \xi$` | `Individual experiments ($N=...$)`, `$2R_c = 3.37\,\mu\mathrm{m}$ ($x = 0.18$)` |
+| **MSD・変位減衰長 vs 貨物半径** | (左軸) `MSD $\langle \Delta r^2(\Delta t = 300\,\mathrm{s}) \rangle$ [$\mu\mathrm{m}^2$]`（黒, log） / (右軸) `Displacement Decay Length $\lambda(\Delta t = 100\,\mathrm{s})$ [$\mu\mathrm{m}$]`（赤, linear） / (横軸) `Cargo Radius $R_c$ [$\mu\mathrm{m}$]`（linear） | `Individual experiments ($N=...$)`, `$2R_c = 3.37\,\mu\mathrm{m}$ ($R_c = 1.69\,\mu\mathrm{m}$)` |
 | **有効拡散係数** | `Diffusion Coefficient $D$ [$\mu\mathrm{m}^2/\mathrm{s}$]` | `Model $D_{\mathrm{eff}}$`, `Green-Kubo Median` |
 
 ---
@@ -90,4 +102,6 @@
 - **[angular_correlation.py](file:///home/sasaki/MTCargo_analysis/angular_correlation.py)**: 2D-FFT 角度空間相関 $C(r), C_\parallel(r), C_\perp(r)$
 - **[plot_mt_spatial_correlation_histograms.py](file:///home/sasaki/MTCargo_analysis/plot_mt_spatial_correlation_histograms.py)**: 微小管フロー空間配向相関ヒストグラム
 - **[plot_xi_vs_velocity.py](file:///home/sasaki/MTCargo_analysis/plot_xi_vs_velocity.py)**: 各粒子 $i$・各フレーム $t$ の局所相関長 $\xi_{i,t}$ vs 貨物粒子速度 $v_{i,t}$（粒子径ごとの散布図）
+- **[plot_msd_lambda_vs_scaled_radius.py](file:///home/sasaki/MTCargo_analysis/plot_msd_lambda_vs_scaled_radius.py)**: MSD($\Delta t = 300\,\mathrm{s}$)（第1軸, 黒）と変位 PDF の指数減衰長 $\lambda(\Delta t = 100\,\mathrm{s})$（第2軸, 赤）の 2軸図。横軸は $x = R_c/\xi$（実験ごとの $\xi_{i,t}$ 中央値を使用）版と `Cargo Radius $R_c$`（linear）版を出力（出力先: `figure/scaling`, `figure`, `<root_dir>/figure/scaling`）
+
 - **[libs/effective_diffusion.py](file:///home/sasaki/MTCargo_analysis/libs/effective_diffusion.py)**: Green-Kubo 積分および RTP 理論モデル有効拡散解析
