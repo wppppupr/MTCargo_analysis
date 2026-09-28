@@ -76,6 +76,9 @@ flowchart TD
 | `ising_all` | `pixi run ising_all` | 上記の全ビーズ条件一括版 |
 | `ising_quick` | `pixi run ising_quick` | 上記の高速確認版（`frame_stride 20` / `pixel_stride 16`） |
 | `ising_local` | `pixi run ising_local` | 局所主軸 $\theta(\mathbf{x},t)$ をディレクターに使う版（`--director local`） |
+| `cargo_spin` | `pixi run cargo_spin` | 貨物粒子ごとの速度 $v_{i,t}$ vs 粒子直下のスピン平均 $M_{i,t}$ / 局所ポーラーオーダー $P_{i,t}$ |
+| `cargo_spin_all` | `pixi run cargo_spin_all` | 上記の全ビーズ条件一括版 |
+| `cargo_spin_quick` | `pixi run cargo_spin_quick` | 上記の高速確認版（`frame_stride 20` / `pixel_stride 8` / 20 フレーム） |
 
 ### 2. 角度空間相関タスク（全体・第1主成分・第2主成分を GPU で自動計算）
 | タスク名 | コマンド例 | 対象 |
@@ -245,6 +248,45 @@ $$
 - **散布図・相関のサンプリング**: ブロック数は格子 × 窓 × 実験で膨大になるため、`--block_sample_max`（既定 `300`、`0` 以下で全ブロック）で**空間的に等間隔**に間引きます（乱数不使用・決定的）。`--scatter_max_points` は 1 パネルあたりの最大描画点数です。
 - **相関の定義**: 1 サンプル = 1 ブロック（時間平均）で、`pearson_r`、`spearman_rho`、原点通過最小二乗の傾き `slope_origin`（非中心 $R^2$ 付き）、通常最小二乗の `slope_ols` / `intercept_ols` / `r2_ols` を出力します。全ブロックが同じ値（例: 1 画素ブロックでは常に $P = \lvert M\rvert = 1$）で分散が 0 の場合は未定義として `NaN` になります。なお $P$ と $\lvert M\rvert$ が理論上完全一致する合成場（数値誤差のみで割れる場合）では、Spearman は浮動小数点誤差による同値の割れで 1 を僅かに下回ることがあります（Pearson は厳密に 1）。
 
+### 貨物粒子の速度 $v_{i,t}$ vs 粒子直下のスピン平均 $M_{i,t}$ / 局所ポーラーオーダー $P_{i,t}$ (`plot_cargo_spin_velocity.py`)
+
+上の Ising 解析は「空間スケール $R$ の窓」で平均するのに対し、本スクリプトは**貨物粒子 $i$ の下の領域（粒子中心の円板）ごと・フレームごと**に秩序変数を評価し、粒子の速度との関係を散布図にします。
+
+$$
+M_{i,t} = \frac{1}{N_{\mathrm{valid}}}\sum_{j \in \mathrm{region}(i,t)} \sigma_j,\quad
+\sigma_j = \mathrm{sign}\!\left(\mathbf{u}_j \cdot \mathbf{n}_j\right),\qquad
+P_{i,t} = \left| \frac{1}{N_{\mathrm{valid}}}\sum_{j \in \mathrm{region}(i,t)} \hat{\mathbf{u}}_j \right|,\qquad
+v_{i,t} = \frac{\left|\mathbf{r}_i(t+\tau) - \mathbf{r}_i(t)\right|}{\tau\,\Delta t}
+$$
+
+- **「粒子の下の領域」**: ビーズ中心の円板で、半径は $R_{\mathrm{region}} = \max(\texttt{--region\_factor} \times R_c,\ \texttt{--min\_region\_um})$（既定 $2.0\,R_c$ / 下限 $1\ \mu$m。既定値は「ビーズ直径と同程度の円板」で、最小の $0.63\ \mu$m ビーズでも間引き格子上で $\sim16$ 点を確保します）。`--region_inner_factor`（既定 `0`）を $>0$ にすると内側をくり抜いた**円環**になります（ビーズ直下のフローは遮蔽・補間の影響を受けやすいため感度チェック用）。円板内で $|\mathbf{u}| > \texttt{--min\_flow\_mag}$ の有効画素のみを平均し、有効画素数 `--min_region_pixels`（既定 `6`）未満 / 有効率 `--min_valid_fraction` 未満の $(i,t)$ は棄却します。
+- **速度**: `--velocity tracked`（既定）は `beads_tracks.csv` の位置から $v = |\mathbf{r}(t+\tau) - \mathbf{r}(t)| / (\tau\,\Delta t)$（$\Delta t$ = `--frame_interval`、既定 4 s、$\tau$ = `--tau`、既定 1 = 連続フレーム＝光学フローと同じ時間窓）。`--velocity flow` は円板内の平均フロー $|\langle\mathbf{u}\rangle| \cdot \texttt{scale}/\Delta t$（ビーズ直下の MT 流速そのもの）を縦軸に使います。`v_track_um_s` / `v_flow_um_s` / `v_flow_absmean_um_s` は常に CSV に記録されます。
+- **横軸 2 系統**: 横軸 $M_{i,t}$（`magnetization_vs_velocity_*`）と横軸 $P_{i,t}$（`polar_order_vs_velocity_*`）を並行して出力します。$P$ は $\mathbf{n} \to -\mathbf{n}$ で不変ですが、$M$ の符号（= $v$ との相関の符号）はディレクターの向きに依存するため、`plot_ising_magnetization.choose_director_sign` と**共通の規約判定**（プール $\langle\cos 2\Delta\theta\rangle$ が大きい側、`--theta_sign auto`）を共有し、採用符号を CSV の `dir_sign` と図の注記に記録します。
+- **統計量**: 1 サンプル = 1 $(i, t)$ として Pearson $r$（$p$ 値付き）・Spearman $\rho$・OLS 傾き ± 標準誤差・$R^2$・`within-particle r`（実験 × 粒子ごとに平均を引いた後の相関＝「同一粒子の時間変動だけ」の相関）を `cargo_spin_velocity_summary.csv` に出力します。図中のトレンド線は**等点数ビン**の $v$ の中央値 ± 四分位（IQR）で、点数が少ないときはビン数を自動的に減らします（`n_bins_effective`）。
+- **図**: 条件別 `magnetization_vs_velocity_<bead>` / `polar_order_vs_velocity_<bead>`（点色 = 粒子 $i$）、条件別パネル `..._all_beads`、全条件重ね描き `..._overlay`。いずれも `.png` / `.svg`。
+- **2D ヒートマップ（横軸 $M_{i,t}$ / $P_{i,t}$、縦軸 $v_{i,t}$、色 $P(v, M)$）**: 散布図は点数が多いと密度の偏りが見えにくいため、**全条件・全粒子をプール**した 2D ヒストグラム `magnetization_vs_velocity_heatmap` / `polar_order_vs_velocity_heatmap`（`--heatmap_per_condition` で条件別版も）を出力します。色はビン内の個数を面積で割った同時確率密度
+
+$$
+P(v, M) = \frac{\mathrm{count}(v, M)}{N_{\mathrm{in}}\,\Delta M\,\Delta v}\qquad \left[\ (\mu\mathrm{m/s})^{-1}\right]
+$$
+
+で、$N_{\mathrm{in}}$ はビン範囲内の点数なので図の範囲内で $\int P\,dv\,dM = 1$ になります。横軸は物理範囲（$M \in [-1, 1]$、$P \in [0, 1]$）を等幅に、縦軸は速度分布が裾を引くため既定で**対数等間隔ビン**（`--heatmap_y_edges log`、対数軸表示）にして低速度側の分解能を確保し、上限は `--heatmap_upper_percentile`（既定 `99.5`）分位点で打ち切ります（範囲外の点数は図中に表示）。色の上限は 0 でないビンの `--heatmap_vmax_percentile`（既定 `99`）分位点に取って 1 ビンの突出による白飛びを防ぎ、`--heatmap_log_color` で対数スケールにできます。白線は散布図と同一の等点数ビン中央値 ± IQR、上・右の周辺分布は個数ヒストグラム（`--no_heatmap_marginals` で省略）、ビン数は `--heatmap_bins_x`（既定 `25`）/ `--heatmap_bins_y`（既定 `30`）、ビン境界は `--heatmap_x_edges`（`uniform` / `quantile`）と `--heatmap_y_edges`（`log` / `linear` / `quantile`）で切り替えられます。
+- **CSV**: `cargo_spin_velocity_points`（全 $(i,t)$ の生データ: `m_ising`, `polar`, `v_um_s`, 円板内画素数, 半径, `theta_rad` など）/ `cargo_spin_velocity_summary`（条件 × 横軸変数の統計量）/ `cargo_spin_velocity_binned`（ビン統計 = トレンド線の数値）/ `cargo_spin_velocity_extraction`（実験ごとの使用フレーム数・採用点数・棄却数・`theta_source`・円板半径・フローキャッシュ元）/ `cargo_spin_velocity_heatmap`（2D ヒストグラムの各ビン: 境界・中心・`count`・`prob_density`・`bin_area`。`count = 0` のビンは省略）。
+- **解像度の注意**: 円板内のサンプル数は `--pixel_stride` に反比例するため、既定は `4`（1 µm の円板でも 10 点以上）。`--pixel_stride` を大きくすると $M$ が離散化されて見かけの相関が弱まります。実行ヘッダに条件ごとの円板半径 [µm / px / grid px] を表示します。`--yscale log` で速度軸を対数にできます。
+
+```bash
+pixi run cargo_spin                                # 既定（pixel_stride 4 / frame_stride 5、global director）
+pixi run cargo_spin_all                            # 全ビーズ条件
+pixi run cargo_spin_quick                          # 高速確認（frame_stride 20 / pixel_stride 8 / 20 フレーム）
+pixi run python plot_cargo_spin_velocity.py \
+    --beads 1um 3um --region_factor 3 --region_inner_factor 1.0   # 粒子直下を除いた円環
+pixi run python plot_cargo_spin_velocity.py \
+    --velocity flow --yscale log --flow_cache_dir /tmp/mtcache
+pixi run python plot_cargo_spin_velocity.py \
+    --beads 1um --heatmap_per_condition --heatmap_log_color   # ヒートマップを条件別 + 対数色
+pixi run python plot_cargo_spin_velocity.py \
+    --heatmap_y_edges linear --heatmap_bins_x 20 --heatmap_bins_y 20   # 等幅ビンのヒートマップ
+```
 
 ---
 
