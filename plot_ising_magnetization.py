@@ -44,16 +44,41 @@ libs/AFT_tools.py は least-moment 角を -1 倍する実装のため、MTs_im_t
 等比級数（--window_steps, 既定 24）で自動生成する。
 ブロックは --window_overlap（既定 0 = 非重複タイル, 0.5 = 50% 重複）で走査する。
 
+【イジング磁化とポーラーオーダーの対応関係】
+同じブロック（窓サイズ R、同一の有効画素判定）に対して、向きだけを見た秩序変数
+
+    P(R) = | (1 / N_R) * sum u_hat_i |,   u_hat_i = u_i / |u_i|   （局所ポーラーオーダー）
+
+も同時に計算し、2 つの秩序変数がどの程度一致するかを可視化・定量化する。
+
+    Delta(R) = | <P(R)> - <|M_Ising(R)|> | / <P(R)>
+
+- P はディレクター n に依存しない（sigma と違い head/tail の規約も無関係）。したがって
+  実装では 1 フレーム 1 回だけ計算し、theta -> -theta の両バリアントで共有する。
+- ±反平行な 2 状態場では P(R) = |M(R)| が厳密に成り立ち Delta = 0。Delta > 0 は
+  「符号はそろっているが向きが揃っていない（同符号側の角度広がり）」を表す。
+
+  散布図（1 サンプル = 1 ブロックをフレーム間で時間平均）: 横軸 P、縦軸 |M|、色 = R。
+  窓サイズ依存比較: <P(R)> と <|M(R)|> を同一パネルに重ね、下段に Delta(R) を描く。
+
+  ブロック数は膨大（例: 格子 115 x 138 x 24 窓 x 18 実験）になるため、散布図・相関解析に
+  使うブロックは --block_sample_max 個まで等間隔に間引く（決定的・乱数不使用）。
+
 【出力ファイル】
 1. ising_magnetization_vs_window.png/.svg        : <|M(R)|> vs R（両対数）+ 局所指数パネル
 2. ising_magnetization_vs_window_linear.png/.svg : 同上（線形軸、狭いレンジの確認用）
 3. ising_magnetization_per_experiment.png/.svg   : 条件別パネル（実験ごとの曲線 + 条件平均）
 4. ising_polar_bias.png/.svg                     : 条件別の極性バイアス <sigma> と +1 スピン比
 5. ising_spin_map_examples.png/.svg              : 各条件の代表スピン場 sigma(x, y)（検証用）
+6. ising_polar_order_vs_magnetization.png/.svg   : <P(R)> と <|M(R)|> の重ね描き + Delta(R)
+7. ising_polar_vs_magnetization_scatter.png/.svg : ブロックごとの散布図（P vs |M|, 色 = R）
 CSV:
-  ising_magnetization_curve.csv          : 条件 x 窓サイズ（実験間平均 ± SEM + プール値）
-  ising_magnetization_per_experiment.csv : 実験 x 窓サイズの生値
-  ising_magnetization_summary.csv        : 条件ごとの代表値・べき指数フィット・極性バイアス
+  ising_magnetization_curve.csv           : 条件 x 窓サイズ（実験間平均 ± SEM + プール値）
+  ising_magnetization_per_experiment.csv  : 実験 x 窓サイズの生値
+  ising_magnetization_summary.csv         : 条件ごとの代表値・べき指数・極性バイアス・Delta・相関
+  ising_polar_order_curve.csv             : 条件 x 窓サイズの <P(R)> と <|M(R)|>、Delta(R)
+  ising_polar_magnetization_blocks.csv    : ブロック単位の (P, |M|) ペア（散布図の生データ）
+  ising_polar_correlation.csv             : 条件 x 窓サイズの相関統計（r, rho, 傾き, R^2）
 
 【データ源】
 各実験ディレクトリの GFP_flows.h5（shape = (frame, 2, y, x) もしくは (frame, y, x, 2)）。
@@ -238,7 +263,14 @@ def load_local_director_maps(
 # =============================================================================
 
 def _new_accumulator(n_w: int) -> dict:
-    """1 つのディレクター符号バリアント用の累積バッファを作る。"""
+    """
+    1 つのディレクター符号バリアント用の累積バッファを作る。
+
+    'blk_*' は散布図・相関解析用の「ブロック単位の時間累積」で、窓ごとに
+    --block_sample_max 個まで等間隔に間引いたブロック index（'blk_index'）だけを保持する。
+    'polar*' は極性オーダー（ディレクター非依存なので両バリアントで同じ値になる）。
+    """
+    k_lists = [None] * n_w
     return {
         'sum_abs': np.zeros(n_w, dtype=np.float64),
         'sum_m': np.zeros(n_w, dtype=np.float64),
@@ -246,6 +278,15 @@ def _new_accumulator(n_w: int) -> dict:
         'n_blocks': np.zeros(n_w, dtype=np.int64),
         'frame_abs': [[] for _ in range(n_w)],
         'frame_signed': [[] for _ in range(n_w)],
+        'frame_polar': [[] for _ in range(n_w)],
+        'sum_polar': np.zeros(n_w, dtype=np.float64),
+        'polar_blocks': np.zeros(n_w, dtype=np.int64),
+        'blk_index': list(k_lists),        # 窓ごとの間引きブロック index（flat）
+        'blk_shape': list(k_lists),        # 窓ごとのブロック格子 shape (n_y, n_x)
+        'blk_polar_sum': list(k_lists),    # 時間累積: P
+        'blk_abs_sum': list(k_lists),      # 時間累積: |M|
+        'blk_signed_sum': list(k_lists),   # 時間累積: M（符号付き）
+        'blk_polar_cnt': list(k_lists),    # フレーム数（P と |M| の共通分母）
         'cos2_sum': 0.0,      # sum cos 2 Delta theta（符号判定用）
         'n_valid_sum': 0.0,   # 有効画素数（cos2 の分母）
         'n_plus': 0.0,
@@ -261,7 +302,8 @@ def _finalize_variant(
 ) -> dict:
     """
     フレームごとの累積値から、実験レベルの <|M(R)|>（フレーム平均 ± SEM）と
-    プール値（全ブロック・全フレーム平均）を確定する。
+    プール値（全ブロック・全フレーム平均）を確定する。極性オーダー <P(R)> と
+    ブロック単位の時間平均（散布図用）も同時に確定する。
     """
     n_w = int(windows_px.size)
     abs_mean = np.full(n_w, np.nan)
@@ -271,6 +313,9 @@ def _finalize_variant(
     pooled_abs = np.full(n_w, np.nan)
     pooled_signed = np.full(n_w, np.nan)
     squared_mean = np.full(n_w, np.nan)
+    polar_mean = np.full(n_w, np.nan)
+    polar_sem = np.full(n_w, np.nan)
+    pooled_polar = np.full(n_w, np.nan)
 
     for wi in range(n_w):
         vals = np.asarray(acc['frame_abs'][wi], dtype=np.float64)
@@ -285,17 +330,44 @@ def _finalize_variant(
             signed_mean[wi] = float(np.mean(svals))
             signed_sem[wi] = (float(np.std(svals, ddof=1) / np.sqrt(svals.size))
                               if svals.size > 1 else 0.0)
+        pvals = np.asarray(acc['frame_polar'][wi], dtype=np.float64)
+        pvals = pvals[np.isfinite(pvals)]
+        if pvals.size:
+            polar_mean[wi] = float(np.mean(pvals))
+            polar_sem[wi] = (float(np.std(pvals, ddof=1) / np.sqrt(pvals.size))
+                             if pvals.size > 1 else 0.0)
         nb = int(acc['n_blocks'][wi])
         if nb > 0:
             pooled_abs[wi] = float(acc['sum_abs'][wi] / nb)
             pooled_signed[wi] = float(acc['sum_m'][wi] / nb)
             squared_mean[wi] = float(acc['sum_m2'][wi] / nb)
+        npb = int(acc['polar_blocks'][wi])
+        if npb > 0:
+            pooled_polar[wi] = float(acc['sum_polar'][wi] / npb)
 
     n_def = acc['n_plus'] + acc['n_minus']
     frac_plus = acc['n_plus'] / n_def if n_def > 0 else float('nan')
     frac_minus = acc['n_minus'] / n_def if n_def > 0 else float('nan')
     n_valid = float(acc['n_valid_sum'])
     cos2 = acc['cos2_sum'] / n_valid if n_valid > 0 else float('nan')
+
+    blk_polar = []
+    blk_abs = []
+    blk_signed = []
+    blk_n = []
+    for wi in range(n_w):
+        cnt = acc['blk_polar_cnt'][wi]
+        if cnt is None or cnt.size == 0:
+            blk_polar.append(np.zeros(0, dtype=np.float64))
+            blk_abs.append(np.zeros(0, dtype=np.float64))
+            blk_signed.append(np.zeros(0, dtype=np.float64))
+            blk_n.append(np.zeros(0, dtype=np.int64))
+            continue
+        den = np.where(cnt > 0, cnt, 1).astype(np.float64)
+        blk_polar.append(acc['blk_polar_sum'][wi] / den)
+        blk_abs.append(acc['blk_abs_sum'][wi] / den)
+        blk_signed.append(acc['blk_signed_sum'][wi] / den)
+        blk_n.append(cnt.astype(np.int64))
 
     return {
         'windows_px': windows_px,
@@ -315,6 +387,18 @@ def _finalize_variant(
         'nematic_order_cos2': float(cos2),
         'cos2_sum': float(acc['cos2_sum']),
         'n_valid_sum': float(n_valid),
+        # --- 極性オーダー（ディレクター非依存: 両バリアントで同じ値） ---
+        'polar_mean': polar_mean,
+        'polar_sem': polar_sem,
+        'pooled_polar': pooled_polar,
+        'polar_n_blocks': acc['polar_blocks'].astype(np.int64),
+        # --- 散布図・相関解析用（ブロック単位・時間平均） ---
+        'blk_polar_mean': blk_polar,
+        'blk_abs_mean': blk_abs,
+        'blk_signed_mean': blk_signed,
+        'blk_n_frames': blk_n,
+        'blk_index': acc['blk_index'],
+        'blk_shape': acc['blk_shape'],
     }
 
 
@@ -334,6 +418,7 @@ def process_experiment_ising(
     director: str = 'global',
     flow_cache: str = 'auto',
     flow_cache_name: Optional[str] = None,
+    block_sample_max: int = 300,
     progress: bool = True,
 ) -> Optional[dict]:
     """
@@ -341,10 +426,22 @@ def process_experiment_ising(
 
         sigma = sign( u . n )
 
-    を計算し、複数の窓サイズ R に対する <|M_Ising(R)|> を集計して返す。
+    を計算し、複数の窓サイズ R に対する <|M_Ising(R)|> を集計して返す。同時に、
+    同一ブロックで局所ポーラーオーダー
+
+        P(R) = | (1 / N_R) * sum u_hat_i |,   u_hat_i = u_i / |u_i|
+
+    も集計する（P はディレクター n に依存しないのでフレームごとに 1 回だけ計算し、
+    theta -> -theta の両バリアントで共有する）。
 
     ディレクター符号（theta -> -theta のミラー）の両バリアントを同時に集計し、
     後段でプール <cos 2 Delta theta> が大きい側を採用できるようにする。
+
+    Parameters
+    ----------
+    block_sample_max : int
+        散布図・相関解析用に保持するブロック数の上限（窓ごと・実験ごと）。ブロックは
+        空間的に等間隔（even_stride_indices）に間引く。0 以下で全ブロックを保持する。
 
     Returns
     -------
@@ -472,6 +569,14 @@ def process_experiment_ising(
                 VARIANT_MINUS: c2f * c2t - s2f * s2t,  # cos 2(phi + theta)
             }
 
+            # 単位ベクトル場 u_hat（ポーラーオーダー用・ディレクター非依存）
+            ux = np.cos(phi)
+            uy = np.sin(phi)
+            ux[~valid] = 0.0
+            uy[~valid] = 0.0
+
+            # バリアントごとのスピン場 sigma と極性バイアス用カウント
+            sigmas: Dict[str, np.ndarray] = {}
             for name in VARIANT_NAMES:
                 acc = accs[name]
                 acc['n_valid_sum'] += n_valid_frame
@@ -479,6 +584,7 @@ def process_experiment_ising(
 
                 sigma = np.sign(dots[name])
                 sigma[~valid] = 0.0
+                sigmas[name] = sigma
                 acc['n_plus'] += float(np.count_nonzero(sigma > 0))
                 acc['n_minus'] += float(np.count_nonzero(sigma < 0))
 
@@ -487,21 +593,69 @@ def process_experiment_ising(
                 elif name == VARIANT_MINUS and spin_example_minus is None:
                     spin_example_minus = sigma
 
-                curve = ising.magnetization_curve(
-                    sigma, valid, windows_grid,
-                    overlap=window_overlap, min_valid_fraction=min_valid_fraction)
-                for wi in range(n_w):
-                    nb = int(curve['n_blocks'][wi])
-                    if nb <= 0:
+            ov = float(np.clip(window_overlap, 0.0, 0.95))
+            for wi in range(n_w):
+                w = int(windows_grid[wi])
+                step = int(max(1, round(float(w) * (1.0 - ov))))
+
+                # --- ポーラーオーダー P(R)（フレームごとに 1 回だけ計算して共有） ---
+                polar_blocks = ising.block_polar_orders(
+                    ux, uy, valid, w, step=step,
+                    min_valid_fraction=min_valid_fraction)
+                p_flat = (polar_blocks[np.isfinite(polar_blocks)]
+                          if polar_blocks.size else np.empty(0, dtype=np.float64))
+                if p_flat.size == 0:
+                    continue
+                p_mean = float(np.mean(p_flat))
+
+                for name in VARIANT_NAMES:
+                    acc = accs[name]
+                    m_blocks = ising.block_magnetizations(
+                        sigmas[name], valid, w, step=step,
+                        min_valid_fraction=min_valid_fraction)
+                    m_flat = (m_blocks[np.isfinite(m_blocks)]
+                              if m_blocks.size else np.empty(0, dtype=np.float64))
+                    if m_flat.size == 0:
                         continue
-                    a_val = float(curve['abs_mean'][wi])
-                    s_val = float(curve['signed_mean'][wi])
+
+                    nb = int(m_flat.size)
+                    a_val = float(np.mean(np.abs(m_flat)))
+                    s_val = float(np.mean(m_flat))
                     acc['frame_abs'][wi].append(a_val)
                     acc['frame_signed'][wi].append(s_val)
                     acc['sum_abs'][wi] += a_val * nb
                     acc['sum_m'][wi] += s_val * nb
-                    acc['sum_m2'][wi] += float(curve['squared_mean'][wi]) * nb
+                    acc['sum_m2'][wi] += float(np.mean(m_flat ** 2)) * nb
                     acc['n_blocks'][wi] += nb
+
+                    # ポーラーオーダー（同一ブロック・同一有効判定なので |M| と対になる）
+                    acc['frame_polar'][wi].append(p_mean)
+                    acc['sum_polar'][wi] += p_mean * float(p_flat.size)
+                    acc['polar_blocks'][wi] += int(p_flat.size)
+
+                    # --- 散布図・相関解析用: ブロック単位の時間累積（間引きあり） ---
+                    if acc['blk_index'][wi] is None:
+                        acc['blk_index'][wi] = ising.even_stride_indices(
+                            int(m_blocks.size), block_sample_max)
+                        k = int(acc['blk_index'][wi].size)
+                        acc['blk_shape'][wi] = (int(m_blocks.shape[0]), int(m_blocks.shape[1]))
+                        acc['blk_polar_sum'][wi] = np.zeros(k, dtype=np.float64)
+                        acc['blk_abs_sum'][wi] = np.zeros(k, dtype=np.float64)
+                        acc['blk_signed_sum'][wi] = np.zeros(k, dtype=np.float64)
+                        acc['blk_polar_cnt'][wi] = np.zeros(k, dtype=np.int64)
+
+                    idx = acc['blk_index'][wi]
+                    if idx.size == 0 or m_blocks.size != polar_blocks.size:
+                        continue
+                    mp = m_blocks.ravel()[idx]
+                    pp = polar_blocks.ravel()[idx]
+                    okb = np.isfinite(mp) & np.isfinite(pp)
+                    if not np.any(okb):
+                        continue
+                    acc['blk_polar_sum'][wi][okb] += pp[okb]
+                    acc['blk_abs_sum'][wi][okb] += np.abs(mp[okb])
+                    acc['blk_signed_sum'][wi][okb] += mp[okb]
+                    acc['blk_polar_cnt'][wi][okb] += 1
 
     variants = {
         name: _finalize_variant(accs[name], windows_px, windows_um, n_frames_used)
@@ -681,22 +835,41 @@ def _condition_arrays(
         'pooled_abs_mean': np.full(n_w, np.nan),
         'pooled_signed_mean': np.full(n_w, np.nan),
         'squared_mean': np.full(n_w, np.nan),
+        'polar_mean': np.full(n_w, np.nan),
+        'polar_sem': np.full(n_w, np.nan),
+        'pooled_polar': np.full(n_w, np.nan),
+        'polar_n_blocks': np.zeros(n_w, dtype=np.int64),
+        'delta_mean': np.full(n_w, np.nan),
+        'delta_sem': np.full(n_w, np.nan),
+        'delta_pooled': np.full(n_w, np.nan),
+        'ratio_pooled': np.full(n_w, np.nan),
         'n_blocks': np.zeros(n_w, dtype=np.int64),
         'n_experiments': np.zeros(n_w, dtype=int),
     }
     for wi in range(n_w):
         abs_vals: List[float] = []
         signed_vals: List[float] = []
+        polar_vals: List[float] = []
+        delta_vals: List[float] = []
         sum_abs = sum_m = sum_m2 = 0.0
+        sum_polar = 0.0
         nb_tot = 0
+        npb_tot = 0
         for r in rs:
             v = select_variant(r, sign)
             a = float(v['abs_mean'][wi])
             s = float(v['signed_mean'][wi])
+            p = float(v['polar_mean'][wi])
             if np.isfinite(a):
                 abs_vals.append(a)
             if np.isfinite(s):
                 signed_vals.append(s)
+            if np.isfinite(p):
+                polar_vals.append(p)
+                # 実験レベルの Delta(R) = |P_e - |M|_e| / P_e
+                d = float(ising.relative_gap(p, a))
+                if np.isfinite(d):
+                    delta_vals.append(d)
             nb = int(v['n_blocks'][wi])
             if nb > 0:
                 pa = float(v['pooled_abs_mean'][wi])
@@ -709,13 +882,29 @@ def _condition_arrays(
                 if np.isfinite(p2):
                     sum_m2 += p2 * nb
                 nb_tot += nb
+            npb = int(v['polar_n_blocks'][wi])
+            if npb > 0:
+                pp = float(v['pooled_polar'][wi])
+                if np.isfinite(pp):
+                    sum_polar += pp * npb
+                npb_tot += npb
         m, se, n = _sem(abs_vals)
         out['abs_mean'][wi], out['abs_sem'][wi], out['n_experiments'][wi] = m, se, n
         out['signed_mean'][wi], out['signed_sem'][wi], _ = _sem(signed_vals)
+        out['polar_mean'][wi], out['polar_sem'][wi], _ = _sem(polar_vals)
+        out['delta_mean'][wi], out['delta_sem'][wi], _ = _sem(delta_vals)
         if nb_tot > 0:
             out['pooled_abs_mean'][wi] = sum_abs / nb_tot
             out['pooled_signed_mean'][wi] = sum_m / nb_tot
             out['squared_mean'][wi] = sum_m2 / nb_tot
+        if npb_tot > 0:
+            out['pooled_polar'][wi] = sum_polar / npb_tot
+            out['polar_n_blocks'][wi] = npb_tot
+        out['delta_pooled'][wi] = float(ising.relative_gap(out['pooled_polar'][wi],
+                                                          out['pooled_abs_mean'][wi]))
+        if np.isfinite(out['pooled_polar'][wi]) and out['pooled_polar'][wi] > 0:
+            out['ratio_pooled'][wi] = float(out['pooled_abs_mean'][wi]
+                                            / out['pooled_polar'][wi])
         out['n_blocks'][wi] = nb_tot
     return out
 
@@ -750,10 +939,54 @@ def condition_curve_table(
     return pd.DataFrame(rows)
 
 
+def _pooled_delta_from_arrays(arr: dict) -> Tuple[float, float]:
+    """
+    条件全体（全窓サイズ・全実験）でブロック数重み付けした Delta と |M|/P 比を返す。
+
+    窓ごとのプール値 <P>_pooled, <|M|>_pooled を有効ブロック数で重み付け平均し、
+    その比から Delta = |<P> - <|M|>| / <P> を評価する。
+    """
+    npb = np.asarray(arr['polar_n_blocks'], dtype=np.float64)
+    p = np.asarray(arr['pooled_polar'], dtype=np.float64)
+    m = np.asarray(arr['pooled_abs_mean'], dtype=np.float64)
+    ok = np.isfinite(p) & np.isfinite(m) & (npb > 0)
+    if not np.any(ok):
+        return float('nan'), float('nan')
+    wsum = float(np.sum(npb[ok]))
+    if wsum <= 0:
+        return float('nan'), float('nan')
+    p_pool = float(np.sum(p[ok] * npb[ok]) / wsum)
+    m_pool = float(np.sum(m[ok] * npb[ok]) / wsum)
+    ratio = m_pool / p_pool if p_pool > 0 else float('nan')
+    return float(ising.relative_gap(p_pool, m_pool)), ratio
+
+
+def _paired_pooled_stats(df_blocks: Optional[pd.DataFrame], bead_name: str) -> dict:
+    """条件 x 全窓でプールした (P, |M|) ブロックペアの相関統計を返す。"""
+    keys = ('paired_n_points', 'paired_pearson_r', 'paired_spearman_rho',
+            'paired_slope_origin', 'paired_r2_origin')
+    default = {k: (0 if k == 'paired_n_points' else float('nan')) for k in keys}
+    if df_blocks is None or df_blocks.empty:
+        return default
+    d = df_blocks[df_blocks['bead_name'] == bead_name]
+    if d.empty:
+        return default
+    st = ising.paired_correlation_stats(d['polar'].to_numpy(dtype=float),
+                                        d['abs_m'].to_numpy(dtype=float))
+    return {
+        'paired_n_points': int(st['n']),
+        'paired_pearson_r': float(st['pearson_r']),
+        'paired_spearman_rho': float(st['spearman_rho']),
+        'paired_slope_origin': float(st['slope_origin']),
+        'paired_r2_origin': float(st['r2_origin']),
+    }
+
+
 def condition_summary_table(
     results: Sequence[dict],
     beads: Sequence[dict],
     sign: int = 1,
+    df_blocks: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     条件ごとの代表値サマリー。
@@ -761,6 +994,9 @@ def condition_summary_table(
     べき指数は、条件平均カーブ <|M(R)|> vs R を全窓で両対数フィット（power_law_*）した値と、
     窓サイズの上位半分（大 R 側, ドメイン構造のスケーリング域）だけでフィットした値
     （power_law_upper_*）を併記する。
+
+    df_blocks（ブロック単位の (P, |M|) ペア）を与えると、ポーラーオーダーとの比較列
+    （polar_mean_at_*、delta_relative_*、paired_*）も付加する。
     """
     rows: List[dict] = []
     for bead in beads:
@@ -782,6 +1018,8 @@ def condition_summary_table(
         pb_mean, pb_sem, _ = _sem(pig)
         fp_mean, fp_sem, _ = _sem(fpig)
         c2_mean, c2_sem, _ = _sem(cos2)
+        delta_pool, ratio_pool = _pooled_delta_from_arrays(arr)
+        paired = _paired_pooled_stats(df_blocks, bead['name'])
 
         rows.append({
             'bead_name': bead['name'],
@@ -821,7 +1059,160 @@ def condition_summary_table(
             'frac_plus_sem': fp_sem,
             'nematic_order_cos2_mean': c2_mean,
             'nematic_order_cos2_sem': c2_sem,
+            # --- ポーラーオーダーとの比較 ---
+            'polar_mean_at_min_R': float(arr['polar_mean'][0]) if arr['polar_mean'].size else np.nan,
+            'polar_mean_at_max_R': float(arr['polar_mean'][-1]) if arr['polar_mean'].size else np.nan,
+            'pooled_polar_at_min_R': (float(arr['pooled_polar'][0])
+                                      if arr['pooled_polar'].size else np.nan),
+            'pooled_polar_at_max_R': (float(arr['pooled_polar'][-1])
+                                      if arr['pooled_polar'].size else np.nan),
+            'delta_relative_at_min_R': (float(arr['delta_mean'][0])
+                                        if arr['delta_mean'].size else np.nan),
+            'delta_relative_at_max_R': (float(arr['delta_mean'][-1])
+                                        if arr['delta_mean'].size else np.nan),
+            'delta_relative_pooled': delta_pool,
+            'ratio_abs_to_polar_pooled': ratio_pool,
         })
+        rows[-1].update(paired)
+    return pd.DataFrame(rows)
+
+
+# =============================================================================
+# ポーラーオーダーとの比較テーブル
+# =============================================================================
+
+def polar_curve_table(
+    results: Sequence[dict],
+    beads: Sequence[dict],
+    sign: int = 1,
+) -> pd.DataFrame:
+    """
+    条件 x 窓サイズの <P(R)> と <|M_Ising(R)|>、および相対差 Delta(R) のテーブル。
+
+    列の意味
+    --------
+    polar_mean / polar_sem   : 実験間平均 ± SEM の <P(R)>（実験内はフレーム平均）
+    pooled_polar             : 全ブロック・全フレームをプールした <P(R)>
+    abs_mean / abs_sem       : 同様の <|M_Ising(R)|>
+    delta_relative_mean/sem  : 実験ごとに Delta_e = |P_e - |M|_e| / P_e を計算した平均 ± SEM
+    delta_relative_pooled    : プール値から計算した Delta
+    ratio_abs_to_polar*      : <|M|> / <P>（1 に近いほど 2 つの秩序変数が一致）
+    """
+    rows: List[dict] = []
+    for bead in beads:
+        arr = _condition_arrays(results, bead['name'], sign)
+        if arr is None:
+            continue
+        for wi in range(len(arr['windows_px'])):
+            rows.append({
+                'bead_name': bead['name'],
+                'diameter_um': float(bead.get('diameter_um', np.nan)),
+                'window_px': int(arr['windows_px'][wi]),
+                'window_um': float(arr['windows_um'][wi]),
+                'n_experiments': int(arr['n_experiments'][wi]),
+                'n_blocks_total': int(arr['n_blocks'][wi]),
+                'polar_mean': float(arr['polar_mean'][wi]),
+                'polar_sem': float(arr['polar_sem'][wi]),
+                'pooled_polar': float(arr['pooled_polar'][wi]),
+                'abs_mean': float(arr['abs_mean'][wi]),
+                'abs_sem': float(arr['abs_sem'][wi]),
+                'pooled_abs_mean': float(arr['pooled_abs_mean'][wi]),
+                'delta_relative_mean': float(arr['delta_mean'][wi]),
+                'delta_relative_sem': float(arr['delta_sem'][wi]),
+                'delta_relative_pooled': float(arr['delta_pooled'][wi]),
+                'ratio_abs_to_polar_pooled': float(arr['ratio_pooled'][wi]),
+            })
+    return pd.DataFrame(rows)
+
+
+def polar_block_table(
+    results: Sequence[dict],
+    beads: Sequence[dict],
+    sign: int = 1,
+) -> pd.DataFrame:
+    """
+    ブロック単位（時間平均）の (P, |M|) ペアテーブル（散布図・相関解析の生データ）。
+
+    1 行 = 1 ブロック位置（1 実験 x 1 窓サイズ）。ブロックは process_experiment_ising の
+    block_sample_max まで空間的に等間隔に間引かれている（等間隔・決定的）。
+    """
+    rows: List[dict] = []
+    for bead in beads:
+        for r in results:
+            if r['bead_name'] != bead['name'] or r['n_frames_used'] <= 0:
+                continue
+            v = select_variant(r, sign)
+            windows_px = v['windows_px']
+            windows_um = v['windows_um']
+            for wi in range(len(windows_px)):
+                polar = v['blk_polar_mean'][wi]
+                if polar is None or polar.size == 0:
+                    continue
+                shape = v['blk_shape'][wi]
+                idx = v['blk_index'][wi]
+                n_cols = int(shape[1]) if shape is not None else 1
+                abs_m = v['blk_abs_mean'][wi]
+                signed_m = v['blk_signed_mean'][wi]
+                n_frames = v['blk_n_frames'][wi]
+                n_grid = int(shape[0]) * n_cols if shape is not None else int(polar.size)
+                for k in range(polar.size):
+                    flat = int(idx[k]) if idx is not None and k < idx.size else k
+                    rows.append({
+                        'bead_name': bead['name'],
+                        'exp_dir': r['exp_dir'],
+                        'director': r['director'],
+                        'theta_sign': int(1 if int(sign) >= 0 else -1),
+                        'window_px': int(windows_px[wi]),
+                        'window_um': float(windows_um[wi]),
+                        'block_row': int(flat // max(1, n_cols)),
+                        'block_col': int(flat % max(1, n_cols)),
+                        'n_frames': int(n_frames[k]),
+                        'polar': float(polar[k]),
+                        'abs_m': float(abs_m[k]),
+                        'signed_m': float(signed_m[k]),
+                        'n_blocks_grid': n_grid,
+                        'n_blocks_sampled': int(polar.size),
+                    })
+    return pd.DataFrame(rows)
+
+
+def polar_correlation_table(
+    df_blocks: pd.DataFrame,
+    beads: Sequence[dict],
+) -> pd.DataFrame:
+    """
+    条件 x 窓サイズごとに、ブロック単位の (P, |M|) ペアの相関統計をまとめる。
+
+    相関係数は有限なペアのみから計算する。全ブロックで値が同一（例: 1 画素ブロックでは
+    常に P = |M| = 1）で分散が 0 の場合、相関は未定義として NaN になる。
+    """
+    rows: List[dict] = []
+    if df_blocks is None or df_blocks.empty:
+        return pd.DataFrame(rows)
+    for bead in beads:
+        d0 = df_blocks[df_blocks['bead_name'] == bead['name']]
+        if d0.empty:
+            continue
+        for window_um, d in d0.groupby('window_um', sort=True):
+            st = ising.paired_correlation_stats(d['polar'].to_numpy(dtype=float),
+                                                d['abs_m'].to_numpy(dtype=float))
+            rows.append({
+                'bead_name': bead['name'],
+                'diameter_um': float(bead.get('diameter_um', np.nan)),
+                'window_um': float(window_um),
+                'window_px': int(d['window_px'].iloc[0]),
+                'n_points': int(st['n']),
+                'n_blocks_grid': int(d['n_blocks_grid'].iloc[0]),
+                'pearson_r': float(st['pearson_r']),
+                'spearman_rho': float(st['spearman_rho']),
+                'slope_origin': float(st['slope_origin']),
+                'r2_origin': float(st['r2_origin']),
+                'slope_ols': float(st['slope_ols']),
+                'intercept_ols': float(st['intercept_ols']),
+                'r2_ols': float(st['r2_ols']),
+                'mean_polar': float(st['mean_x']),
+                'mean_abs_m': float(st['mean_y']),
+            })
     return pd.DataFrame(rows)
 
 
@@ -834,19 +1225,34 @@ def _anchored_power_law(x: np.ndarray, x0: float, y0: float, exponent: float) ->
     return float(y0) * (np.asarray(x, dtype=float) / float(x0)) ** (-float(exponent))
 
 
-def _compact_log_ticks(ax, which: str = 'xy', numticks: int = 12) -> None:
+def _compact_log_ticks(ax, which: str = 'xy', numticks: int = 12,
+                       max_labels: Optional[int] = None) -> None:
     """
     対数軸の目盛りラベルを簡潔な数値表記（'2', '10', '50' など）に整える。
 
     既定スタイルは 20 pt フォントのため、10^k 表記のラベルが窓サイズ軸で重なる。
     主要目盛りを 1 / 2 / 5 × 10^k に置き、ScalarFormatter で素の数値を表示、
     副目盛りのラベルは消す（縦横とも 1 桁に収まり重ならない）。
+
+    Parameters
+    ----------
+    max_labels : int, optional
+        その軸に許容する目盛りラベルの概数。1/2/5 刻みでの推定ラベル数がこれを
+        超える場合は 10^k 刻み（1 decade ごと）へ自動的に間引く（狭いパネル用）。
     """
     import matplotlib.ticker as mticker
     for axis, key in ((ax.xaxis, 'x'), (ax.yaxis, 'y')):
         if key not in which:
             continue
-        axis.set_major_locator(mticker.LogLocator(base=10.0, subs=(1.0, 2.0, 5.0),
+        subs = (1.0, 2.0, 5.0)
+        if max_labels is not None:
+            lo, hi = (float(v) for v in axis.get_view_interval())
+            if lo > 0.0 and hi > lo:
+                n_dec = float(np.log10(hi / lo))
+                est = int(3 * np.floor(n_dec)) + 1
+                if est > int(max_labels):
+                    subs = (1.0,)
+        axis.set_major_locator(mticker.LogLocator(base=10.0, subs=subs,
                                                   numticks=int(numticks)))
         axis.set_major_formatter(mticker.ScalarFormatter(useOffset=False))
         axis.set_minor_formatter(mticker.NullFormatter())
@@ -1138,6 +1544,221 @@ def plot_spin_map_examples(
     plt.close(fig)
 
 
+def _linestyle_proxy(color: str, ls: str, label: str, marker: Optional[str] = None):
+    """凡例用のプロキシ Line2D を作る（秩序変数ごとの線種の説明用）。"""
+    from matplotlib.lines import Line2D
+    return Line2D([], [], color=color, linestyle=ls, lw=2.0,
+                  marker=marker if marker is not None else 'None', ms=6.0, label=label)
+
+
+def plot_polar_order_vs_magnetization(
+    df_curve: pd.DataFrame,
+    beads: Sequence[dict],
+    out_dirs: Sequence[Path],
+    sign_note: str = '',
+    basename: str = 'ising_polar_order_vs_magnetization',
+) -> None:
+    """
+    <P(R)>（局所ポーラーオーダー）と <|M_Ising(R)|> を同一パネルに重ね、下段に
+
+        Delta(R) = | <P(R)> - <|M_Ising(R)|> | / <P(R)>
+
+    を描く。同じ色 = 同じ条件（貨物粒子径）、実線 + 塗りマーカー = P、破線 + 白抜き = |M|。
+    """
+    if df_curve is None or df_curve.empty:
+        return
+
+    fig, axes = plt.subplots(
+        2, 1, figsize=(8.2, 8.6), sharex=True,
+        gridspec_kw={'height_ratios': [1.9, 1.0]})
+    ax, ax2 = axes
+
+    handles: List[object] = []
+    for bead in beads:
+        d = _sorted_bead_df(df_curve, bead)
+        if d.empty:
+            continue
+        x = d['window_um'].to_numpy(dtype=float)
+        color = bead.get('color', 'C0')
+        marker = bead.get('marker', 'o')
+        p = d['polar_mean'].to_numpy(dtype=float)
+        pe = d['polar_sem'].to_numpy(dtype=float)
+        m = d['abs_mean'].to_numpy(dtype=float)
+        me = d['abs_sem'].to_numpy(dtype=float)
+
+        okp = np.isfinite(x) & np.isfinite(p)
+        okm = np.isfinite(x) & np.isfinite(m)
+        if np.any(okp):
+            ax.errorbar(x[okp], p[okp],
+                        yerr=np.where(np.isfinite(pe[okp]), pe[okp], 0.0),
+                        ls='-', marker=marker, ms=5.5, lw=1.9, color=color,
+                        elinewidth=1.0, capsize=2.0, zorder=4)
+            handles.append(_linestyle_proxy(color, '-', _bead_label(bead),
+                                            marker=marker))
+        if np.any(okm):
+            ax.errorbar(x[okm], m[okm],
+                        yerr=np.where(np.isfinite(me[okm]), me[okm], 0.0),
+                        ls='--', marker=marker, ms=5.5, mfc='white', mew=1.2,
+                        lw=1.5, color=color, elinewidth=1.0, capsize=2.0, zorder=3)
+
+        delta = d['delta_relative_mean'].to_numpy(dtype=float) * 100.0
+        dse = d['delta_relative_sem'].to_numpy(dtype=float) * 100.0
+        okd = np.isfinite(x) & np.isfinite(delta)
+        if np.any(okd):
+            ax2.errorbar(x[okd], delta[okd],
+                         yerr=np.where(np.isfinite(dse[okd]), dse[okd], 0.0),
+                         ls='-', marker=marker, ms=5.0, lw=1.7, color=color,
+                         elinewidth=1.0, capsize=2.0)
+
+    ax.set_xscale('log')
+    _compact_log_ticks(ax, 'y')
+    ax.set_ylim(0.0, 1.05)
+    ax.set_ylabel(r'order parameter')
+    ax.grid(True, which='both', alpha=0.25)
+    ax.legend(handles=handles + [
+        _linestyle_proxy('0.35', '-', r'polar order  $\langle P(R) \rangle$'),
+        _linestyle_proxy('0.35', '--', r'Ising  $\langle |M_{\mathrm{Ising}}(R)| \rangle$'),
+    ], fontsize=8, ncol=2, loc='best', framealpha=0.9)
+    title = 'Ising spin order vs. local polar order of the MT optical flow'
+    if sign_note:
+        title += f"\n{sign_note}"
+    ax.set_title(title, fontsize=10)
+
+    ax2.axhline(0.0, color='0.35', lw=1.0)
+    ax2.set_xscale('log')
+    _compact_log_ticks(ax2, 'x')
+    ax2.set_xlabel(r'Window size $R$ [μm]')
+    ax2.set_ylabel(r'$\Delta(R) = \dfrac{|\langle P(R)\rangle - '
+                   r'\langle |M_{\mathrm{Ising}}(R)|\rangle|}{\langle P(R)\rangle}$ [%]',
+                   fontsize=13)
+    ax2.grid(True, which='both', alpha=0.25)
+
+    mt_ori.save_figure_to_all(fig, basename, list(out_dirs))
+    plt.close(fig)
+
+
+def plot_polar_vs_magnetization_scatter(
+    df_blocks: pd.DataFrame,
+    beads: Sequence[dict],
+    out_dirs: Sequence[Path],
+    df_summary: Optional[pd.DataFrame] = None,
+    sign_note: str = '',
+    ncols: int = 3,
+    max_points: int = 4000,
+    n_trend_bins: int = 10,
+    basename: str = 'ising_polar_vs_magnetization_scatter',
+) -> None:
+    """
+    ブロック（= 各ウィンドウ位置、フレーム間で時間平均）ごとの散布図を条件別に描く。
+
+    - 横軸: ポーラーオーダー P、縦軸: |M_Ising|、点の色: 窓サイズ R（対数スケール）
+    - 灰色破線 = y = x（2 つの秩序変数が完全一致する線）
+    - 黒太線 = P ビンごとの |M| 中央値（トレンド）
+    - 注記 = 条件ごとにプールした Pearson r / Spearman rho（df_summary から取得）
+    """
+    if df_blocks is None or df_blocks.empty:
+        return
+    selected = [b for b in beads
+                if not df_blocks[df_blocks['bead_name'] == b['name']].empty]
+    if not selected:
+        return
+
+    from matplotlib.colors import LogNorm
+    ncols = max(1, min(int(ncols), len(selected)))
+    nrows = int(np.ceil(len(selected) / float(ncols)))
+    # colorbar 専用の列を GridSpec に確保する（figure.autolayout と競合しない）
+    fig = plt.figure(figsize=(3.9 * ncols + 1.0, 3.9 * nrows))
+    gs = fig.add_gridspec(nrows, ncols + 1, width_ratios=[1.0] * ncols + [0.05])
+    axes = np.empty((nrows, ncols), dtype=object)
+    for r in range(nrows):
+        for c in range(ncols):
+            axes[r, c] = fig.add_subplot(gs[r, c])
+
+    all_r = df_blocks['window_um'].to_numpy(dtype=float)
+    all_r = all_r[np.isfinite(all_r) & (all_r > 0)]
+    r_min = max(1e-3, float(np.min(all_r))) if all_r.size else 1.0
+    r_max = float(np.max(all_r)) if all_r.size else 10.0
+    r_norm = LogNorm(vmin=r_min, vmax=max(r_max, r_min * 1.01))
+
+    x_min = (float(np.nanmin(df_blocks['polar'].to_numpy(dtype=float)))
+             if df_blocks['polar'].notna().any() else 0.0)
+    y_min = (float(np.nanmin(df_blocks['abs_m'].to_numpy(dtype=float)))
+             if df_blocks['abs_m'].notna().any() else 0.0)
+    lo = max(1e-3, min(x_min, y_min, 0.05))
+
+    sc = None
+    for k, bead in enumerate(selected):
+        ax = axes[k // ncols][k % ncols]
+        d = df_blocks[df_blocks['bead_name'] == bead['name']]
+        x = d['polar'].to_numpy(dtype=float)
+        y = d['abs_m'].to_numpy(dtype=float)
+        r = d['window_um'].to_numpy(dtype=float)
+        ok = np.isfinite(x) & np.isfinite(y) & np.isfinite(r)
+        x, y, r = x[ok], y[ok], r[ok]
+        if int(max_points) > 0 and x.size > int(max_points):
+            keep = ising.even_stride_indices(x.size, int(max_points))
+            x, y, r = x[keep], y[keep], r[keep]
+        if x.size == 0:
+            ax.axis('off')
+            continue
+
+        sc = ax.scatter(x, y, c=r, s=13, alpha=0.45, lw=0,
+                        cmap='cividis', norm=r_norm, rasterized=True)
+        ax.plot([lo, 1.0], [lo, 1.0], ls='--', lw=1.0, color='0.35', zorder=1)
+        centers, medians, counts = ising.binned_median(
+            x, y, n_bins=int(n_trend_bins), x_min=lo, x_max=1.0, min_count=3)
+        okm = np.isfinite(medians)
+        if np.any(okm):
+            ax.plot(centers[okm], medians[okm], '-', lw=2.2, color='0.15', zorder=5)
+
+        stats = ising.paired_correlation_stats(x, y)
+        label = (f"$r$ = {stats['pearson_r']:.3f}, "
+                 f"$\\rho$ = {stats['spearman_rho']:.3f}\n"
+                 f"$a_{{y=x}}$ = {stats['slope_origin']:.3f}, "
+                 f"$N$ = {stats['n']:,}")
+        if df_summary is not None and not df_summary.empty:
+            sel = df_summary[df_summary['bead_name'] == bead['name']]
+            if not sel.empty and 'paired_pearson_r' in sel.columns:
+                row = sel.iloc[0]
+                label = (f"$r$ = {float(row['paired_pearson_r']):.3f}, "
+                         f"$\\rho$ = {float(row['paired_spearman_rho']):.3f}\n"
+                         f"$a_{{y=x}}$ = {float(row['paired_slope_origin']):.3f}, "
+                         f"$N$ = {int(row['paired_n_points']):,}")
+
+        ax.set_xlim(lo, 1.02)
+        ax.set_ylim(lo, 1.02)
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        # パネルが小さいので目盛り数を絞る（推定ラベル数が多ければ decade 刻みに落とす）
+        _compact_log_ticks(ax, 'xy', numticks=8, max_labels=6)
+        # 既定スタイルは 20 pt フォントのため、パネルを並べると目盛りラベルが重なる
+        ax.tick_params(axis='both', which='both', labelsize=8.5)
+        ax.set_title(f"{_bead_label(bead)}\n{int(np.sum(counts)):,} plotted window blocks",
+                     fontsize=9)
+        ax.text(0.03, 0.97, label, transform=ax.transAxes, ha='left', va='top',
+                fontsize=8, color='0.15',
+                bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='0.7', alpha=0.85))
+        ax.grid(True, which='both', alpha=0.2)
+        ax.set_xlabel(r'polar order $P$ (per window)', fontsize=9.5)
+        ax.set_ylabel(r'$|M_{\mathrm{Ising}}|$ (per window)', fontsize=9.5)
+        if k == 0:
+            ax.legend(handles=[_linestyle_proxy('0.35', '--', r'$y = x$ (perfect match)'),
+                               _linestyle_proxy('0.15', '-', r'median of $|M|$ vs $P$ bins')],
+                      fontsize=8, loc='lower right', framealpha=0.9)
+
+    for k in range(len(selected), nrows * ncols):
+        axes[k // ncols][k % ncols].axis('off')
+    if sc is not None:
+        cbar = fig.colorbar(sc, cax=fig.add_subplot(gs[:, ncols]))
+        cbar.set_label(r'window size $R$ [μm]', fontsize=10)
+        cbar.ax.tick_params(labelsize=9)
+    fig.suptitle((sign_note + '\n' if sign_note else '') +
+                 'Per-window comparison: polar order vs. Ising magnetization',
+                 fontsize=9)
+    mt_ori.save_figure_to_all(fig, basename, list(out_dirs))
+    plt.close(fig)
+
+
 # =============================================================================
 # 画像サイズのプローブ（窓サイズ auto の上限決定用）と main
 # =============================================================================
@@ -1237,6 +1858,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="キャッシュを置くディレクトリ（NAS が遅いときにローカルへ）")
 
     parser.add_argument('--ncols', type=int, default=3, help="パネル図の列数")
+    parser.add_argument('--block_sample_max', type=int, default=300,
+                        help="散布図 / 相関解析用に保持するブロック数（窓ごと・実験ごと、"
+                             "空間的に等間隔に間引き）。0 以下で全ブロック。")
+    parser.add_argument('--scatter_max_points', type=int, default=4000,
+                        help="散布図 1 パネルあたりに描く最大点数（0 以下で全点）")
     parser.add_argument('--no_progress', action='store_true', help="tqdm を無効化")
     return parser
 
@@ -1299,6 +1925,8 @@ def main():
           f"{windows_px[0]} px ({windows_um[0]:.2f} um) ... "
           f"{windows_px[-1]} px ({windows_um[-1]:.2f} um), overlap = {args.window_overlap}")
     print(f"Min |u| / valid frac: {args.min_flow_mag} / {args.min_valid_fraction}")
+    print(f"Polar order compare : Delta(R) = |<P(R)> - <|M_Ising(R)|>| / <P(R)>, "
+          f"block sample <= {args.block_sample_max}")
     if adjustments:
         preview = ', '.join(f"{a}->{'dropped' if b is None else b}" for a, b in adjustments[:6])
         print(f"[NOTE] --window_sizes の丸め / 除外: {preview}"
@@ -1328,6 +1956,7 @@ def main():
                 director=args.director,
                 flow_cache=args.flow_cache,
                 flow_cache_name=cache_name,
+                block_sample_max=args.block_sample_max,
                 progress=not args.no_progress,
             )
             if res is None:
@@ -1358,7 +1987,10 @@ def main():
     # --- 集計テーブル ---
     df_exp = per_experiment_table(results, sign)
     df_curve = condition_curve_table(results, target_beads, sign)
-    df_summary = condition_summary_table(results, target_beads, sign)
+    df_blocks = polar_block_table(results, target_beads, sign)
+    df_polar = polar_curve_table(results, target_beads, sign)
+    df_corr = polar_correlation_table(df_blocks, target_beads)
+    df_summary = condition_summary_table(results, target_beads, sign, df_blocks=df_blocks)
 
     sign_note = (f"director = {args.director}, theta_sign = {sign} "
                  f"({sign_info['decision']}), pixel_stride = {args.pixel_stride}, "
@@ -1366,12 +1998,19 @@ def main():
     mt_ori.save_csv_to_all(df_exp, 'ising_magnetization_per_experiment', out_dirs)
     mt_ori.save_csv_to_all(df_curve, 'ising_magnetization_curve', out_dirs)
     mt_ori.save_csv_to_all(df_summary, 'ising_magnetization_summary', out_dirs)
+    mt_ori.save_csv_to_all(df_polar, 'ising_polar_order_curve', out_dirs)
+    mt_ori.save_csv_to_all(df_blocks, 'ising_polar_magnetization_blocks', out_dirs)
+    mt_ori.save_csv_to_all(df_corr, 'ising_polar_correlation', out_dirs)
 
     # --- 作図 ---
     plot_magnetization_vs_window(df_curve, target_beads, out_dirs, sign_note=sign_note)
     plot_magnetization_vs_window_linear(df_curve, target_beads, out_dirs, sign_note=sign_note)
     plot_per_experiment(df_exp, target_beads, out_dirs, sign_note=sign_note, ncols=args.ncols)
     plot_polar_bias(df_summary, out_dirs, sign_note=sign_note)
+    plot_polar_order_vs_magnetization(df_polar, target_beads, out_dirs, sign_note=sign_note)
+    plot_polar_vs_magnetization_scatter(
+        df_blocks, target_beads, out_dirs, df_summary=df_summary, sign_note=sign_note,
+        ncols=args.ncols, max_points=args.scatter_max_points)
 
     examples: Dict[str, Tuple[Optional[np.ndarray], str]] = {}
     for bead in target_beads:
@@ -1391,6 +2030,16 @@ def main():
             'power_law_upper_exponent', 'polar_bias_mean', 'frac_plus_mean',
             'nematic_order_cos2_mean', 'theta_source']
     print(df_summary[[c for c in cols if c in df_summary.columns]].to_string(index=False))
+    print()
+
+    print("-" * 78)
+    print(" Polar order vs. Ising magnetization (Delta = |<P> - <|M|>| / <P>)")
+    cols2 = ['bead_name', 'polar_mean_at_min_R', 'abs_mean_at_min_R',
+             'delta_relative_at_min_R', 'polar_mean_at_max_R', 'abs_mean_at_max_R',
+             'delta_relative_at_max_R', 'delta_relative_pooled',
+             'ratio_abs_to_polar_pooled', 'paired_n_points', 'paired_pearson_r',
+             'paired_spearman_rho', 'paired_slope_origin']
+    print(df_summary[[c for c in cols2 if c in df_summary.columns]].to_string(index=False))
     print()
     print("Done.")
 

@@ -480,6 +480,405 @@ class TestTables(unittest.TestCase):
         self.assertEqual(sign2, 1)
 
 
+def make_spread_flow(theta0, spread_rad, n_frames=3, rows=96, cols=96, seed=7):
+    """
+    各画素の向きが theta0 ± spread_rad に一様分布する合成フロー。
+
+    全画素が同じ符号（スピンはすべて +1）なので |M(R)| = 1 になる一方、向きには角度
+    広がりがあるため
+
+        P(R) = | <e^{i delta}> | = | sin(spread) / spread |
+
+    という解析値を持つ（ポーラーオーダーの検証用）。
+    """
+    rng = np.random.default_rng(seed)
+    ang = theta0 + rng.uniform(-spread_rad, spread_rad, size=(rows, cols))
+    flows = np.zeros((n_frames, 2, rows, cols), dtype=np.float32)
+    flows[:, 0] = np.cos(ang).astype(np.float32)
+    flows[:, 1] = np.sin(ang).astype(np.float32)
+    return flows
+
+
+class TestUnitFlowAndPolarBlocks(unittest.TestCase):
+
+    def test_unit_flow_components_are_normalized(self):
+        mx = np.array([[3.0, 0.0], [-4.0, 0.5]])
+        my = np.array([[4.0, 0.0], [3.0, 0.0]])
+        ux, uy = ising.unit_flow_components(mx, my)
+        np.testing.assert_allclose(np.hypot(ux, uy)[np.hypot(mx, my) > 0], 1.0, atol=1e-12)
+        self.assertEqual(ux[0, 1], 0.0)   # |u| = 0 は無効として 0 ベクトル
+        self.assertEqual(uy[0, 1], 0.0)
+        np.testing.assert_allclose(ux[0, 0], 0.6, atol=1e-12)
+        np.testing.assert_allclose(uy[0, 0], 0.8, atol=1e-12)
+
+    def test_unit_flow_components_valid_mask(self):
+        mx = np.ones((2, 2))
+        my = np.zeros((2, 2))
+        valid = np.array([[True, False], [True, True]])
+        ux, uy = ising.unit_flow_components(mx, my, valid)
+        self.assertEqual(ux[0, 1], 0.0)
+        self.assertEqual(ux[0, 0], 1.0)
+
+    def test_uniform_field_gives_polar_order_one(self):
+        theta0 = 0.7
+        mx = np.full((32, 32), np.cos(theta0))
+        my = np.full((32, 32), np.sin(theta0))
+        ux, uy = ising.unit_flow_components(mx, my)
+        valid = uniform_valid(mx.shape)
+        for w in (1, 2, 8, 32):
+            st = ising.block_polar_stats(ux, uy, valid, w)
+            self.assertAlmostEqual(st['polar_mean'], 1.0, places=12)
+            self.assertGreater(st['n_blocks'], 0)
+
+    def test_random_field_gives_small_polar_order(self):
+        rng = np.random.default_rng(0)
+        ang = rng.uniform(0.0, 2.0 * np.pi, size=(64, 64))
+        ux, uy = ising.unit_flow_components(np.cos(ang), np.sin(ang))
+        valid = uniform_valid(ang.shape)
+        p1 = ising.block_polar_stats(ux, uy, valid, 1)['polar_mean']
+        p32 = ising.block_polar_stats(ux, uy, valid, 32)['polar_mean']
+        self.assertAlmostEqual(p1, 1.0, places=12)          # 1 画素では必ず 1
+        self.assertLess(p32, 0.35)                          # ランダム -> ほぼ 0
+
+    def test_block_polar_orders_matches_bruteforce(self):
+        rng = np.random.default_rng(2)
+        rows, cols = 13, 17
+        valid = rng.random((rows, cols)) > 0.2
+        ang = rng.uniform(0.0, 2.0 * np.pi, size=(rows, cols))
+        ux, uy = ising.unit_flow_components(np.cos(ang), np.sin(ang), valid)
+        for w in (1, 2, 3, 5):
+            p = ising.block_polar_orders(ux, uy, valid, w)
+            ref = []
+            for y in range(0, rows - w + 1, w):
+                for x in range(0, cols - w + 1, w):
+                    sl = (slice(y, y + w), slice(x, x + w))
+                    v = valid[sl]
+                    n = int(v.sum())
+                    if n <= 0 or n < 0.5 * w * w:
+                        continue
+                    ref.append(np.hypot(ux[sl][v].sum(), uy[sl][v].sum()) / n)
+            np.testing.assert_allclose(p[np.isfinite(p)].ravel(), ref, atol=1e-12)
+
+    def test_block_polar_orders_uses_same_blocks_as_magnetization(self):
+        """有効画素の欠落があっても、P と |M| のブロック集合は完全に一致する。"""
+        rng = np.random.default_rng(3)
+        rows, cols = 21, 19
+        valid = rng.random((rows, cols)) > 0.15
+        sigma = np.where(valid, rng.choice([-1.0, 1.0], size=(rows, cols)), 0.0)
+        ang = rng.uniform(0.0, 2.0 * np.pi, size=(rows, cols))
+        ux, uy = ising.unit_flow_components(np.cos(ang), np.sin(ang), valid)
+        for w in (1, 2, 4, 7):
+            for minvf in (0.0, 0.5, 0.9):
+                m = ising.block_magnetizations(sigma, valid, w, min_valid_fraction=minvf)
+                p = ising.block_polar_orders(ux, uy, valid, w, min_valid_fraction=minvf)
+                self.assertEqual(m.shape, p.shape)
+                np.testing.assert_array_equal(np.isfinite(m), np.isfinite(p))
+
+
+    def test_two_state_field_polar_equals_abs_magnetization(self):
+        """±反平行 2 状態場では P_b = |M_b| が厳密に成り立つ（Delta = 0 の根拠）。"""
+        rng = np.random.default_rng(4)
+        rows, cols = 32, 32
+        theta0 = 0.37
+        sign_map = rng.choice([-1.0, 1.0], size=(rows, cols))
+        mx = np.cos(theta0) * sign_map
+        my = np.sin(theta0) * sign_map
+        ux, uy = ising.unit_flow_components(mx, my)
+        sigma, valid = ising.ising_spin_field(mx, my, np.cos(theta0), np.sin(theta0))
+        for w in (1, 2, 4, 8):
+            pr = ising.block_order_pairs(sigma, ux, uy, valid, w, min_valid_fraction=1.0)
+            np.testing.assert_allclose(pr['polar'], pr['abs_m'], atol=1e-12)
+
+    def test_spread_field_matches_sinc_prediction(self):
+        """同符号で角度広がり s の場では P(R) = |sin s / s| という解析値になる。"""
+        spread = 1.2
+        flows = make_spread_flow(0.4, spread, n_frames=1, rows=96, cols=96)
+        mx, my = flows[0, 0], flows[0, 1]
+        valid = uniform_valid(mx.shape)
+        ux, uy = ising.unit_flow_components(mx, my)
+        p = ising.block_polar_stats(ux, uy, valid, 96, min_valid_fraction=1.0)
+        analytic = abs(np.sin(spread) / spread)
+        self.assertAlmostEqual(p['polar_mean'], analytic, delta=0.02)
+        # 同符号なので |M| = 1 -> Delta = |P - 1| / P = (1 - P) / P
+        sigma, _ = ising.ising_spin_field(mx, my, np.cos(0.4), np.sin(0.4))
+        m = ising.block_magnetization_stats(sigma, valid, 96, min_valid_fraction=1.0)
+        self.assertAlmostEqual(m['abs_mean'], 1.0, places=6)
+        self.assertAlmostEqual(float(ising.relative_gap(p['polar_mean'], m['abs_mean'])),
+                               (1.0 - analytic) / analytic, delta=0.03)
+
+    def test_polar_order_curve_windows_and_counts(self):
+        theta0 = -0.2
+        mx = np.full((32, 32), np.cos(theta0))
+        my = np.full((32, 32), np.sin(theta0))
+        ux, uy = ising.unit_flow_components(mx, my)
+        valid = uniform_valid(mx.shape)
+        curve = ising.polar_order_curve(ux, uy, valid, [1, 2, 4, 8, 16])
+        self.assertEqual(curve['window'].tolist(), [1, 2, 4, 8, 16])
+        np.testing.assert_allclose(curve['polar_mean'], 1.0, atol=1e-12)
+        # 非重複タイルなのでブロック数は (32/w)^2
+        np.testing.assert_array_equal(curve['n_blocks'], [32 * 32, 16 * 16, 8 * 8, 4 * 4, 2 * 2])
+        # 窓が画像より大きい場合はブロック 0
+        self.assertEqual(ising.block_polar_stats(ux, uy, valid, 64)['n_blocks'], 0)
+
+    def test_polar_curve_matches_magnetization_curve_for_two_state_field(self):
+        theta0 = 0.6
+        flows = make_random_domain_flow(theta0, n_frames=1, rows=32, cols=32, block=4)
+        mx, my = flows[0, 0], flows[0, 1]
+        valid = uniform_valid(mx.shape)
+        ux, uy = ising.unit_flow_components(mx, my)
+        sigma, _ = ising.ising_spin_field(mx, my, np.cos(theta0), np.sin(theta0))
+        pc = ising.polar_order_curve(ux, uy, valid, [1, 2, 4, 8, 16], min_valid_fraction=1.0)
+        mc = ising.magnetization_curve(sigma, valid, [1, 2, 4, 8, 16], min_valid_fraction=1.0)
+        np.testing.assert_allclose(pc['polar_mean'], mc['abs_mean'], atol=1e-12)
+        np.testing.assert_array_equal(pc['n_blocks'], mc['n_blocks'])
+
+
+class TestBlockOrderPairs(unittest.TestCase):
+
+    def test_pairs_report_expected_values(self):
+        rows, cols = 16, 16
+        sigma = np.ones((rows, cols))
+        sigma[:, 8:] = -1.0                     # 半分が反平行
+        ang = np.full((rows, cols), 0.3)
+        ang[:, 8:] = 0.3 + np.pi
+        ux, uy = ising.unit_flow_components(np.cos(ang), np.sin(ang))
+        valid = uniform_valid((rows, cols))
+
+        pair = ising.block_order_pairs(sigma, ux, uy, valid, 16, min_valid_fraction=1.0)
+        self.assertEqual(pair['n_blocks'], 1)
+        self.assertAlmostEqual(float(pair['signed_m'][0, 0]), 0.0, places=12)
+        self.assertAlmostEqual(float(pair['abs_m'][0, 0]), 0.0, places=12)
+        self.assertAlmostEqual(float(pair['polar'][0, 0]), 0.0, places=12)
+
+        pair2 = ising.block_order_pairs(sigma, ux, uy, valid, 8, min_valid_fraction=1.0)
+        self.assertEqual(pair2['n_blocks'], 4)
+        np.testing.assert_allclose(pair2['abs_m'][0, 0], 1.0, atol=1e-12)
+        np.testing.assert_allclose(pair2['polar'][0, 0], 1.0, atol=1e-12)
+        np.testing.assert_allclose(pair2['signed_m'][0, 0], 1.0, atol=1e-12)
+
+    def test_pairs_invalid_blocks_are_nan(self):
+        rows, cols = 8, 8
+        sigma = np.ones((rows, cols))
+        valid = np.zeros((rows, cols), dtype=bool)
+        valid[:4, :] = True                      # 下半分は完全に無効
+        ang = np.zeros((rows, cols))
+        ux, uy = ising.unit_flow_components(np.cos(ang), np.sin(ang), valid)
+        pair = ising.block_order_pairs(sigma, ux, uy, valid, 4, min_valid_fraction=0.5)
+        self.assertEqual(pair['n_blocks'], 2)    # 上段 2 ブロックのみ有効
+        self.assertTrue(np.isfinite(pair['polar'][0, :]).all())
+        self.assertTrue(np.isnan(pair['polar'][1, :]).all())
+
+    def test_window_too_large_returns_empty(self):
+        ux, uy = ising.unit_flow_components(np.ones((4, 4)), np.zeros((4, 4)))
+        valid = uniform_valid((4, 4))
+        pair = ising.block_order_pairs(np.ones((4, 4)), ux, uy, valid, 8)
+        self.assertEqual(pair['n_blocks'], 0)
+        self.assertEqual(pair['polar'].size, 0)
+        self.assertEqual(ising.block_polar_orders(ux, uy, valid, 8).size, 0)
+
+    def test_shape_mismatch_raises(self):
+        with self.assertRaises(ValueError):
+            ising.block_order_pairs(np.ones((4, 4)), np.ones((4, 4)), np.ones((4, 3)),
+                                    np.ones((4, 4), dtype=bool), 2)
+        with self.assertRaises(ValueError):
+            ising.block_polar_orders(np.ones((4, 4)), np.ones((4, 4)),
+                                     np.ones((4, 5), dtype=bool), 2)
+        with self.assertRaises(ValueError):
+            ising.unit_flow_components(np.ones((4, 4)), np.ones((3, 4)))
+
+
+class TestComparisonStats(unittest.TestCase):
+
+    def test_relative_gap_values(self):
+        p = np.array([1.0, 0.5, 0.25, 0.8, 0.0, np.nan])
+        m = np.array([1.0, 0.25, 0.25, 0.4, 0.2, 0.1])
+        np.testing.assert_allclose(ising.relative_gap(p, m)[:4],
+                                   [0.0, 0.5, 0.0, 0.5], atol=1e-12)
+        self.assertTrue(np.isnan(ising.relative_gap(p, m)[4]))   # P = 0 は未定義
+        self.assertTrue(np.isnan(ising.relative_gap(p, m)[5]))   # 非有限も NaN
+        # スカラーでも使える（実験レベルの Delta 計算）
+        self.assertAlmostEqual(float(ising.relative_gap(0.8, 0.4)), 0.5, places=12)
+
+    def test_even_stride_indices(self):
+        self.assertEqual(ising.even_stride_indices(10, 10).tolist(), list(range(10)))
+        self.assertEqual(ising.even_stride_indices(10, 0).tolist(), list(range(10)))
+        self.assertEqual(ising.even_stride_indices(10, 100).tolist(), list(range(10)))
+        idx = ising.even_stride_indices(10, 3)
+        self.assertEqual(idx.size, 3)
+        self.assertEqual(idx[0], 0)
+        self.assertEqual(idx[-1], 9)
+        self.assertTrue(np.all(np.diff(idx) > 0))
+        self.assertEqual(ising.even_stride_indices(0, 5).size, 0)
+
+    def test_pearson_and_spearman_correlation(self):
+        x = np.linspace(0.0, 1.0, 20)
+        self.assertAlmostEqual(ising.pearson_correlation(x, 2.0 * x), 1.0, places=12)
+        self.assertAlmostEqual(ising.spearman_rank_correlation(x, 2.0 * x), 1.0, places=12)
+        self.assertAlmostEqual(ising.pearson_correlation(x, -x), -1.0, places=12)
+        # 非線形でも単調なら Spearman は 1（Pearson は 1 未満）
+        y = x ** 3
+        self.assertAlmostEqual(ising.spearman_rank_correlation(x, y), 1.0, places=12)
+        self.assertLess(ising.pearson_correlation(x, y), 0.99)
+        # 分散 0 / サンプル不足は NaN
+        self.assertTrue(np.isnan(ising.pearson_correlation(np.ones(5), np.arange(5.0))))
+        self.assertTrue(np.isnan(ising.spearman_rank_correlation(np.array([1.0]),
+                                                                 np.array([2.0]))))
+
+    def test_average_ranks_handles_ties(self):
+        np.testing.assert_allclose(ising._average_ranks(np.array([1.0, 1.0, 3.0, 5.0, 5.0])),
+                                   [1.5, 1.5, 3.0, 4.5, 4.5])
+
+    def test_slope_through_origin(self):
+        x = np.linspace(0.05, 1.0, 50)
+        a, r2 = ising.slope_through_origin(x, 0.75 * x)
+        self.assertAlmostEqual(a, 0.75, places=12)
+        self.assertAlmostEqual(r2, 1.0, places=12)
+        # 切片があると原点通過フィットは傾きを過大評価する
+        a2, r22 = ising.slope_through_origin(x, 0.75 * x + 0.1)
+        self.assertGreater(a2, 0.75)
+        self.assertLess(r22, 1.0)
+
+    def test_paired_correlation_stats_keys_and_values(self):
+        rng = np.random.default_rng(5)
+        x = rng.random(400)
+        y = 0.8 * x + rng.normal(scale=0.01, size=400)
+        st = ising.paired_correlation_stats(x, y)
+        for key in ('n', 'pearson_r', 'spearman_rho', 'slope_origin', 'r2_origin',
+                    'slope_ols', 'intercept_ols', 'r2_ols', 'mean_x', 'mean_y'):
+            self.assertIn(key, st)
+        self.assertEqual(st['n'], 400)
+        self.assertGreater(st['pearson_r'], 0.99)
+        self.assertGreater(st['spearman_rho'], 0.99)
+        self.assertAlmostEqual(st['slope_origin'], 0.8, delta=0.03)
+        self.assertAlmostEqual(st['mean_x'], float(np.mean(x)), places=12)
+        # 全 NaN -> n = 0、統計量は NaN
+        st2 = ising.paired_correlation_stats(np.array([np.nan, np.nan]), np.array([1.0, 2.0]))
+        self.assertEqual(st2['n'], 0)
+        self.assertTrue(np.isnan(st2['pearson_r']))
+
+    def test_binned_median(self):
+        x = np.linspace(0.0, 1.0, 100)
+        centers, medians, counts = ising.binned_median(x, 3.0 * x, n_bins=4)
+        self.assertEqual(centers.size, 4)
+        self.assertEqual(int(counts.sum()), 100)
+        np.testing.assert_allclose(medians, 3.0 * centers, atol=0.05)
+        # ビン内サンプルが min_count 未満なら NaN
+        _, med2, cnt2 = ising.binned_median(x, 3.0 * x, n_bins=200, min_count=5)
+        self.assertTrue(np.isnan(med2[cnt2 < 5]).all())
+
+
+class TestPolarComparisonTables(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.beads = [pim.BEAD_LOOKUP['beads06um'], pim.BEAD_LOOKUP['beads1um']]
+        self.windows = np.array([1, 2, 4, 8, 16])
+        self.results = []
+        for bead, theta0 in zip(self.beads, (0.4, -0.3)):
+            # ±反平行 2 状態場 -> ブロックごとに P = |M|、Delta = 0
+            flows = make_random_domain_flow(theta0, n_frames=3, rows=32, cols=32, block=2)
+            base = self.root / bead['name'] / '20260101'
+            for k in range(2):
+                self.results.append(pim.process_experiment_ising(
+                    write_synthetic_experiment(base / f'exp{k:03d}', flows, theta_nem=theta0),
+                    bead, self.windows, pixel_stride=1, frame_stride=1, progress=False,
+                    block_sample_max=8))
+
+    def test_block_sample_max_limits_samples(self):
+        df = pim.polar_block_table(self.results, self.beads, 1)
+        self.assertGreater(len(df), 0)
+        # 窓サイズ 1 では 32 x 32 = 1024 ブロックあるが、8 個に間引かれている
+        d1 = df[df['window_px'] == 1]
+        self.assertEqual(int(d1['n_blocks_grid'].iloc[0]), 32 * 32)
+        self.assertEqual(int(d1['n_blocks_sampled'].iloc[0]), 8)
+        self.assertEqual(len(d1.groupby('exp_dir')), 4)
+        self.assertEqual(sorted(df.groupby('bead_name').size().index.tolist()),
+                         ['beads06um', 'beads1um'])
+
+    def test_polar_block_table_pairs_are_consistent(self):
+        df = pim.polar_block_table(self.results, self.beads, 1)
+        for col in ('bead_name', 'exp_dir', 'window_px', 'window_um', 'block_row',
+                    'block_col', 'n_frames', 'polar', 'abs_m', 'signed_m',
+                    'n_blocks_grid', 'n_blocks_sampled'):
+            self.assertIn(col, df.columns)
+        self.assertTrue((df['n_frames'] == 3).all())
+        self.assertTrue(np.isfinite(df['polar']).all())
+        # ±2 状態場では P = |M|（散布図が y = x に乗る）
+        np.testing.assert_allclose(df['polar'], df['abs_m'], atol=1e-6)
+        self.assertTrue((df['block_row'] >= 0).all())
+        self.assertTrue((df['block_col'] >= 0).all())
+
+    def test_polar_correlation_table_is_perfect(self):
+        df = pim.polar_block_table(self.results, self.beads, 1)
+        df_corr = pim.polar_correlation_table(df, self.beads)
+        self.assertEqual(len(df_corr), 2 * len(self.windows))
+        self.assertTrue((df_corr['n_points'] > 0).all())
+        # 窓 1-2 画素ではブロックが 1 ドメインに収まり P = |M| = 1（分散 0）-> 相関 NaN
+        nan_rows = df_corr[df_corr['pearson_r'].isna()]
+        self.assertEqual(len(nan_rows), 2 * 2)
+        self.assertTrue((nan_rows['window_px'] <= 2).all())
+        fin = df_corr[df_corr['pearson_r'].notna()]
+        self.assertGreater(len(fin), 0)
+        np.testing.assert_allclose(fin['pearson_r'], 1.0, atol=1e-9)
+        np.testing.assert_allclose(fin['slope_origin'], 1.0, atol=1e-6)
+        np.testing.assert_allclose(fin['r2_origin'], 1.0, atol=1e-9)
+        # Spearman は論理的に同値な値（float 誤差で ~1e-8 だけ割れる）の順位付けが
+        # 安定しないため僅かに 1 を下回る。対して Pearson は厳密に 1 になる。
+        self.assertTrue((fin['spearman_rho'] > 0.9).all())
+
+    def test_polar_curve_table_delta_is_zero_for_two_state_field(self):
+        df = pim.polar_curve_table(self.results, self.beads, 1)
+        self.assertEqual(len(df), 2 * len(self.windows))
+        for col in ('polar_mean', 'polar_sem', 'pooled_polar', 'abs_mean', 'abs_sem',
+                    'delta_relative_mean', 'delta_relative_pooled', 'ratio_abs_to_polar_pooled'):
+            self.assertIn(col, df.columns)
+        np.testing.assert_allclose(df['polar_mean'], df['abs_mean'], atol=1e-6)
+        np.testing.assert_allclose(df['delta_relative_pooled'], 0.0, atol=1e-3)
+        np.testing.assert_allclose(df['ratio_abs_to_polar_pooled'], 1.0, atol=1e-3)
+        # 窓サイズとともに P = |M| が減衰する（ランダム ± ドメイン）
+        for bead in self.beads:
+            d = df[df['bead_name'] == bead['name']].sort_values('window_um')
+            self.assertAlmostEqual(float(d['polar_mean'].iloc[0]), 1.0, places=6)
+            self.assertLess(float(d['polar_mean'].iloc[-1]), 0.5)
+
+    def test_condition_summary_has_polar_comparison_columns(self):
+        df_blocks = pim.polar_block_table(self.results, self.beads, 1)
+        sign, _ = pim.choose_director_sign(self.results)
+        df = pim.condition_summary_table(self.results, self.beads, sign, df_blocks=df_blocks)
+        for col in ('polar_mean_at_min_R', 'polar_mean_at_max_R', 'delta_relative_at_min_R',
+                    'delta_relative_at_max_R', 'delta_relative_pooled',
+                    'ratio_abs_to_polar_pooled', 'paired_n_points', 'paired_pearson_r',
+                    'paired_spearman_rho', 'paired_slope_origin', 'paired_r2_origin'):
+            self.assertIn(col, df.columns)
+        np.testing.assert_allclose(df['delta_relative_pooled'], 0.0, atol=1e-3)
+        np.testing.assert_allclose(df['paired_pearson_r'], 1.0, atol=1e-3)
+        np.testing.assert_allclose(df['paired_slope_origin'], 1.0, atol=1e-3)
+        self.assertTrue((df['paired_n_points'] > 0).all())
+        # df_blocks を渡さない場合は比較列が NaN / 0 になる（後方互換）
+        df_old = pim.condition_summary_table(self.results, self.beads, sign)
+        self.assertTrue(np.isnan(df_old['paired_pearson_r']).all())
+        self.assertTrue((df_old['paired_n_points'] == 0).all())
+
+    def test_spread_field_delta_equals_one_minus_sinc(self):
+        """同符号・角度広がり s の場では Delta = (1 - |sin s / s|) / (|sin s / s|)。"""
+        spread = 1.0
+        flows = make_spread_flow(0.3, spread, n_frames=2, rows=64, cols=64)
+        bead = self.beads[0]
+        res = pim.process_experiment_ising(
+            write_synthetic_experiment(self.root / 'spread' / 'exp000', flows),
+            bead, np.array([64]), pixel_stride=1, frame_stride=1, progress=False)
+        df = pim.polar_curve_table([res], [bead], 1)
+        analytic = abs(np.sin(spread) / spread)
+        self.assertAlmostEqual(float(df['polar_mean'].iloc[0]), analytic, delta=0.02)
+        self.assertAlmostEqual(float(df['abs_mean'].iloc[0]), 1.0, delta=0.01)
+        self.assertAlmostEqual(float(df['delta_relative_pooled'].iloc[0]),
+                               (1.0 - analytic) / analytic, delta=0.03)
+        # |M| = 1 > P なので比 |M| / P は 1 を超える（= 符号秩序が向きの秩序を過大評価）
+        self.assertGreater(float(df['ratio_abs_to_polar_pooled'].iloc[0]), 1.0)
+
+
 class TestMainEndToEnd(unittest.TestCase):
 
     def setUp(self):
@@ -560,6 +959,67 @@ class TestMainEndToEnd(unittest.TestCase):
         df_exp = pd.read_csv(self.out_dir / 'ising_magnetization_per_experiment.csv')
         self.assertEqual(len(df_exp), 2 * 2 * 8)  # 条件 2 x 実験 2 x 窓 8
         self.assertEqual(sorted(df_exp['theta_source'].unique()), ['global:zarr'])
+
+
+    def test_main_generates_polar_comparison_outputs(self):
+        self._build_synthetic_root()
+        argv = ['plot_ising_magnetization.py',
+                '--root_dir', str(self.root),
+                '--beads', 'beads06um', 'beads1um',
+                '--output_dir', str(self.out_dir),
+                '--pixel_stride', '2', '--frame_stride', '1',
+                '--window_sizes', '2:16:2',
+                '--block_sample_max', '16',
+                '--no_progress', '--no_save_root']
+        with mock.patch.object(sys, 'argv', argv):
+            pim.main()
+        plt.close('all')
+
+        for csv_name in ['ising_polar_order_curve',
+                         'ising_polar_magnetization_blocks',
+                         'ising_polar_correlation']:
+            path = self.out_dir / f"{csv_name}.csv"
+            self.assertTrue(path.exists(), msg=f"{csv_name}.csv missing")
+            self.assertGreater(len(pd.read_csv(path)), 0)
+
+        for fig_name in ['ising_polar_order_vs_magnetization',
+                         'ising_polar_vs_magnetization_scatter']:
+            for ext in ('png', 'svg'):
+                self.assertTrue((self.out_dir / f"{fig_name}.{ext}").exists(),
+                                msg=f"{fig_name}.{ext} missing")
+
+        df_polar = pd.read_csv(self.out_dir / 'ising_polar_order_curve.csv')
+        for col in ('bead_name', 'window_um', 'polar_mean', 'polar_sem', 'pooled_polar',
+                    'abs_mean', 'abs_sem', 'pooled_abs_mean', 'delta_relative_mean',
+                    'delta_relative_sem', 'delta_relative_pooled',
+                    'ratio_abs_to_polar_pooled', 'n_blocks_total'):
+            self.assertIn(col, df_polar.columns)
+        # ±反平行 2 状態場なので P(R) = |M(R)| -> Delta = 0、比 = 1
+        np.testing.assert_allclose(df_polar['polar_mean'], df_polar['abs_mean'], atol=1e-6)
+        np.testing.assert_allclose(df_polar['delta_relative_pooled'], 0.0, atol=1e-3)
+        np.testing.assert_allclose(df_polar['ratio_abs_to_polar_pooled'], 1.0, atol=1e-3)
+
+        df_blocks = pd.read_csv(self.out_dir / 'ising_polar_magnetization_blocks.csv')
+        self.assertTrue((df_blocks['n_blocks_sampled'] <= 16).all())
+        np.testing.assert_allclose(df_blocks['polar'], df_blocks['abs_m'], atol=1e-6)
+
+        df_corr = pd.read_csv(self.out_dir / 'ising_polar_correlation.csv')
+        self.assertTrue((df_corr['n_points'] > 0).all())
+        # 窓 1 画素（pixel_stride 単位）は分散 0 で相関が未定義 -> NaN
+        self.assertTrue(np.isnan(df_corr.loc[df_corr['window_px'] == 2, 'pearson_r']).all())
+        fin = df_corr[df_corr['window_px'] > 2]
+        self.assertGreater(len(fin), 0)
+        np.testing.assert_allclose(fin['pearson_r'], 1.0, atol=1e-9)
+        np.testing.assert_allclose(fin['slope_origin'], 1.0, atol=1e-6)
+        self.assertTrue((fin['spearman_rho'] > 0.9).all())
+
+        df_sum = pd.read_csv(self.out_dir / 'ising_magnetization_summary.csv')
+        for col in ('delta_relative_pooled', 'paired_n_points', 'paired_pearson_r',
+                    'paired_spearman_rho', 'paired_slope_origin'):
+            self.assertIn(col, df_sum.columns)
+        self.assertTrue((df_sum['paired_n_points'] > 0).all())
+        np.testing.assert_allclose(df_sum['paired_pearson_r'], 1.0, atol=1e-3)
+        np.testing.assert_allclose(df_sum['delta_relative_pooled'], 0.0, atol=1e-3)
 
 
 if __name__ == '__main__':

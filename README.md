@@ -205,6 +205,8 @@ pixi run python plot_ising_magnetization.py \
     --beads beads06um beads1um --window_sizes '16:1024:16' --window_overlap 0.5
 pixi run python plot_ising_magnetization.py \
     --director global --theta_sign auto --mask_radius_factor 1.5   # 貨物粒子近傍を除外
+pixi run python plot_ising_magnetization.py \
+    --beads beads06um --block_sample_max 500 --scatter_max_points 8000  # 散布図のサンプル数
 ```
 
 - **ディレクター $\mathbf{n}$**: `--director global`（既定）はフレームごとの大域ネマチック主軸 $\theta_{\mathrm{nem}}(t)$ を `MTs_im_theta.zarr` から読み（2 テンソル平均、無ければフロー配向から算出）、`--director local` は同ファイルの**局所**配向場 $\theta(\mathbf{x},t)$ を各画素のディレクターに使います。
@@ -212,8 +214,37 @@ pixi run python plot_ising_magnetization.py \
 - **重複窓の平均**（`--window_overlap 0.5` 等）は窓サイズが大きい領域での統計量を増やせます。ただしブロック同士は独立でなくなるため、**誤差バー（フレーム・実験間 SEM）はその分だけ過小評価**になります（既定 `0.0` = 非重複タイル）。
 - **無効画素の扱い**: `|u| < --min_flow_mag` の画素はスピン未定義（$\sigma = 0$）として除外し、有効画素率が `--min_valid_fraction` 未満のブロックは $\langle|M|\rangle$ の集計から除外します（スピンマップ図では灰色 = 無効画素）。粒子近傍の流れの乱れを避けたい場合は `--mask_radius_factor`（$\times R_c$、既定 `0` = マスクなし）で除外できます。
 - **計算コスト**: ブロック磁化は**積分画像（summed-area table）**で $O(1)$ 集計するため、窓サイズを増やしてもほぼ追加コストはありません（支配的なのは `GFP_flows.h5` の読み込み I/O）。`plot_mt_orientation_distribution.py` と共通の間引きフローキャッシュ（`--flow_cache auto` / `--flow_cache_dir`）を再利用するので、`mt_orientation` 実行後は 2 回目が高速です。
-- 出力図: `ising_magnetization_vs_window`（両対数 + 局所傾き $p(R)$）/ `ising_magnetization_vs_window_linear`（線形軸）/ `ising_magnetization_per_experiment`（実験別カーブ + 条件平均）/ `ising_polar_bias`（$\langle\sigma\rangle$ と $\sigma = +1$ の割合）/ `ising_spin_map_examples`（$\pm$ スピンマップ例、`.png` / `.svg`）
-- 出力 CSV: `ising_magnetization_curve`（条件 × 窓サイズの $\langle|M|\rangle$ ± SEM / $n$）/ `ising_magnetization_per_experiment`（実験別）/ `ising_magnetization_summary`（条件別集計: `abs_mean_at_min_R` / `abs_mean_at_max_R`、`power_law_exponent` / `power_law_r2`（フィット区間）と `power_law_upper_exponent`（$R$ が大きい後半区間）、`polar_bias_mean`、`frac_plus_mean`、`nematic_order_cos2_mean`、`theta_source` など）
+- 出力図: `ising_magnetization_vs_window`（両対数 + 局所傾き $p(R)$）/ `ising_magnetization_vs_window_linear`（線形軸）/ `ising_magnetization_per_experiment`（実験別カーブ + 条件平均）/ `ising_polar_bias`（$\langle\sigma\rangle$ と $\sigma = +1$ の割合）/ `ising_spin_map_examples`（$\pm$ スピンマップ例）/ `ising_polar_order_vs_magnetization`（$\langle P(R)\rangle$ と $\langle|M(R)|\rangle$ の重ね描き + $\Delta(R)$）/ `ising_polar_vs_magnetization_scatter`（ブロックごとの $P$–$|M|$ 散布図）、`.png` / `.svg`
+- 出力 CSV: `ising_magnetization_curve`（条件 × 窓サイズの $\langle|M|\rangle$ ± SEM / $n$）/ `ising_magnetization_per_experiment`（実験別）/ `ising_magnetization_summary`（条件別集計: `abs_mean_at_min_R` / `abs_mean_at_max_R`、`power_law_exponent` / `power_law_r2`（フィット区間）と `power_law_upper_exponent`（$R$ が大きい後半区間）、`polar_bias_mean`、`frac_plus_mean`、`nematic_order_cos2_mean`、$\Delta$ と相関の `delta_relative_*` / `paired_*`、`theta_source` など）/ `ising_polar_order_curve`（$\langle P(R)\rangle$ と $\langle|M(R)|\rangle$、$\Delta(R)$）/ `ising_polar_magnetization_blocks`（ブロック単位の (P, |M|) ペア）/ `ising_polar_correlation`（条件 × 窓サイズの $r$ / $\rho$ / 傾き / $R^2$）
+
+### イジング磁化と局所ポーラーオーダーの対応関係（同スクリプト・追加解析）
+
+同じブロック（窓サイズ $R$、有効画素判定も共通）について、向きだけを見た秩序変数（**局所ポーラーオーダー**）
+
+$$
+P(R) = \left| \frac{1}{N_R} \sum_{j \in \mathrm{block}(R)} \hat{\mathbf{u}}_j \right|, \qquad \hat{\mathbf{u}}_j = \frac{\mathbf{u}_j}{|\mathbf{u}_j|}
+$$
+
+も同時に計算し、$\sigma_i = \mathrm{sign}(\mathbf{u}_i \cdot \mathbf{n})$ から作った磁化とどの程度一致するかを可視化・定量化します（`libs/calc_local_polar.py` の**円形カーネル**版と同じ「単位ベクトル平均のノルム」規約ですが、比較のため磁化と**同一の正方ブロック**で計算します）。
+
+$$
+\Delta(R) = \frac{\left| \langle P(R) \rangle - \langle |M_{\mathrm{Ising}}(R)| \rangle \right|}{\langle P(R) \rangle}
+$$
+
+| 流速場の状態 | $P(R)$ | $\|M(R)\|$ | $\Delta(R)$ | 意味 |
+| :--- | :--- | :--- | :--- | :--- |
+| 全画素が $\mathbf{n}$ に平行（強磁性） | $1$ | $1$ | $0$ | 完全一致（$\lvert M\rvert = P$） |
+| $\pm$反平行な 2 状態の混在 | $\lvert 1-2f \rvert$ | $\lvert 1-2f \rvert$ | $0$ | 厳密に一致（$f$ = 反平行ドメインの面積比） |
+| 同符号だが角度広がり $\delta$ がある | $\langle \cos\delta \rangle$ | $1$ | $(1-P)/P$ | 符号秩序が向きの秩序を**過大評価**（$\lvert M\rvert > P$） |
+| $\mathbf{n}$ に直交して揃った流れ | $1$ | $\to 0$ | $\to 1$ | スピン秩序では見えない（$\Delta$ 最大） |
+| 空間無相関（ランダム配向） | $\to 0$ | $\to 0$ | 揺らぐ | どちらも消えるが比 $\lvert M\rvert/P$ は揺らぐ |
+
+- **図の読み方**: `ising_polar_order_vs_magnetization` の上段は同じ色 = 同じ条件で、実線 + 塗りマーカーが $\langle P(R)\rangle$、破線 + 白抜きマーカーが $\langle|M_{\mathrm{Ising}}(R)|\rangle$。下段が $\Delta(R)$［%］です。`ising_polar_vs_magnetization_scatter` は 1 点 = 1 ブロック（フレーム間で時間平均）で、横軸 $P$・縦軸 $\lvert M\rvert$・色 = 窓サイズ $R$（対数）。灰色破線が完全一致の $y = x$、黒太線が $P$ ビンごとの中央値トレンドで、各パネルに条件ごとの $r$ / $\rho$ / 原点通過傾き $a_{y=x}$ / 点数 $N$ を表示します。
+- **$P$ はディレクターに依存しません**: $\mathbf{n} \to -\mathbf{n}$ でも不変なので、実装では 1 フレームにつき 1 回だけ計算して $\pm\theta$ の両バリアントで共有します（角度規約の自動判定の影響も受けません）。
+- **$\Delta$ の求め方**: 実験ごとに $\Delta_e = \left| P_e - \lvert M\rvert_e \right| / P_e$ を計算して平均 ± SEM（`delta_relative_mean` / `delta_relative_sem`）をとり、全ブロック・全フレームをプールした値（`delta_relative_pooled`）も併記します。$P \to 0$（ランダム配向の極限）では比が不安定になるため `NaN` になります。
+- **散布図・相関のサンプリング**: ブロック数は格子 × 窓 × 実験で膨大になるため、`--block_sample_max`（既定 `300`、`0` 以下で全ブロック）で**空間的に等間隔**に間引きます（乱数不使用・決定的）。`--scatter_max_points` は 1 パネルあたりの最大描画点数です。
+- **相関の定義**: 1 サンプル = 1 ブロック（時間平均）で、`pearson_r`、`spearman_rho`、原点通過最小二乗の傾き `slope_origin`（非中心 $R^2$ 付き）、通常最小二乗の `slope_ols` / `intercept_ols` / `r2_ols` を出力します。全ブロックが同じ値（例: 1 画素ブロックでは常に $P = \lvert M\rvert = 1$）で分散が 0 の場合は未定義として `NaN` になります。なお $P$ と $\lvert M\rvert$ が理論上完全一致する合成場（数値誤差のみで割れる場合）では、Spearman は浮動小数点誤差による同値の割れで 1 を僅かに下回ることがあります（Pearson は厳密に 1）。
+
 
 ---
 
