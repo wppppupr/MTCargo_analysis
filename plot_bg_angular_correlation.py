@@ -1622,10 +1622,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="xi_bg フィットに使う距離範囲 [um]（既定 0 20）.")
     parser.add_argument('--min_corr_threshold', type=float, default=0.01,
                         help="対数をとる C_bg の下限閾値（既定 0.01）.")
-    parser.add_argument('--max_dist', type=float, default=12.0, help="C_bg(r) 図の横軸上限 [um].")
+    parser.add_argument('--max_dist', type=float, default=60.0, help="C_bg(r) 図の横軸上限 [um].")
     parser.add_argument('--xscale', type=str, default='linear', choices=['log', 'linear'],
                         help="C_bg(r) 図の横軸スケール（既定 linear）.")
-    parser.add_argument('--yscale', type=str, default='log', choices=['log', 'linear'],
+    parser.add_argument('--yscale', type=str, default='linear', choices=['log', 'linear'],
                         help="C_bg(r) 図の縦軸スケール（既定 log = 半対数表示。フィットは ln C で線形化）.")
     parser.add_argument('--xi_xscale', type=str, default='log', choices=['log', 'linear'],
                         help="xi_bg vs 2R_c 図の横軸スケール（既定 log）.")
