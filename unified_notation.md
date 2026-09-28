@@ -70,6 +70,21 @@
   $$\mathrm{MSD}(\Delta t = 300\,\mathrm{s}) = \langle \Delta r^2(\Delta t) \rangle, \qquad \lambda(\Delta t = 100\,\mathrm{s})$$
   いずれも $x$ の増加とともに単調減少する（大粒子ほど流動配向の空間平均化により駆動がキャンセルされる）。
 
+### 2.5 バックグラウンド（粒子近傍除外）配向相関と相関長
+- **仮想粒子（コントロール点）法**: 各フレームで貨物粒子近傍（半径 $\max(R_{\min},\,2R_c)$）・フロー無効画素・画像境界を除外した領域から
+  $N_{\mathrm{virtual}}$ 個の仮想粒子位置をランダム抽出し、各点まわりの実空間リング平均（有効マスク面積で正規化）から
+  $$C_{\mathrm{bg}}(r) = \left\langle \mathbf{u}(\mathbf{x}) \cdot \mathbf{u}(\mathbf{x} + \mathbf{r}) \right\rangle_{|\mathbf{r}| \simeq r}, \qquad
+  \mathbf{u}(\mathbf{x}) = \frac{\mathbf{v}_{\mathrm{flow}}(\mathbf{x})}{\left| \mathbf{v}_{\mathrm{flow}}(\mathbf{x}) \right|}$$
+  を評価する（$C_\parallel(r), C_\perp(r)$ への分解は大局的ネマチック主軸 $\theta(t)$ に対して行う）。
+- **相関長**: $\ln C_{\mathrm{bg}}(r) = \ln a - r / \xi_{\mathrm{bg}}$ の重み付き線形フィット（重み $\sigma_{\ln C} = \mathrm{SEM}/C$、$C_{\mathrm{bg}} \geq 0.01$ の減衰領域のみ）。
+  粒子近傍を除外しているため $\xi_{\mathrm{bg}}$ は貨物サイズに依らないバルク量として扱える（$N_{\mathrm{samples}} = N_{\mathrm{frames}} \times N_{\mathrm{virtual}} \times N_{\mathrm{exp}}$）。
+- **誤差評価（2 通りを併記し、`--error_mode`（既定 `frame`）でフィット重みを選択）**:
+  - サンプル単位 SEM: $\mathrm{SEM}_{\mathrm{sample}}(r) = \sigma\left(\{C_{\mathrm{bg}}(r;t,k)\}_{t,k}\right) / \sqrt{N_{\mathrm{frames}} N_{\mathrm{virtual}}}$
+    （単純だが同一フレーム内の仮想粒子は空間相関をもつため、独立サンプル数を過大評価 = 誤差を過小評価する）。
+  - フレームブロック SEM: まずフレーム平均 $\bar{C}_{\mathrm{bg}}(r;t) = \langle C_{\mathrm{bg}}(r;t,k) \rangle_{k}$ を取り、
+    $\mathrm{SEM}_{\mathrm{frame}}(r) = \sigma\left(\{\bar{C}_{\mathrm{bg}}(r;t)\}_{t}\right) / \sqrt{N_{\mathrm{frames}}}$。
+    実効独立サンプル数 $N_{\mathrm{eff}} \approx N_{\mathrm{frames}}$ とみなす保守的（正直な）誤差で、これを既定のフィット重み・誤差帯に用いる。
+
 ---
 
 ## 3. グラフ・プロットにおける表記ガイドライン
@@ -83,6 +98,8 @@
 | **Run速度** | `Run Velocity $v_{\mathrm{run}}$ [$\mu\mathrm{m/s}$]` | `Fit: $\ln(v_{\mathrm{run}}) = -\frac{4 R_c}{3\xi} + B$` |
 | **空間距離横軸** | `Distance $r$ [$\mu\mathrm{m}$]` | `$r = 2\,\mu\mathrm{m}$`, `$r = 16\,\mu\mathrm{m}$` |
 | **空間相関縦軸** | `Spatial Correlation $C(r)$` | `Fit: $a \exp(-r/\xi)$ ($\xi = 2.78\,\mu\mathrm{m}$)` |
+| **バックグラウンド配向相関** | `Distance $r$ from Virtual Particle Center [$\mu\mathrm{m}$]` / `Background Flow Spatial Correlation $C_{\mathrm{bg}}(r)$` | `Individual experiments ($N=...$)`, `$2R_c = 3.37\,\mu\mathrm{m}$ ($\xi_{\mathrm{bg}} = 7.1 \pm 0.6\,\mu\mathrm{m}$)`, `Fit: $a\exp(-r/\xi_{\mathrm{bg}})$` |
+| **バックグラウンド相関長** | `Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]` / `Background Correlation Length $\xi_{\mathrm{bg}}$ [$\mu\mathrm{m}$]` | `Filled: experiment mean $\pm$ SEM; open square: pooled-sample fit`, `All experiments: $\xi_{\mathrm{bg}} = 6.06 \pm 0.38\,\mu\mathrm{m}$ ($N=12$)` |
 | **局所相関長 vs 速度** | `Cargo Velocity $v_{i,t}$ [$\mu\mathrm{m/s}$]` / `MT Correlation Length $\xi_{i,t}$ [$\mu\mathrm{m}$]` | `All $\xi_{i,t}$ ($N=...$)`, `Binned median ($\pm$IQR)` |
 | **MSD 縦軸・横軸** | `MSD $\langle \Delta r^2 \rangle$ [$\mu\mathrm{m}^2$]` / `Lag time $\Delta t$ [s]` | `Bound ($\alpha=1.65$)`, `Unbound ($\alpha=0.98$)` |
 | **MSD・変位減衰長 vs スケール半径** | (左軸) `MSD $\langle \Delta r^2(\Delta t = 300\,\mathrm{s}) \rangle$ [$\mu\mathrm{m}^2$]` / (右軸) `Displacement Decay Length $\lambda(\Delta t = 100\,\mathrm{s})$ [$\mu\mathrm{m}$]` / (横軸) `Scaled Cargo Radius $x = R_c / \xi$` | `Individual experiments ($N=...$)`, `$2R_c = 3.37\,\mu\mathrm{m}$ ($x = 0.18$)` |
@@ -100,6 +117,8 @@
 - **[run_tumble_analysis.py](file:///home/sasaki/MTCargo_analysis/run_tumble_analysis.py)**: Bound/Unbound dwell 時間分布（PDF, CCDF）
 - **[plot_xi_summary.py](file:///home/sasaki/MTCargo_analysis/plot_xi_summary.py)**: 空間相関長 $\xi$ vs $2R_c$
 - **[angular_correlation.py](file:///home/sasaki/MTCargo_analysis/angular_correlation.py)**: 2D-FFT 角度空間相関 $C(r), C_\parallel(r), C_\perp(r)$
+- **[plot_bg_angular_correlation.py](file:///home/sasaki/MTCargo_analysis/plot_bg_angular_correlation.py)**: 貨物粒子近傍を除外したバックグラウンド（バルク）MT フローの空間配向相関 $C_{\mathrm{bg}}(r)$ と相関長 $\xi_{\mathrm{bg}}$ の条件別集計・作図（仮想粒子サンプリング: 既定 100 点/フレーム × 全フレーム、`--n_workers` でプロセス並列、密なキャッシュの部分抽出再利用、`--error_mode` で frame/sample SEM を切替・両者を CSV 併記。`angular_correlation_bg_vp.zarr` にキャッシュ。出力先: `figure/bg_angular_correlation`, `<root_dir>/figure/bg_angular_correlation`）
+- **[libs/calc_bg_angular_correlation.py](file:///home/sasaki/MTCargo_analysis/libs/calc_bg_angular_correlation.py)**: 仮想粒子（コントロール点）法または全視野 2D-FFT 法によるバックグラウンド配向相関の算出（`angular_correlation_bg.zarr`）
 - **[plot_mt_spatial_correlation_histograms.py](file:///home/sasaki/MTCargo_analysis/plot_mt_spatial_correlation_histograms.py)**: 微小管フロー空間配向相関ヒストグラム
 - **[plot_xi_vs_velocity.py](file:///home/sasaki/MTCargo_analysis/plot_xi_vs_velocity.py)**: 各粒子 $i$・各フレーム $t$ の局所相関長 $\xi_{i,t}$ vs 貨物粒子速度 $v_{i,t}$（粒子径ごとの散布図）
 - **[plot_msd_lambda_vs_scaled_radius.py](file:///home/sasaki/MTCargo_analysis/plot_msd_lambda_vs_scaled_radius.py)**: MSD($\Delta t = 300\,\mathrm{s}$)（第1軸, 黒）と変位 PDF の指数減衰長 $\lambda(\Delta t = 100\,\mathrm{s})$（第2軸, 赤）の 2軸図。横軸は $x = R_c/\xi$（実験ごとの $\xi_{i,t}$ 中央値を使用）版と `Cargo Radius $R_c$`（linear）版を出力（出力先: `figure/scaling`, `figure`, `<root_dir>/figure/scaling`）

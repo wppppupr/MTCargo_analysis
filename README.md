@@ -435,6 +435,48 @@ pixi run plot_corr \
 - $3 \times 3$ グリッド（行: 全体 / 第1主成分 / 第2主成分、列: 粒子周囲流速 / ビーズ速度 vs 流速 / 背景流速）で自動プロット。
 - 指数減衰モデル $C(r) = a \exp(-r/\xi) + c$ による各相関長 $\xi, \xi_\parallel, \xi_\perp$ を自動算出。
 
+### バックグラウンド（粒子近傍除外）配向相関 & 相関長 (`plot_bg_angular_correlation.py`)
+
+貨物粒子近傍を除外したバルク MT フローの空間配向相関 $C_{\mathrm{bg}}(r)$ を、フレームあたり $N_{\mathrm{virtual}}$ 個の
+**仮想粒子（コントロール点）** まわりで評価します（= ランダム点サンプリングで統計量を稼ぐ方式）。
+粒子径条件ごとに実験間の平均 ± SEM と相関長 $\xi_{\mathrm{bg}}$（`libs.hmm_flow_correlation.fit_flow_correlation_length` と同一実装）を算出します。
+
+```bash
+# 全 6 条件（0.63 ~ 20 μm, 22 実験）: 全フレーム × 100 点/フレーム, 4 プロセス並列でキャッシュを計算
+pixi run bg_corr
+
+# 4 フレーム間引き × 100 点/フレーム（密なキャッシュがあれば部分抽出で再利用。高速確認用）
+pixi run bg_corr_s4
+
+# 既存の仮想粒子型 angular_correlation_bg.zarr（0.63 / 1.18 / 3.37 μm）を再利用して高速確認
+pixi run bg_corr_existing
+
+# フィット重みをサンプル単位 SEM（従来方式）にした場合の比較
+pixi run bg_corr_sample_sem
+```
+
+- 仮想粒子位置は、各フレームで **(1) 貨物粒子近傍（半径 $\max(15\,\mathrm{px},\,2R_c)$）、(2) フロー無効画素（$|v| \le 10^{-4}$）、
+  (3) 画像境界（既定で最大距離 $r_{\max}$ px）** を除外した領域からシード固定でランダム抽出します（`--n_virtual_points`, 既定 **100 点/フレーム**）。
+- リング平均は有効マスク面積で正規化し、$C_{\mathrm{bg}}(r)$ に加えてネマチック主軸への分解 $C_\parallel(r), C_\perp(r)$ も算出します。
+- 統計量を増やすためのオプション:
+  - `--frame_stride`（既定 1 = 全フレーム）: 全フレームを使うほどサンプル数が増える（NAS 読み出し量は最大）。
+  - `--n_workers`（既定 1）: 実験ディレクトリ単位のプロセス並列数。全フレーム計算（`pixi run bg_corr` = 4 workers）を実用的な時間で実行するために使用。
+    CUDA は fork 安全でないため、ワーカーは **spawn 方式**で起動します（fork すると GPU が使えず黙って CPU に落ちて数倍遅くなるため）。
+- 計算結果は各実験ディレクトリの `angular_correlation_bg_vp.zarr`（`distance × frame × virtual_point`）にキャッシュされます。
+  キャッシュは **要求より密なサンプリング（仮想粒子数が要求以上、フレーム間引きが要求以下で割り切れる）であれば部分抽出して再利用** するため、
+  全フレーム版のキャッシュさえ作れば `--frame_stride 4` の解析は追加計算なしで行えます（`--force_recompute` で再計算、`--no_cache` で保存しない）。
+- 誤差は 2 通りを併記します（`--error_mode`, 既定 `frame`）:
+  - `sample SEM`: 距離ごとの全サンプル（フレーム × 仮想粒子）間の標準誤差。単純だが同一フレーム内の仮想粒子は空間相関をもつため誤差を過小評価する。
+  - `frame SEM`（frame-block SEM）: フレームごとに仮想粒子平均を取り、フレーム平均間の標準誤差を $\sqrt{N_{\mathrm{frames}}}$ で評価。
+    実効独立サンプル数 ≈ フレーム数とみなす保守的（正直な）誤差で、`--error_mode frame` ではこれをフィット重み
+    $\sigma_{\ln C} = \mathrm{SEM}/C$ に使用する。
+  CSV には両モードの SEM と、両モードの重みで求めた $\xi_{\mathrm{bg}}$（`xi_um_sample_sem`, `xi_um_frame_sem`）を併記します。
+- 出力（`figure/bg_angular_correlation` と `<root_dir>/figure/bg_angular_correlation` の 2 箇所, `--no_save_root` で後者を省略）:
+  `bg_angular_correlation_Cr`（条件別 $C_{\mathrm{bg}}(r)$ + 指数フィット。エラーバー = 実験間 SEM, 帯 = プールした frame-block SEM）,
+  `bg_angular_correlation_xi_vs_diameter`（$\xi_{\mathrm{bg}}$ vs $2R_c$。白抜き点 ± フィット誤差, 塗りつぶし = 条件平均 ± 実験間 SEM, 白抜き四角 = プールフィット）,
+  `bg_angular_correlation_par_perp`（条件別ネマチック分解 + frame-block SEM 帯）,
+  および 4 種の CSV（実験別カーブ / 条件別平均曲線 / 実験別 $\xi_{\mathrm{bg}}$ / 条件別サマリー）。
+
 ---
 
 ## 🏃 11. 貨物粒子の Run / Tumble セグメンテーション & 時間分布解析

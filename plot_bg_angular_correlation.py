@@ -20,24 +20,42 @@ plot_bg_angular_correlation.py
   C(r)（全成分）, C_parallel(r)（ネマチック主軸に平行）, C_perp(r)（垂直）を --distances（px グリッド）上で計算する。
   リング平均は有効マスク面積（貨物近傍と無効画素を除いた面積）で正規化する。
 - 計算結果は実験ディレクトリ内に --cache_name（既定 angular_correlation_bg_vp.zarr,
-  dims = distance x frame x virtual_point）として保存し、計算パラメータが一致すれば再利用する
-  （--force_recompute で再計算）。
+  dims = distance x frame x virtual_point）として保存する。キャッシュは「要求より密なサンプリング」
+  （仮想粒子数が要求以上、フレーム間引きが要求以下で割り切れる）であれば、
+  要求パラメータに合わせて点・フレームを部分抽出して再利用する（統計量を落とさず計算時間を節約。
+  --force_recompute で再計算、--no_cache で保存しない）。
 - --source existing を指定すると、既存の angular_correlation_bg.zarr（仮想粒子型 = dims に random_point を含むもの）を
   優先して読み込む（例: 0.63 / 1.18 / 3.37 um 条件の既存データ。迅速な確認用）。
 
-【解析】
+【統計量を増やすための設定】
+- --n_virtual_points（既定 100 点/フレーム）: フレームあたりの仮想粒子数。既往の 50 点/フレーム設定
+  （angular_correlation_bg_vp_s4.zarr）は n が要求未満なので再計算の対象になる。
+- --frame_stride（既定 1 = 全フレーム）: 全フレームを使うと NAS 読み出し量が最大になるため、
+  --n_workers で実験ディレクトリ単位の並列計算（プロセス並列）を行い、全フレーム条件を実用的な時間で実行できる。
+- --max_frames はデバッグ用（先頭 N フレームのみ）。
+
+【解析・誤差評価】
 - 実験ごとに全 (frame x virtual point) サンプルの平均から C_bg(r) を求め、縦軸を ln C_bg にとった
   重み付き線形フィット ln C = ln a - r / xi（libs.hmm_flow_correlation.fit_flow_correlation_length、
   hmm_flow_correlation_analysis.py と同一実装）により実験ごとの相関長 xi_bg を算出する
   （--fit_range / --min_corr_threshold）。
+- 誤差は 2 通りを常に併記する（--error_mode でフィット重みと図のエラーバーを選択。既定 frame）:
+    1. sample SEM: 距離ごとの全サンプル（フレーム x 仮想粒子）間の標準誤差。単純だが
+       同一フレーム内の仮想粒子は空間相関を持つため、独立サンプル数を過大評価（誤差を過小評価）する。
+    2. frame SEM（frame-block SEM）: まずフレームごとに仮想粒子平均を取り、そのフレーム平均間の標準誤差を
+       sqrt(N_frames) で評価する。実効独立サンプル数 ≈ フレーム数とみなす保守的（正直な）誤差。
 - 条件（粒子径）ごとに実験間の mean ± SEM を集計し、サンプル数（フレーム x 仮想粒子数 x 実験数）も記録する。
+  CSV には sample/frame 両方の SEM と両方の誤差重みによる xi_bg を併記し、図では frame SEM の誤差帯を重ねる。
 
 【出力ファイル】
 既定の出力先は (1) <作業ディレクトリ>/figure/bg_angular_correlation と
 (2) <root_dir>/figure/bg_angular_correlation の 2 箇所（--no_save_root で (2) を省略, --output_dir で (1) を変更）。
-1. bg_angular_correlation_Cr.png / .svg            : 条件別 C_bg(r)（実験別生カーブ + 実験間平均 ± SEM + 指数フィット）
-2. bg_angular_correlation_xi_vs_diameter.png / .svg: xi_bg vs 貨物直径 2R_c（実験点 + 条件平均 ± SEM + 全体系平均）
-3. bg_angular_correlation_par_perp.png / .svg      : 条件別のネマチック主軸分解（total / parallel / perpendicular）
+1. bg_angular_correlation_Cr.png / .svg            : 条件別 C_bg(r)（実験別生カーブ + 実験間平均 ± SEM（エラーバー）
+   + プールした frame-block SEM（帯）+ 指数フィット）
+2. bg_angular_correlation_xi_vs_diameter.png / .svg: xi_bg vs 貨物直径 2R_c（実験点 ± フィット誤差 + 条件平均 ± SEM
+   + 全体系平均 + プールフィット）
+3. bg_angular_correlation_par_perp.png / .svg      : 条件別のネマチック主軸分解（total / parallel / perpendicular,
+   各曲線にプールした frame-block SEM の帯を付加）
 4. bg_angular_correlation_points.csv               : 実験 x 距離ごとの C_bg(r)（平均・SEM・サンプル数, par/perp 含む）
 5. bg_angular_correlation_curves.csv               : 条件 x 距離ごとの平均曲線（実験間平均 ± SEM, プール SEM, サンプル数）
 6. bg_angular_correlation_length_per_experiment.csv: 実験ごとの xi_bg（フィット品質・サンプル数付き）
@@ -45,9 +63,12 @@ plot_bg_angular_correlation.py
 """
 
 import argparse
+import multiprocessing as mp
 import shutil
 import sys
 import time
+import warnings
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
@@ -270,11 +291,30 @@ def open_virtual_point_dataset(path: Path) -> Optional[xr.Dataset]:
     return ds
 
 
-def virtual_point_samples(ds: xr.Dataset) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], np.ndarray, int, str]:
-    """(distance, frame, virtual_point) のサンプル配列・距離座標・仮想粒子数を取り出す。"""
+def virtual_point_samples(
+    ds: xr.Dataset,
+    n_points_limit: Optional[int] = None,
+    frame_stride: Optional[int] = None,
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], np.ndarray, int, str]:
+    """
+    (distance, frame, virtual_point) のサンプル配列・距離座標・仮想粒子数を取り出す。
+
+    要求より密なキャッシュ（仮想粒子数・フレーム数が多い）を再利用できるように、
+    n_points_limit / frame_stride を与えると点およびフレームを部分抽出する
+    （点は交換可能な i.i.d. サンプルなので先頭 k 点の部分抽出で偏りは生じない）。
+    """
     dim = VIRTUAL_POINT_DIM if VIRTUAL_POINT_DIM in ds.sizes else _EXISTING_VP_DIM
     dist_px = np.asarray(ds.coords['distance'].values, dtype=float)
     n_pts = int(ds.sizes[dim])
+    k = min(n_pts, int(n_points_limit)) if n_points_limit else n_pts
+
+    frames_all = np.asarray(ds.coords['frame'].values, dtype=np.int64)
+    if frame_stride is not None and int(frame_stride) > 1:
+        sel_frames = np.nonzero(np.mod(frames_all, int(frame_stride)) == 0)[0]
+        if sel_frames.size == 0:
+            sel_frames = np.arange(frames_all.size)
+    else:
+        sel_frames = np.arange(frames_all.size)
 
     def _get(name: str) -> Optional[np.ndarray]:
         if name not in ds:
@@ -284,10 +324,74 @@ def virtual_point_samples(ds: xr.Dataset) -> Tuple[Optional[np.ndarray], Optiona
             arr = arr.transpose('distance', 'frame', dim)
         except Exception:
             return None
-        return np.asarray(arr.values, dtype=np.float32)
+        vals = np.asarray(arr.values)
+        if sel_frames.size != frames_all.size:
+            vals = vals[:, sel_frames, :]
+        if k < n_pts:
+            vals = vals[..., :k]
+        return np.asarray(vals, dtype=np.float32)
 
     return (_get('angular_correlation'), _get('angular_correlation_parallel'),
-            _get('angular_correlation_perpendicular'), dist_px, n_pts, dim)
+            _get('angular_correlation_perpendicular'), dist_px, k, dim)
+
+
+def cache_reuse_plan(
+    ds: xr.Dataset,
+    distances: Sequence[float],
+    kernel_type: str,
+    shell_width: float,
+    n_virtual_points: int,
+    mask_radius_px: float,
+    border_margin_px: int,
+    min_flow_mag: float,
+    frame_stride: int = 1,
+) -> Optional[Dict[str, int]]:
+    """
+    キャッシュ zarr を要求パラメータでどのように再利用できるかを判定する。
+
+    距離グリッド・カーネル種別・シェル幅・マスク半径・境界マージン・フロー閾値が一致し、かつ
+    キャッシュのサンプリング密度が要求以上（仮想粒子数 >= 要求、フレーム間引き <= 要求 かつ 割り切れる）
+    である場合に、使用する点・フレーム数を表す辞書を返す。条件を満たさない場合は None（= 再計算）。
+
+    Returns
+    -------
+    plan : dict or None
+        {'n_points', 'n_points_cache', 'frame_stride', 'frame_stride_cache'}
+    """
+    try:
+        attrs = ds.attrs
+        if str(attrs.get('kernel_type', '')) != str(kernel_type):
+            return None
+        if abs(float(attrs.get('shell_width', -1.0)) - float(shell_width)) > 1e-6:
+            return None
+        mask_attr = attrs.get('mask_radius_px', attrs.get('particle_mask_radius', None))
+        if mask_attr is None or abs(float(mask_attr) - float(mask_radius_px)) > 1e-6:
+            return None
+        if int(attrs.get('border_margin_px', -1)) != int(border_margin_px):
+            return None
+        if abs(float(attrs.get('min_flow_mag', -1.0)) - float(min_flow_mag)) > 1e-12:
+            return None
+        if not np.allclose(np.asarray(ds.coords['distance'].values, dtype=float),
+                           np.asarray(distances, dtype=float)):
+            return None
+
+        dim = VIRTUAL_POINT_DIM if VIRTUAL_POINT_DIM in ds.sizes else _EXISTING_VP_DIM
+        n_pts_cache = int(attrs.get('n_virtual_points', attrs.get('n_random_points', ds.sizes[dim])))
+        stride_cache = max(1, int(attrs.get('frame_stride', 1) or 1))
+        req_pts = max(1, int(n_virtual_points))
+        req_stride = max(1, int(frame_stride))
+        if n_pts_cache < req_pts:
+            return None
+        if stride_cache > req_stride or (req_stride % stride_cache) != 0:
+            return None
+        return {
+            'n_points': req_pts,
+            'n_points_cache': n_pts_cache,
+            'frame_stride': req_stride,
+            'frame_stride_cache': stride_cache,
+        }
+    except Exception:
+        return None
 
 
 def cache_matches(
@@ -300,27 +404,10 @@ def cache_matches(
     border_margin_px: int,
     min_flow_mag: float,
 ) -> bool:
-    """キャッシュ zarr の attrs / 距離座標が要求パラメータと一致するかを判定する。"""
-    try:
-        attrs = ds.attrs
-        if int(attrs.get('n_virtual_points', -1)) != int(n_virtual_points):
-            return False
-        if abs(float(attrs.get('mask_radius_px', -1.0)) - float(mask_radius_px)) > 1e-6:
-            return False
-        if str(attrs.get('kernel_type', '')) != str(kernel_type):
-            return False
-        if abs(float(attrs.get('shell_width', -1.0)) - float(shell_width)) > 1e-6:
-            return False
-        if int(attrs.get('border_margin_px', -1)) != int(border_margin_px):
-            return False
-        if abs(float(attrs.get('min_flow_mag', -1.0)) - float(min_flow_mag)) > 1e-12:
-            return False
-        if not np.allclose(np.asarray(ds.coords['distance'].values, dtype=float),
-                           np.asarray(distances, dtype=float)):
-            return False
-        return True
-    except Exception:
-        return False
+    """（後方互換）キャッシュが要求パラメータと一致するかを判定する。"""
+    return cache_reuse_plan(ds, distances, kernel_type, shell_width, n_virtual_points,
+                            mask_radius_px, border_margin_px, min_flow_mag, 1) is not None
+
 
 
 def compute_virtual_point_correlations(
@@ -480,8 +567,9 @@ def compute_virtual_point_correlations(
                 coords={'distance': dist_coord, 'frame': frame_coord,
                         VIRTUAL_POINT_DIM: np.arange(n_pts)}),
             'theta_nematic': xr.DataArray(
-                np.asarray(thetas, dtype=np.float32), dims=['frame'],
-                coords={'frame': np.arange(len(thetas))}),
+                np.asarray([float(thetas[t]) if t < len(thetas) else 0.0 for t in frames],
+                           dtype=np.float32),
+                dims=['frame'], coords={'frame': frame_coord}),
         },
         attrs={
             'description': ('Background (cargo-vicinity excluded) MT flow angular spatial correlation '
@@ -513,6 +601,19 @@ def save_dataset_cache(ds: xr.Dataset, cache_path: Path) -> None:
         print(f"    Saved cache: {cache_path.name}", flush=True)
     except Exception as e:
         print(f"[WARNING] Failed to save cache {cache_path}: {e}")
+
+
+def h5_num_frames(exp_dir: Path, flow_name: str = FLOW_NAME) -> int:
+    """GFP_flows.h5 の総フレーム数を返す（読めない場合は -1）。"""
+    path = Path(exp_dir) / flow_name
+    if not path.exists():
+        return -1
+    try:
+        with h5py.File(str(path), 'r') as f:
+            key = list(f.keys())[0]
+            return int(f[key].shape[0])
+    except Exception:
+        return -1
 
 
 def load_experiment_correlation(
@@ -564,14 +665,24 @@ def load_experiment_correlation(
         if cache_path.exists() and not args.force_recompute:
             ds_c = open_virtual_point_dataset(cache_path)
             if ds_c is not None:
-                is_ok = cache_matches(ds_c, distances, args.kernel_type, args.shell_width,
-                                      int(args.n_virtual_points), mask_px, border_px, args.min_flow_mag)
-                out = virtual_point_samples(ds_c) if is_ok else None
+                plan = cache_reuse_plan(ds_c, distances, args.kernel_type, args.shell_width,
+                                        int(args.n_virtual_points), mask_px, border_px,
+                                        args.min_flow_mag, int(args.frame_stride))
+                out = None
+                if plan is not None:
+                    out = virtual_point_samples(ds_c, n_points_limit=plan['n_points'],
+                                                frame_stride=plan['frame_stride'])
                 ds_c.close()
-                if is_ok and out is not None and out[0] is not None:
+                if plan is not None and out is not None and out[0] is not None:
                     samples, par, perp, dist_px, n_pts, _ = out
-                    source = f"cache:{args.cache_name}:{n_pts}pts"
-                    print(f"    [cache] {exp_dir.name}: dims = ({len(dist_px)}, {samples.shape[1]}, {n_pts})")
+                    subset = ''
+                    if (plan['n_points_cache'] > plan['n_points']
+                            or plan['frame_stride_cache'] < plan['frame_stride']):
+                        subset = (f" [subsampled from {plan['n_points_cache']}pts/"
+                                  f"stride{plan['frame_stride_cache']}]")
+                    source = f"cache:{args.cache_name}:{n_pts}pts{subset}"
+                    print(f"    [cache] {exp_dir.name}: dims = ({len(dist_px)}, "
+                          f"{samples.shape[1]}, {n_pts}){subset}")
 
     if samples is None:
         if verbose:
@@ -594,6 +705,15 @@ def load_experiment_correlation(
             return None
         samples, par, perp, dist_px, n_pts, _ = out
         source = f"computed:{int(args.n_virtual_points)}pts"
+
+    if args.max_frames is None and args.source != 'existing':
+        n_total = h5_num_frames(exp_dir)
+        stride = max(1, int(args.frame_stride))
+        expect = len(range(0, n_total, stride)) if n_total > 0 else -1
+        if expect > 0 and samples.shape[1] < expect:
+            print(f"    [WARNING] {exp_dir.name}: 利用可能なフレーム数 {samples.shape[1]} < 期待値 {expect} "
+                  f"(--frame_stride {stride})。全フレームで再計算するには "
+                  f"--force_recompute を指定してください")
 
     return {
         'bead_name': binfo['name'],
@@ -626,6 +746,34 @@ def summarize_samples(samples: Optional[np.ndarray]) -> Tuple[np.ndarray, np.nda
         std = np.nanstd(vals, axis=1, ddof=1)
     sem = np.where(n > 1, std / np.sqrt(np.maximum(n, 1)), 0.0)
     return np.asarray(mean, dtype=float), np.asarray(sem, dtype=float), n
+
+
+def frame_block_stats(samples: Optional[np.ndarray]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    (distance, frame, virtual_point) サンプル配列 -> 距離ごとのフレームブロック統計。
+
+    まずフレームごとに仮想粒子平均を取り（frame mean）、そのフレーム平均間の標準誤差を
+    sqrt(N_frames) で評価する。同一フレーム内の仮想粒子は空間相関をもつため、
+    サンプル単位の SEM（summarize_samples）は誤差を過小評価する。
+    実効独立サンプル数 ≈ フレーム数 とみなすこの評価が統計的に正直な誤差である。
+
+    Returns
+    -------
+    mean_frame : np.ndarray  フレーム平均の平均（= 距離ごとの C_bg(r)）
+    sem_frame  : np.ndarray  フレーム平均間の SEM
+    n_frames   : np.ndarray  有効フレーム数
+    """
+    if samples is None:
+        return np.array([]), np.array([]), np.array([])
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', category=RuntimeWarning)
+        frame_mean = np.nanmean(samples, axis=2)               # (distance, frame)
+        n_frames = np.sum(np.isfinite(frame_mean), axis=1).astype(int)
+        mean_frame = np.nanmean(frame_mean, axis=1)
+        std_frame = np.nanstd(frame_mean, axis=1, ddof=1)
+    sem_frame = np.where(n_frames > 1, std_frame / np.sqrt(np.maximum(n_frames, 1)), 0.0)
+    return (np.asarray(mean_frame, dtype=float), np.asarray(sem_frame, dtype=float),
+            np.asarray(n_frames, dtype=int))
 
 
 def fit_xi_from_curve(
@@ -683,40 +831,80 @@ def build_tables(
     exp_results: List[dict],
     fit_range: Tuple[float, float],
     min_corr_threshold: float,
-) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[Tuple[str, str, int], List[float]]]:
+    error_mode: str = 'frame',
+) -> Tuple[pd.DataFrame, pd.DataFrame,
+           Dict[Tuple[str, str, int], List[float]],
+           Dict[Tuple[str, str, int], List[float]]]:
     """
     実験ごとの C_bg(r) 表（points）と xi_bg 表（xi）を作成し、
-    条件ごとのプール統計（n, sum, sum of squares）を同時に蓄積して返す。
+    条件ごとのプール統計を同時に蓄積して返す。
+
+    - pool       : 全サンプル（フレーム x 仮想粒子）の (n, sum, sumsq)
+    - pool_frame : フレーム平均の (n, sum, sumsq)（実効独立サンプル数 ≈ フレーム数）
+
+    error_mode ('frame' | 'sample') は xi_bg フィットの重み（sigma_ln C = SEM / C）に使う誤差を選ぶ。
+    どちらのモードでも両方の誤差による xi_bg を算出し CSV に併記する。
     """
     point_rows: List[dict] = []
     xi_rows: List[dict] = []
     pool: Dict[Tuple[str, str, int], List[float]] = {}
+    pool_frame: Dict[Tuple[str, str, int], List[float]] = {}
 
-    def _accum(kind: str, bead: str, samples: Optional[np.ndarray]) -> None:
-        if samples is None:
+    def _accum(target: Dict[Tuple[str, str, int], List[float]], kind: str, bead: str,
+               values_2d: Optional[np.ndarray]) -> None:
+        """distance x N の 2 次元配列について (n, sum, sumsq) を蓄積する。"""
+        if values_2d is None or values_2d.size == 0:
             return
-        flat = samples.reshape(samples.shape[0], -1)
-        for i in range(flat.shape[0]):
-            v = flat[i][np.isfinite(flat[i])]
+        for i in range(values_2d.shape[0]):
+            row = values_2d[i]
+            v = row[np.isfinite(row)]
             if v.size == 0:
                 continue
-            acc = pool.setdefault((kind, bead, i), [0.0, 0.0, 0.0])
+            acc = target.setdefault((kind, bead, i), [0.0, 0.0, 0.0])
             v64 = v.astype(np.float64)
             acc[0] += float(v.size)
             acc[1] += float(np.sum(v64))
             acc[2] += float(np.sum(v64 ** 2))
 
+    def _accum_samples(kind: str, bead: str, samples: Optional[np.ndarray]) -> None:
+        if samples is None:
+            return
+        _accum(pool, kind, bead, samples.reshape(samples.shape[0], -1))
+
+    def _accum_frame(kind: str, bead: str, samples: Optional[np.ndarray]) -> None:
+        if samples is None:
+            return
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', category=RuntimeWarning)
+            frame_mean = np.nanmean(samples, axis=2)  # (distance, frame)
+        _accum(pool_frame, kind, bead, frame_mean)
+
     for res in exp_results:
         bead = res['bead_name']
         r_um = res['distances_um']
         mean_c, sem_c, n_c = summarize_samples(res['samples'])
+        mean_cf, sem_cf, n_frames_c = frame_block_stats(res['samples'])
         mean_par, sem_par, _ = summarize_samples(res['samples_par'])
         mean_perp, sem_perp, _ = summarize_samples(res['samples_perp'])
-        _accum('total', bead, res['samples'])
-        _accum('par', bead, res['samples_par'])
-        _accum('perp', bead, res['samples_perp'])
+        _, sem_parf, _ = frame_block_stats(res['samples_par'])
+        _, sem_perpf, _ = frame_block_stats(res['samples_perp'])
+        _accum_samples('total', bead, res['samples'])
+        _accum_samples('par', bead, res['samples_par'])
+        _accum_samples('perp', bead, res['samples_perp'])
+        _accum_frame('total', bead, res['samples'])
+        _accum_frame('par', bead, res['samples_par'])
+        _accum_frame('perp', bead, res['samples_perp'])
 
-        fit = fit_xi_from_curve(r_um, mean_c, sem_c, fit_range[0], fit_range[1], min_corr_threshold)
+        # 誤差モードに応じた主フィット ＋ 両モードの比較用フィット
+        sem_primary = sem_cf if str(error_mode) == 'frame' else sem_c
+        fit = fit_xi_from_curve(r_um, mean_c, sem_primary, fit_range[0], fit_range[1],
+                                min_corr_threshold)
+        fit_sample = (fit if str(error_mode) == 'sample'
+                      else fit_xi_from_curve(r_um, mean_c, sem_c, fit_range[0], fit_range[1],
+                                             min_corr_threshold))
+        fit_frame = (fit if str(error_mode) == 'frame'
+                     else fit_xi_from_curve(r_um, mean_c, sem_cf, fit_range[0], fit_range[1],
+                                            min_corr_threshold))
 
         for i, r in enumerate(r_um):
             point_rows.append({
@@ -729,10 +917,15 @@ def build_tables(
                 'mean_c': float(mean_c[i]) if i < mean_c.size else np.nan,
                 'sem_c': float(sem_c[i]) if i < sem_c.size else np.nan,
                 'n_samples': int(n_c[i]) if i < n_c.size else 0,
+                'mean_c_frame': float(mean_cf[i]) if i < mean_cf.size else np.nan,
+                'sem_c_frame': float(sem_cf[i]) if i < sem_cf.size else np.nan,
+                'n_frames_used': int(n_frames_c[i]) if i < n_frames_c.size else 0,
                 'mean_c_par': float(mean_par[i]) if i < mean_par.size else np.nan,
                 'sem_c_par': float(sem_par[i]) if i < sem_par.size else np.nan,
+                'sem_c_par_frame': float(sem_parf[i]) if i < sem_parf.size else np.nan,
                 'mean_c_perp': float(mean_perp[i]) if i < mean_perp.size else np.nan,
                 'sem_c_perp': float(sem_perp[i]) if i < sem_perp.size else np.nan,
+                'sem_c_perp_frame': float(sem_perpf[i]) if i < sem_perpf.size else np.nan,
             })
 
         xi_rows.append({
@@ -743,7 +936,7 @@ def build_tables(
             'n_frames': res['n_frames'],
             'n_virtual_points': res['n_virtual_points'],
             'mask_radius_px': res['mask_radius_px'],
-            'n_samples_total': int(np.sum(n_c)),
+            'n_samples_total': int(np.sum(np.any(np.isfinite(res['samples']), axis=0))),
             'xi_um': float(fit['xi_um']),
             'xi_err_um': float(fit['xi_err_um']),
             'xi_r2_log': float(fit['r2_log']),
@@ -752,9 +945,16 @@ def build_tables(
             'r_peak_um': float(fit['r_peak_um']),
             'fit_min_um': float(fit['r_fit_min_um']),
             'fit_max_um': float(fit['r_fit_max_um']),
+            'error_mode': str(error_mode),
+            'xi_um_sample_sem': float(fit_sample['xi_um']),
+            'xi_err_um_sample_sem': float(fit_sample['xi_err_um']),
+            'xi_r2_log_sample_sem': float(fit_sample['r2_log']),
+            'xi_um_frame_sem': float(fit_frame['xi_um']),
+            'xi_err_um_frame_sem': float(fit_frame['xi_err_um']),
+            'xi_r2_log_frame_sem': float(fit_frame['r2_log']),
         })
 
-    return pd.DataFrame(point_rows), pd.DataFrame(xi_rows), pool
+    return pd.DataFrame(point_rows), pd.DataFrame(xi_rows), pool, pool_frame
 
 
 def pool_stat(
@@ -781,10 +981,18 @@ def summarize_conditions(
     grid_distances: np.ndarray,
     fit_range: Tuple[float, float],
     min_corr_threshold: float,
+    pool_frame: Optional[Dict[Tuple[str, str, int], List[float]]] = None,
+    error_mode: str = 'frame',
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     条件（粒子径）ごとに C_bg(r) の実験間平均 ± SEM・プール平均 ± SEM・サンプル数を集計し、
     条件平均曲線とプール曲線をそれぞれフィットして xi_bg を求める。
+
+    プール曲線は 2 通りを併記する:
+      - サンプル単位プール（pool）: 全サンプルの平均 ± サンプル SEM
+      - フレームブロックプール（pool_frame）: フレーム平均の平均 ± フレーム平均間 SEM
+        （実効独立サンプル数 ≈ フレーム数。誤差帯の描画に用いる）
+    error_mode ('frame' | 'sample') で主フィット（xi_bg_pooled_um）の誤差重みを選ぶ。
     """
     curve_rows: List[dict] = []
     summary_rows: List[dict] = []
@@ -808,6 +1016,13 @@ def summarize_conditions(
         pooled_mean = np.full(n_d, np.nan)
         pooled_sem = np.full(n_d, np.nan)
         pooled_n = np.zeros(n_d, dtype=int)
+        pooled_mean_f = np.full(n_d, np.nan)
+        pooled_sem_f = np.full(n_d, np.nan)
+        pooled_n_frames = np.zeros(n_d, dtype=int)
+        pooled_par_f = np.full(n_d, np.nan)
+        pooled_sem_par_f = np.full(n_d, np.nan)
+        pooled_perp_f = np.full(n_d, np.nan)
+        pooled_sem_perp_f = np.full(n_d, np.nan)
 
         for i, r in enumerate(grid):
             g = sub[np.isclose(sub['distance_um'], r)]
@@ -827,9 +1042,25 @@ def summarize_conditions(
                     sem_arr[i] = float(np.std(vm, ddof=1) / np.sqrt(vm.size)) if vm.size > 1 else 0.0
             pm, ps, pn = pool_stat(pool, 'total', bead, i)
             pooled_mean[i], pooled_sem[i], pooled_n[i] = pm, ps, pn
+            pp_par = pool_stat(pool, 'par', bead, i)
+            pp_perp = pool_stat(pool, 'perp', bead, i)
+            if pool_frame is not None:
+                fm, fs, fn = pool_stat(pool_frame, 'total', bead, i)
+                pooled_mean_f[i], pooled_sem_f[i], pooled_n_frames[i] = fm, fs, fn
+                pfp = pool_stat(pool_frame, 'par', bead, i)
+                pooled_par_f[i], pooled_sem_par_f[i] = pfp[0], pfp[1]
+                pfp = pool_stat(pool_frame, 'perp', bead, i)
+                pooled_perp_f[i], pooled_sem_perp_f[i] = pfp[0], pfp[1]
 
         fit_cond = fit_xi_from_curve(grid, exp_mean, exp_sem, fit_range[0], fit_range[1], min_corr_threshold)
-        fit_pooled = fit_xi_from_curve(grid, pooled_mean, pooled_sem, fit_range[0], fit_range[1], min_corr_threshold)
+        fit_pooled_sample = fit_xi_from_curve(grid, pooled_mean, pooled_sem, fit_range[0], fit_range[1],
+                                              min_corr_threshold)
+        has_frame_pool = bool(pool_frame is not None and np.any(np.isfinite(pooled_mean_f)))
+        fit_pooled_frame = (fit_xi_from_curve(grid, pooled_mean_f, pooled_sem_f, fit_range[0],
+                                              fit_range[1], min_corr_threshold)
+                            if has_frame_pool else fit_pooled_sample)
+        fit_pooled = (fit_pooled_frame if (str(error_mode) == 'frame' and has_frame_pool)
+                      else fit_pooled_sample)
 
         for i, r in enumerate(grid):
             curve_rows.append({
@@ -846,16 +1077,40 @@ def summarize_conditions(
                 'pooled_mean_c': float(pooled_mean[i]),
                 'pooled_sem_c': float(pooled_sem[i]),
                 'pooled_n_samples': int(pooled_n[i]),
+                'pooled_mean_c_par': float(pp_par[0]),
+                'pooled_sem_c_par': float(pp_par[1]),
+                'pooled_mean_c_perp': float(pp_perp[0]),
+                'pooled_sem_c_perp': float(pp_perp[1]),
+                'pooled_mean_c_frame': float(pooled_mean_f[i]),
+                'pooled_sem_c_frame': float(pooled_sem_f[i]),
+                'pooled_n_frames': int(pooled_n_frames[i]),
+                'pooled_mean_c_par_frame': float(pooled_par_f[i]),
+                'pooled_sem_c_par_frame': float(pooled_sem_par_f[i]),
+                'pooled_mean_c_perp_frame': float(pooled_perp_f[i]),
+                'pooled_sem_c_perp_frame': float(pooled_sem_perp_f[i]),
+                'error_mode': str(error_mode),
                 'xi_bg_cond_fit_um': float(fit_cond['xi_um']),
                 'xi_bg_cond_fit_err_um': float(fit_cond['xi_err_um']),
                 'xi_bg_cond_fit_r2_log': float(fit_cond['r2_log']),
                 'xi_bg_pooled_um': float(fit_pooled['xi_um']),
                 'xi_bg_pooled_err_um': float(fit_pooled['xi_err_um']),
                 'xi_bg_pooled_r2_log': float(fit_pooled['r2_log']),
+                'xi_bg_pooled_sample_um': float(fit_pooled_sample['xi_um']),
+                'xi_bg_pooled_sample_err_um': float(fit_pooled_sample['xi_err_um']),
+                'xi_bg_pooled_frame_um': float(fit_pooled_frame['xi_um']),
+                'xi_bg_pooled_frame_err_um': float(fit_pooled_frame['xi_err_um']),
             })
 
         xi_vals = sub_xi['xi_um'].to_numpy(dtype=float)
         xi_vals = xi_vals[np.isfinite(xi_vals)]
+        xi_vals_sample = np.array([])
+        xi_vals_frame = np.array([])
+        if 'xi_um_sample_sem' in sub_xi.columns:
+            xi_vals_sample = sub_xi['xi_um_sample_sem'].to_numpy(dtype=float)
+            xi_vals_sample = xi_vals_sample[np.isfinite(xi_vals_sample)]
+        if 'xi_um_frame_sem' in sub_xi.columns:
+            xi_vals_frame = sub_xi['xi_um_frame_sem'].to_numpy(dtype=float)
+            xi_vals_frame = xi_vals_frame[np.isfinite(xi_vals_frame)]
         summary_rows.append({
             'bead_name': bead,
             'diameter_um': binfo['diameter_um'],
@@ -870,6 +1125,18 @@ def summarize_conditions(
             'xi_bg_std_um': float(np.std(xi_vals, ddof=1)) if xi_vals.size > 1 else 0.0,
             'xi_bg_median_um': float(np.median(xi_vals)) if xi_vals.size else np.nan,
             'xi_bg_n_experiments': int(xi_vals.size),
+            'error_mode': str(error_mode),
+            'n_frames_pooled': int(np.nanmax(pooled_n_frames)) if pooled_n_frames.size else 0,
+            'xi_bg_mean_sample_sem_um': (float(np.mean(xi_vals_sample))
+                                         if xi_vals_sample.size else np.nan),
+            'xi_bg_sem_sample_sem_um': (float(np.std(xi_vals_sample, ddof=1)
+                                              / np.sqrt(xi_vals_sample.size))
+                                        if xi_vals_sample.size > 1 else 0.0),
+            'xi_bg_mean_frame_sem_um': (float(np.mean(xi_vals_frame))
+                                        if xi_vals_frame.size else np.nan),
+            'xi_bg_sem_frame_sem_um': (float(np.std(xi_vals_frame, ddof=1)
+                                             / np.sqrt(xi_vals_frame.size))
+                                        if xi_vals_frame.size > 1 else 0.0),
             'xi_bg_cond_fit_um': float(fit_cond['xi_um']),
             'xi_bg_cond_fit_err_um': float(fit_cond['xi_err_um']),
             'xi_bg_cond_fit_r2_log': float(fit_cond['r2_log']),
@@ -911,8 +1178,17 @@ def plot_condition_curves(
     xscale: str = 'log',
     max_dist: float = 60.0,
     ylim: Tuple[float, float] = (-0.2, 1.05),
+    error_mode: str = 'frame',
 ) -> None:
-    """条件（粒子径）ごとの C_bg(r) を 1 軸に描く（実験別生カーブ + 実験間平均 ± SEM + 指数フィット）。"""
+    """
+    条件（粒子径）ごとの C_bg(r) を 1 軸に描く。
+
+    - 灰色細線: 実験別生カーブ
+    - マーカー + エラーバー: 条件平均 ± 実験間 SEM（条件の再現性）
+    - 帯: プールしたフレームブロック SEM（全フレーム・全仮想粒子・全実験をプールした
+      推定精度。実効独立サンプル数 ≈ フレーム数）
+    - 破線: 指数フィット（重み = --error_mode の SEM）
+    """
     if df_curves.empty:
         print("[WARNING] C_bg(r) 曲線データが空のため図 1 をスキップします")
         return
@@ -920,6 +1196,7 @@ def plot_condition_curves(
     fig, ax = plt.subplots(figsize=(8.8, 6.4))
     exp_dirs = sorted(df_points['exp_dir'].unique())
     n_exp = len(exp_dirs)
+    band_labeled = [False]
 
     for i, e in enumerate(exp_dirs):
         g = df_points[df_points['exp_dir'] == e].sort_values('distance_um')
@@ -946,6 +1223,19 @@ def plot_condition_curves(
                     fmt=binfo['marker'], ms=7.0, color=binfo['color'],
                     mfc=binfo['color'], mec='black', mew=0.8,
                     elinewidth=1.1, capsize=2.5, lw=1.5, alpha=0.95, zorder=4, label=label)
+
+        # プールしたフレームブロック SEM の誤差帯（実効独立サンプル数 ≈ フレーム数）
+        if 'pooled_sem_c_frame' in sub.columns:
+            band = sub['pooled_sem_c_frame'].to_numpy(dtype=float)
+            mid = sub['mean_c'].to_numpy(dtype=float)
+            ok = np.isfinite(band) & np.isfinite(mid)
+            if np.any(ok):
+                ax.fill_between(sub['distance_um'].to_numpy(dtype=float)[ok],
+                                mid[ok] - band[ok], mid[ok] + band[ok],
+                                color=binfo['color'], alpha=0.18, lw=0, zorder=2,
+                                label=("Frame-block SEM band (pooled, $N_{\\mathrm{eff}}"
+                                       " = N_{\\mathrm{frames}}$)" if not band_labeled[0] else None))
+                band_labeled[0] = True
 
         fit = fit_xi_from_curve(sub['distance_um'].to_numpy(dtype=float),
                                 sub['mean_c'].to_numpy(dtype=float),
@@ -976,11 +1266,13 @@ def plot_condition_curves(
             rf"$N_{{\mathrm{{samples}}}} = {meta.get('n_samples', 0):,}$" + "\n"
             rf"mask $R = {meta.get('mask_min_px', np.nan):.0f}$-${meta.get('mask_max_px', np.nan):.0f}$ px; "
             rf"fit range ${fit_range[0]:.0f}$-${fit_range[1]:.0f}\,\mu\mathrm{{m}}$")
-    ax.text(0.03, 0.97, info, transform=ax.transAxes, va='top', ha='left', fontsize=9.5,
+    ax.text(0.03, 0.03, info, transform=ax.transAxes, va='bottom', ha='left', fontsize=9.5,
             bbox=dict(boxstyle='round', fc='white', ec='#999999', alpha=0.88))
 
+    weights_label = "frame-block SEM" if str(error_mode) == 'frame' else "sample SEM"
     ax.legend(fontsize=9.0, loc='upper right', framealpha=0.93,
-              title=r"Background Flow $C_{\mathrm{bg}}(r) = a\exp(-r/\xi_{\mathrm{bg}})$",
+              title=(r"Fit: $a\exp(-r/\xi_{\mathrm{bg}})$" + "\n"
+                     + rf"($\sigma$ = {weights_label})"),
               title_fontsize=9.5)
     fig.tight_layout()
     save_figure_to_all(fig, 'bg_angular_correlation_Cr', out_dirs)
@@ -993,8 +1285,14 @@ def plot_xi_vs_diameter(
     out_dirs: List[Path],
     global_xi: Tuple[float, float, int],
     xscale: str = 'log',
+    error_mode: str = 'frame',
 ) -> None:
-    """xi_bg vs 貨物直径 2R_c（実験点 + 条件平均 ± SEM + 全実験代表値 + プールフィット値）。"""
+    """
+    xi_bg vs 貨物直径 2R_c（実験点 + 条件平均 ± SEM + 全実験代表値 + プールフィット値）。
+
+    実験点（白抜き）にはフィット誤差、塗りつぶしマーカーは条件平均 ± 実験間 SEM、
+    白抜き四角はプール曲線のフィット値（重み = --error_mode の SEM）を示す。
+    """
     if df_summary.empty:
         print("[WARNING] xi_bg 集計データが空のため図 2 をスキップします")
         return
@@ -1002,6 +1300,7 @@ def plot_xi_vs_diameter(
     fig, ax = plt.subplots(figsize=(7.8, 5.8))
     rng = np.random.default_rng(7)
     plotted_any = False
+    plotted_dias: List[float] = []
 
     for binfo in BEADS_INFO:
         sub = df_xi[(df_xi['bead_name'] == binfo['name']) & np.isfinite(df_xi['xi_um'])]
@@ -1010,12 +1309,20 @@ def plot_xi_vs_diameter(
             continue
         plotted_any = True
         dia = float(binfo['diameter_um'])
+        plotted_dias.append(dia)
         if xscale == 'log':
             x_pts = dia * rng.uniform(0.90, 1.10, size=len(sub))
         else:
             x_pts = dia + rng.uniform(-0.08, 0.08, size=len(sub)) * dia
         ax.plot(x_pts, sub['xi_um'], marker=binfo['marker'], ls='none', ms=6.0,
                 mfc='none', mec=binfo['color'], mew=1.0, alpha=0.8, zorder=3)
+
+        # 実験ごとの xi_bg フィット誤差（回帰の重み = --error_mode の SEM）
+        xi_err = sub['xi_err_um'].to_numpy(dtype=float)
+        if np.any(np.isfinite(xi_err)):
+            ax.errorbar(x_pts, sub['xi_um'], yerr=np.where(np.isfinite(xi_err), xi_err, 0.0),
+                        fmt='none', ecolor=binfo['color'], elinewidth=0.9, capsize=2.0,
+                        alpha=0.55, zorder=3)
 
         xi_mean = float(row['xi_bg_mean_um'].iloc[0])
         xi_sem = float(row['xi_bg_sem_um'].iloc[0]) if np.isfinite(row['xi_bg_sem_um'].iloc[0]) else 0.0
@@ -1043,7 +1350,14 @@ def plot_xi_vs_diameter(
         plt.close(fig)
         return
 
-    ax.set_xscale(xscale)
+    if len(set(plotted_dias)) < 2:
+        # 単一条件のみの場合は log 軸だと目盛りラベルが重なって読めないため線形軸にする
+        ax.set_xscale('linear')
+        d0 = float(plotted_dias[0]) if plotted_dias else 1.0
+        ax.set_xticks([d0])
+        ax.set_xlim(max(d0 * 0.25, 1e-3), d0 * 1.75)
+    else:
+        ax.set_xscale(xscale)
     ax.set_xlabel(r"Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]", fontsize=13, fontweight='bold')
     ax.set_ylabel(r"Background Correlation Length $\xi_{\mathrm{bg}}$ [$\mu\mathrm{m}$]",
                   fontsize=13, fontweight='bold')
@@ -1051,8 +1365,11 @@ def plot_xi_vs_diameter(
                  fontsize=13.5, fontweight='bold')
     ax.grid(True, which='both', ls='--', alpha=0.35)
     if ax.get_legend_handles_labels()[0]:
+        pooled_label = ("open square: pooled fit (frame-block SEM weights)"
+                        if str(error_mode) == 'frame'
+                        else "open square: pooled fit (sample SEM weights)")
         ax.legend(fontsize=9.5, loc='best', framealpha=0.93,
-                  title=r"Per-experiment fit ($N$ experiments), pooled-sample fit (open square)",
+                  title=("Filled: experiment mean $\\pm$ SEM" + "\n" + pooled_label),
                   title_fontsize=9.5)
     fig.tight_layout()
     save_figure_to_all(fig, 'bg_angular_correlation_xi_vs_diameter', out_dirs)
@@ -1065,9 +1382,15 @@ def plot_par_perp_panels(
     out_dirs: List[Path],
     xscale: str = 'log',
     max_dist: float = 60.0,
-    ylim: Tuple[float, float] = (-0.35, 1.05),
+    ylim: Tuple[float, float] = (-0.15, 1.05),
+    error_mode: str = 'frame',
 ) -> None:
-    """条件ごとのネマチック主軸分解（total / parallel / perpendicular）をパネル表示する。"""
+    """
+    条件ごとのネマチック主軸分解（total / parallel / perpendicular）をパネル表示する。
+
+    エラーバーは実験間 SEM、網掛け帯はプールしたフレームブロック SEM（実効独立サンプル数 ≈ フレーム数）
+    を示す（error_mode は凡例のフィット重み表記に反映）。
+    """
     conds = [b for b in BEADS_INFO if not df_curves[df_curves['bead_name'] == b['name']].empty]
     if not conds:
         print("[WARNING] par/perp データが空のため図 3 をスキップします")
@@ -1075,7 +1398,7 @@ def plot_par_perp_panels(
 
     ncols = 3
     nrows = int(np.ceil(len(conds) / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(5.0 * ncols, 4.2 * nrows),
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5.0 * ncols, 4.5 * nrows),
                              sharex=True, sharey=True)
     axes = np.atleast_1d(axes).ravel()
 
@@ -1089,6 +1412,20 @@ def plot_par_perp_panels(
         ax.errorbar(sub['distance_um'], sub['mean_c_perp'], yerr=sub['sem_c_perp'],
                     color='#e7298a', fmt='^', ms=3.0, lw=1.2, capsize=2.0, alpha=0.9,
                     label=r"$\perp$ nematic axis")
+
+        # プールしたフレームブロック SEM の帯（total / parallel / perpendicular）
+        r_plot = sub['distance_um'].to_numpy(dtype=float)
+        for band_col, mid_col, bcolor in (('pooled_sem_c_frame', 'mean_c', '#333333'),
+                                          ('pooled_sem_c_par_frame', 'mean_c_par', '#1b9e77'),
+                                          ('pooled_sem_c_perp_frame', 'mean_c_perp', '#e7298a')):
+            if band_col not in sub.columns or mid_col not in sub.columns:
+                continue
+            band = sub[band_col].to_numpy(dtype=float)
+            mid = sub[mid_col].to_numpy(dtype=float)
+            ok = np.isfinite(band) & np.isfinite(mid)
+            if np.any(ok):
+                ax.fill_between(r_plot[ok], mid[ok] - band[ok], mid[ok] + band[ok],
+                                color=bcolor, alpha=0.16, lw=0, zorder=1)
 
         row = df_summary[df_summary['bead_name'] == binfo['name']]
         if not row.empty and np.isfinite(row['xi_bg_mean_um'].iloc[0]):
@@ -1115,9 +1452,12 @@ def plot_par_perp_panels(
     for j in range(len(conds), axes.size):
         axes[j].axis('off')
 
+    weights_label = "frame-block SEM" if str(error_mode) == 'frame' else "sample SEM"
     fig.suptitle(r"Background MT Flow Spatial Correlation: Nematic Axis Decomposition "
-                 r"(Cargo Vicinity Excluded)", fontsize=13.5, fontweight='bold')
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+                 r"(Cargo Vicinity Excluded)" + "\n"
+                 + rf"(shaded: pooled frame-block SEM; fit weights: {weights_label})",
+                 fontsize=13.0, fontweight='bold')
+    fig.tight_layout(rect=(0, 0, 1, 0.90))
     save_figure_to_all(fig, 'bg_angular_correlation_par_perp', out_dirs)
     plt.close(fig)
 
@@ -1158,8 +1498,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--kernel_type', type=str, default='ring', choices=['ring', 'disk', 'gaussian'],
                         help="リング平均カーネル（既定 ring）.")
     parser.add_argument('--shell_width', type=float, default=2.0, help="ring カーネルのシェル幅 (px).")
-    parser.add_argument('--n_virtual_points', type=int, default=50,
-                        help="フレームあたりにサンプリングする仮想粒子（コントロール点）数（既定 50）.")
+    parser.add_argument('--n_virtual_points', type=int, default=100,
+                        help="フレームあたりにサンプリングする仮想粒子（コントロール点）数（既定 100）. "
+                             "キャッシュが要求以上の点を持つ場合は部分抽出して再利用する.")
     parser.add_argument('--mask_radius_factor', type=float, default=2.0,
                         help="貨物粒子近傍除外半径 = factor x R_c [px]. 既定 2.0.")
     parser.add_argument('--min_mask_radius_px', type=float, default=15.0,
@@ -1174,8 +1515,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--frame_stride', type=int, default=1, help="使用フレームの間引き（既定 1 = 全フレーム）.")
     parser.add_argument('--max_frames', type=int, default=None,
                         help="（デバッグ用）各実験で先頭 N フレームのみを使用.")
+    parser.add_argument('--n_workers', type=int, default=1,
+                        help="仮想粒子サンプリング計算のプロセス並列数（実験ディレクトリ単位. 既定 1 = 逐次）. "
+                             "全フレーム（--frame_stride 1）で計算する際に有効（例: 4）.")
 
     # --- 解析・作図 ---
+    parser.add_argument('--error_mode', type=str, default='frame', choices=['frame', 'sample'],
+                        help="xi_bg フィットの重みに使う誤差（既定 frame）. "
+                             "'frame': フレーム平均間の SEM（実効独立サンプル数 ≈ フレーム数, 保守的）/ "
+                             "'sample': 全サンプル間の SEM（従来通り, 誤差を過小評価しやすい）.")
     parser.add_argument('--scale', type=float, default=0.11, help="Spatial scale (um/pixel).")
     parser.add_argument('--fit_range', type=float, nargs=2, default=[0.0, 20.0], metavar=('MIN', 'MAX'),
                         help="xi_bg フィットに使う距離範囲 [um]（既定 0 20）.")
@@ -1186,9 +1534,52 @@ def build_parser() -> argparse.ArgumentParser:
                         help="C_bg(r) 図の横軸スケール（既定 log）.")
     parser.add_argument('--xi_xscale', type=str, default='log', choices=['log', 'linear'],
                         help="xi_bg vs 2R_c 図の横軸スケール（既定 log）.")
-    parser.add_argument('--ylim', type=float, nargs=2, default=[-0.2, 1.05], metavar=('MIN', 'MAX'),
-                        help="C_bg(r) 図の縦軸範囲（既定 -0.2 1.05）.")
+    parser.add_argument('--ylim', type=float, nargs=2, default=[-0.1, 1.05], metavar=('MIN', 'MAX'),
+                        help="C_bg(r) 図の縦軸範囲（既定 -0.1 1.05）.")
     return parser
+
+
+def _bg_cache_worker(payload: dict) -> dict:
+    """
+    並列ワーカー: 1 実験ディレクトリについてキャッシュの再利用可否を判定し、
+    必要なら仮想粒子サンプリング相関を計算してキャッシュ zarr として保存する。
+
+    重い GFP_flows.h5 の読み出し（NAS I/O）をプロセス並列化するため、
+    トップレベル関数として定義する（ProcessPoolExecutor から pickle 可能にするため）。
+    """
+    exp_dir = Path(payload['exp_dir'])
+    try:
+        cache_name = payload['cache_name']
+        cache_path = exp_dir / cache_name
+        if cache_path.exists() and not payload.get('force_recompute', False):
+            ds_c = open_virtual_point_dataset(cache_path)
+            if ds_c is not None:
+                plan = cache_reuse_plan(
+                    ds_c, payload['distances'], payload['kernel_type'], payload['shell_width'],
+                    int(payload['n_virtual_points']), payload['mask_px'], int(payload['border_px']),
+                    payload['min_flow_mag'], int(payload['frame_stride']),
+                )
+                ds_c.close()
+                if plan is not None:
+                    return {'exp_dir': str(exp_dir), 'status': 'cache', 'source': f"cache:{cache_name}"}
+
+        ds = compute_virtual_point_correlations(
+            exp_dir, payload['distances'], int(payload['n_virtual_points']),
+            payload['mask_px'], int(payload['border_px']),
+            kernel_type=payload['kernel_type'], shell_width=payload['shell_width'],
+            seed=int(payload['seed']), device=payload['device'],
+            min_flow_mag=payload['min_flow_mag'], max_frames=payload['max_frames'],
+            frame_stride=int(payload['frame_stride']), verbose=False,
+        )
+        if ds is None:
+            return {'exp_dir': str(exp_dir), 'status': 'failed', 'source': 'no flow data'}
+        if not payload.get('no_cache', False):
+            save_dataset_cache(ds, cache_path)
+        ds.close()
+        return {'exp_dir': str(exp_dir), 'status': 'computed',
+                'source': f"computed:{int(payload['n_virtual_points'])}pts"}
+    except Exception as e:  # ワーカー内例外は呼び出し側で表示
+        return {'exp_dir': str(exp_dir), 'status': 'error', 'source': f"{type(e).__name__}: {e}"}
 
 
 def main():
@@ -1222,24 +1613,80 @@ def main():
     print(f"Target Beads        : {[b['name'] for b in target_beads]}")
     print(f"Distances (px)      : {len(distances)} values ({min(distances)}-{max(distances)} px)")
     print(f"Virtual points      : {args.n_virtual_points} / frame (seed = {args.seed})")
+    print(f"Frame stride        : {args.frame_stride}"
+          + (f" (max_frames = {args.max_frames})" if args.max_frames is not None else ""))
     print(f"Mask radius         : max({args.min_mask_radius_px:.0f} px, "
           f"{args.mask_radius_factor:.1f} x R_c) / {args.scale} um/px")
     print(f"Source              : {args.source} (cache: {args.cache_name})")
     print(f"Fit range           : {fit_range[0]:.2f} - {fit_range[1]:.2f} um")
+    print(f"Error mode          : {args.error_mode} SEM (fit weights & bands)")
+    print(f"Workers             : {max(1, int(getattr(args, 'n_workers', 1)))}")
     print("-" * 78)
 
-    # --- 各実験の仮想粒子バックグラウンド相関を取得（キャッシュ / 計算） ---
-    exp_results: List[dict] = []
+    # --- 対象実験ディレクトリの列挙 ---
+    targets: List[Tuple[dict, Path]] = []
     for binfo in target_beads:
         exp_dirs = find_experiment_dirs(root_dir, binfo['name'])
         print(f"[{binfo['name']}] {len(exp_dirs)} experiment dir(s) with {FLOW_NAME}")
-        for exp_dir in exp_dirs:
-            res = load_experiment_correlation(exp_dir, binfo, args, distances)
-            if res is None:
-                continue
-            exp_results.append(res)
-            print(f"      -> {res['exp_dir']}: {res['n_frames']} frames x {res['n_virtual_points']} pts "
-                  f"({res['source']}), mask = {res['mask_radius_px']:.1f} px", flush=True)
+        targets.extend((binfo, ed) for ed in exp_dirs)
+    if not targets:
+        raise RuntimeError("No experiment directories found. Check --root_dir / --beads.")
+
+    # --- 並列計算フェーズ: 重い GFP_flows.h5 読み出しをプロセス並列化（--n_workers > 1） ---
+    n_workers = max(1, int(getattr(args, 'n_workers', 1)))
+    if n_workers > 1 and args.source != 'existing' and not args.no_cache:
+        payloads: List[dict] = []
+        border_px_default = (int(args.border_margin_px) if args.border_margin_px is not None
+                            else int(np.ceil(max(distances))))
+        for binfo, exp_dir in targets:
+            mask_px = mask_radius_px_for_bead(binfo['radius_um'], args.scale,
+                                              args.mask_radius_factor, args.min_mask_radius_px)
+            payloads.append({
+                'exp_dir': str(exp_dir),
+                'distances': [float(d) for d in distances],
+                'n_virtual_points': int(args.n_virtual_points),
+                'mask_px': float(mask_px),
+                'border_px': int(border_px_default),
+                'kernel_type': args.kernel_type,
+                'shell_width': float(args.shell_width),
+                'seed': int(args.seed),
+                'device': args.device,
+                'min_flow_mag': float(args.min_flow_mag),
+                'max_frames': args.max_frames,
+                'frame_stride': int(args.frame_stride),
+                'cache_name': args.cache_name,
+                'force_recompute': bool(args.force_recompute),
+                'no_cache': bool(args.no_cache),
+            })
+        print(f"[parallel] {n_workers} worker processes で仮想粒子サンプリングを計算"
+              f"（対象 {len(payloads)} 実験, cache = {args.cache_name}）...")
+        # 注意: CUDA は fork 安全ではない（fork した子プロセスでは CUDA 初期化が失敗し、
+        #       黙って CPU バックエンドへフォールバックして数倍遅くなる）。必ず spawn を使う。
+        ctx = mp.get_context('spawn')
+        with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as ex:
+            futures = {ex.submit(_bg_cache_worker, p): Path(p['exp_dir']) for p in payloads}
+            n_done = 0
+            for fut in as_completed(futures):
+                try:
+                    r = fut.result()
+                except Exception as e:
+                    r = {'exp_dir': str(futures[fut]), 'status': 'error',
+                         'source': f"{type(e).__name__}: {e}"}
+                n_done += 1
+                print(f"    [{n_done}/{len(payloads)}] {Path(r['exp_dir']).name}: "
+                      f"{r['status']} ({r['source']})", flush=True)
+    elif n_workers > 1:
+        print("[parallel] --no_cache / --source existing のため並列計算を行わず逐次処理します")
+
+    # --- 集計フェーズ（キャッシュ読み込み / 必要なら逐次計算） ---
+    exp_results: List[dict] = []
+    for binfo, exp_dir in targets:
+        res = load_experiment_correlation(exp_dir, binfo, args, distances)
+        if res is None:
+            continue
+        exp_results.append(res)
+        print(f"      -> {res['exp_dir']}: {res['n_frames']} frames x {res['n_virtual_points']} pts "
+              f"({res['source']}), mask = {res['mask_radius_px']:.1f} px", flush=True)
 
     if not exp_results:
         raise RuntimeError("No background correlation samples were extracted. "
@@ -1249,19 +1696,26 @@ def main():
     grid_px = grids[0]
     if not all(g.size == grid_px.size and np.allclose(g, grid_px) for g in grids):
         print("[WARNING] 距離グリッドが実験間で一致しません（先頭実験のグリッドで集計します）")
+    grid_um = grid_px * float(args.scale)
 
     # --- 集計（実験 -> 条件） ---
-    df_points, df_xi, pool = build_tables(exp_results, fit_range, args.min_corr_threshold)
+    df_points, df_xi, pool, pool_frame = build_tables(exp_results, fit_range,
+                                                      args.min_corr_threshold,
+                                                      error_mode=args.error_mode)
     meta = {
         'n_exp': len(exp_results),
         'n_virtual_points': int(df_xi['n_virtual_points'].max()),
         'n_frames': int(df_xi['n_frames'].sum()),
-        'n_samples': int(df_points.groupby('exp_dir')['n_samples'].max().sum()),
+        'n_samples': int((df_xi['n_frames'] * df_xi['n_virtual_points']).sum()),
         'mask_min_px': float(df_xi['mask_radius_px'].min()),
         'mask_max_px': float(df_xi['mask_radius_px'].max()),
+        'error_mode': str(args.error_mode),
+        'n_workers': int(n_workers),
     }
     df_curves, df_summary = summarize_conditions(df_points, df_xi, pool, target_beads,
-                                                 grid_px, fit_range, args.min_corr_threshold)
+                                                 grid_um, fit_range, args.min_corr_threshold,
+                                                 pool_frame=pool_frame,
+                                                 error_mode=args.error_mode)
     global_xi = weighted_global_xi(df_xi)
 
     # --- CSV 出力 ---
@@ -1274,10 +1728,13 @@ def main():
     # --- 作図 ---
     plot_condition_curves(df_curves, df_points, df_summary, out_dirs, meta,
                           fit_range, args.min_corr_threshold,
-                          xscale=args.xscale, max_dist=args.max_dist, ylim=ylim)
-    plot_xi_vs_diameter(df_xi, df_summary, out_dirs, global_xi, xscale=args.xi_xscale)
+                          xscale=args.xscale, max_dist=args.max_dist, ylim=ylim,
+                          error_mode=args.error_mode)
+    plot_xi_vs_diameter(df_xi, df_summary, out_dirs, global_xi, xscale=args.xi_xscale,
+                        error_mode=args.error_mode)
     plot_par_perp_panels(df_curves, df_summary, out_dirs,
-                         xscale=args.xscale, max_dist=args.max_dist)
+                         xscale=args.xscale, max_dist=args.max_dist,
+                         error_mode=args.error_mode)
 
     # --- ログ出力 ---
     print("-" * 78)
@@ -1287,16 +1744,20 @@ def main():
     print(f"   virtual points       : {meta['n_virtual_points']} / frame")
     print(f"   mask radius          : {meta['mask_min_px']:.1f} - {meta['mask_max_px']:.1f} px")
     print(f"   samples (total)      : {meta['n_samples']:,} (= frames x virtual points x experiments)")
+    print(f"   fit error mode       : {meta['error_mode']} SEM")
     print(f"   weighted mean xi_bg  : {global_xi[0]:.2f} +/- {global_xi[1]:.2f} um (N = {global_xi[2]} experiments)")
     print()
     print(" Per-experiment xi_bg")
     cols = ['bead_name', 'exp_dir', 'source', 'n_frames', 'n_virtual_points', 'mask_radius_px',
-            'n_samples_total', 'xi_um', 'xi_err_um', 'xi_r2_log', 'n_fit_points']
+            'n_samples_total', 'xi_um', 'xi_err_um', 'xi_um_sample_sem', 'xi_um_frame_sem',
+            'xi_r2_log', 'n_fit_points']
     print(df_xi[[c for c in cols if c in df_xi.columns]].to_string(index=False))
     print()
-    print(" Per-condition summary (xi_bg: experiment-level mean +/- SEM, pooled-sample fit)")
-    cols2 = ['bead_name', 'diameter_um', 'n_experiments', 'n_samples_total',
-             'xi_bg_mean_um', 'xi_bg_sem_um', 'xi_bg_pooled_um', 'xi_bg_pooled_r2_log']
+    print(f" Per-condition summary (xi_bg: experiment-level mean +/- SEM; pooled fit = "
+          f"{meta['error_mode']} SEM weights)")
+    cols2 = ['bead_name', 'diameter_um', 'n_experiments', 'n_samples_total', 'n_frames_pooled',
+             'xi_bg_mean_um', 'xi_bg_sem_um', 'xi_bg_pooled_um', 'xi_bg_pooled_sample_um',
+             'xi_bg_pooled_frame_um', 'xi_bg_pooled_r2_log']
     print(df_summary[[c for c in cols2 if c in df_summary.columns]].to_string(index=False))
     print()
     print("Done.")
