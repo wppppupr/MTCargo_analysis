@@ -502,6 +502,10 @@ pixi run bg_corr_sample_sem
   `bg_angular_correlation_xi_vs_diameter`（$\xi_{\mathrm{bg}}$ vs $2R_c$。白抜き点 ± フィット誤差, 塗りつぶし = 条件平均 ± 実験間 SEM, 白抜き四角 = プールフィット）,
   `bg_angular_correlation_par_perp`（条件別ネマチック分解 + frame-block SEM 帯）,
   および 4 種の CSV（実験別カーブ / 条件別平均曲線 / 実験別 $\xi_{\mathrm{bg}}$ / 条件別サマリー）。
+- $C_{\mathrm{bg}}(r)$ を描く図 1 / 図 3 は **横軸 $r$ を linear、縦軸 $C_{\mathrm{bg}}(r)$ を log（半対数表示）** で描画します
+  （`--xscale`（既定 `linear`）/ `--yscale`（既定 `log`）で変更可）。フィットは従来どおり縦軸の対数
+  $\ln C = \ln a - r/\xi$ で線形化して $\xi_{\mathrm{bg}}$ を求めるため、半対数表示ではフィット曲線が直線として現れます。
+  log 軸時の縦軸範囲は描画する正の値から自動決定し（`--ylim` は `--yscale linear` のときのみ適用）、0 線は描画しません。
 
 ---
 

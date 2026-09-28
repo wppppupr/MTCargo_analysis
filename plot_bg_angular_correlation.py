@@ -50,12 +50,14 @@ plot_bg_angular_correlation.py
 【出力ファイル】
 既定の出力先は (1) <作業ディレクトリ>/figure/bg_angular_correlation と
 (2) <root_dir>/figure/bg_angular_correlation の 2 箇所（--no_save_root で (2) を省略, --output_dir で (1) を変更）。
+※ 図 1・図 3 の C_bg(r) は横軸 r を linear、縦軸を log（半対数表示）で描画する（--xscale / --yscale で変更可）。
+   これにより指数減衰モデル ln C = ln a - r / xi（フィットが実際に線形化している式）が図上で直線として現れる。
 1. bg_angular_correlation_Cr.png / .svg            : 条件別 C_bg(r)（実験別生カーブ + 実験間平均 ± SEM（エラーバー）
-   + プールした frame-block SEM（帯）+ 指数フィット）
+   + プールした frame-block SEM（帯）+ ln C で線形フィットした指数減衰曲線）
 2. bg_angular_correlation_xi_vs_diameter.png / .svg: xi_bg vs 貨物直径 2R_c（実験点 ± フィット誤差 + 条件平均 ± SEM
    + 全体系平均 + プールフィット）
 3. bg_angular_correlation_par_perp.png / .svg      : 条件別のネマチック主軸分解（total / parallel / perpendicular,
-   各曲線にプールした frame-block SEM の帯を付加）
+   各曲線にプールした frame-block SEM の帯を付加。縦軸 log, 横軸 linear）
 4. bg_angular_correlation_points.csv               : 実験 x 距離ごとの C_bg(r)（平均・SEM・サンプル数, par/perp 含む）
 5. bg_angular_correlation_curves.csv               : 条件 x 距離ごとの平均曲線（実験間平均 ± SEM, プール SEM, サンプル数）
 6. bg_angular_correlation_length_per_experiment.csv: 実験ごとの xi_bg（フィット品質・サンプル数付き）
@@ -1163,6 +1165,31 @@ def weighted_global_xi(df_xi: pd.DataFrame) -> Tuple[float, float, int]:
     return mean, sem, int(vals.size)
 
 
+def _log_positive_ylim(
+    values: Sequence[float],
+    default: Tuple[float, float] = (1e-3, 1.5),
+    lower_factor: float = 0.5,
+    upper_factor: float = 1.6,
+) -> Tuple[float, float]:
+    """
+    対数軸に使う y 範囲を正の値のみから推定する（0 以下・非有限値は無視）。
+
+    半対数表示（x = linear, y = log）では線形軸用の ylim（負値を含む）が使えないため、
+    描画対象データに含まれる正の最小値・最大値に余白を付けて範囲を決める。
+    正の値が 1 つも無い場合は default を返す。
+    """
+    arr = np.asarray(values, dtype=float).ravel()
+    arr = arr[np.isfinite(arr) & (arr > 0.0)]
+    if arr.size == 0:
+        return default
+    lo = float(np.min(arr)) * float(lower_factor)
+    hi = float(np.max(arr)) * float(upper_factor)
+    lo = max(lo, np.finfo(float).tiny)
+    if hi <= lo:
+        hi = lo * 10.0
+    return lo, hi
+
+
 # =========================================================================
 # 作図
 # =========================================================================
@@ -1175,19 +1202,23 @@ def plot_condition_curves(
     meta: dict,
     fit_range: Tuple[float, float],
     min_corr_threshold: float,
-    xscale: str = 'log',
-    max_dist: float = 60.0,
+    xscale: str = 'linear',
+    yscale: str = 'log',
+    max_dist: float = 12.0,
     ylim: Tuple[float, float] = (-0.2, 1.05),
     error_mode: str = 'frame',
 ) -> None:
     """
     条件（粒子径）ごとの C_bg(r) を 1 軸に描く。
 
+    - 横軸 r は linear、縦軸 C_bg(r) は log（半対数表示）が既定。これにより
+      指数減衰フィット ln C = ln a - r / xi（= フィットが実際に線形化しているモデル）が
+      図上で直線として現れ、フィットと表示が一致する。--xscale / --yscale で変更可能。
     - 灰色細線: 実験別生カーブ
     - マーカー + エラーバー: 条件平均 ± 実験間 SEM（条件の再現性）
     - 帯: プールしたフレームブロック SEM（全フレーム・全仮想粒子・全実験をプールした
       推定精度。実効独立サンプル数 ≈ フレーム数）
-    - 破線: 指数フィット（重み = --error_mode の SEM）
+    - 破線: 指数フィット（重み = --error_mode の SEM, 縦軸は ln C で線形フィット）
     """
     if df_curves.empty:
         print("[WARNING] C_bg(r) 曲線データが空のため図 1 をスキップします")
@@ -1197,6 +1228,7 @@ def plot_condition_curves(
     exp_dirs = sorted(df_points['exp_dir'].unique())
     n_exp = len(exp_dirs)
     band_labeled = [False]
+    fit_y_vals: List[np.ndarray] = []  # 対数 y 軸の範囲推定用に描画したフィット値も集める
 
     for i, e in enumerate(exp_dirs):
         g = df_points[df_points['exp_dir'] == e].sort_values('distance_um')
@@ -1245,12 +1277,40 @@ def plot_condition_curves(
         fit_c = np.asarray(fit.get('fit_c', np.array([])), dtype=float)
         if fit_r.size and np.isfinite(fit.get('xi_um', np.nan)):
             ax.plot(fit_r, fit_c, ls='--', color=binfo['color'], lw=1.5, alpha=0.9, zorder=3)
+            fit_y_vals.append(fit_c)
 
-    ax.axhline(0.0, color='gray', ls='--', lw=0.9, alpha=0.6)
     ax.set_xscale(xscale)
+    ax.set_yscale(yscale)
+    if str(yscale) == 'log':
+        # 半対数表示: 0 線（負値）は描けず、線形用 ylim（負値を含む）も使えないため、
+        # 実際に描画する正の値（条件平均 ± 帯, 実験別生カーブ ± SEM, フィット線）から範囲を推定する。
+        y_vals: List[np.ndarray] = list(fit_y_vals)
+        for binfo in BEADS_INFO:
+            s = df_curves[df_curves['bead_name'] == binfo['name']]
+            if s.empty:
+                continue
+            mid = s['mean_c'].to_numpy(dtype=float)
+            y_vals.append(mid)
+            band = (s['pooled_sem_c_frame'].to_numpy(dtype=float)
+                    if 'pooled_sem_c_frame' in s.columns else np.full_like(mid, np.nan))
+            y_vals.append(mid - band)
+            y_vals.append(mid + band)
+            sem = (s['sem_c'].to_numpy(dtype=float)
+                   if 'sem_c' in s.columns else np.full_like(mid, np.nan))
+            y_vals.append(mid + sem)
+        if not df_points.empty:
+            raw = df_points['mean_c'].to_numpy(dtype=float)
+            raw_sem = (df_points['sem_c'].to_numpy(dtype=float)
+                       if 'sem_c' in df_points.columns else np.zeros_like(raw))
+            y_vals.append(raw)
+            y_vals.append(raw + raw_sem)
+        y_flat = np.concatenate([np.ravel(v) for v in y_vals]) if y_vals else np.array([])
+        ax.set_ylim(*_log_positive_ylim(y_flat))
+    else:
+        ax.axhline(0.0, color='gray', ls='--', lw=0.9, alpha=0.6)
+        ax.set_ylim(*ylim)
     x_min = float(max(np.nanmin(df_curves['distance_um']) * 0.8, 1e-3)) if xscale == 'log' else 0.0
     ax.set_xlim(x_min, max_dist)
-    ax.set_ylim(*ylim)
     ax.set_xlabel(r"Distance $r$ from Virtual Particle Center [$\mu\mathrm{m}$]",
                   fontsize=13, fontweight='bold')
     ax.set_ylabel(r"Background Flow Spatial Correlation $C_{\mathrm{bg}}(r)$",
@@ -1380,14 +1440,16 @@ def plot_par_perp_panels(
     df_curves: pd.DataFrame,
     df_summary: pd.DataFrame,
     out_dirs: List[Path],
-    xscale: str = 'log',
-    max_dist: float = 60.0,
+    xscale: str = 'linear',
+    yscale: str = 'log',
+    max_dist: float = 12.0,
     ylim: Tuple[float, float] = (-0.15, 1.05),
     error_mode: str = 'frame',
 ) -> None:
     """
     条件ごとのネマチック主軸分解（total / parallel / perpendicular）をパネル表示する。
 
+    横軸 r は linear、縦軸 C_bg(r) は log（半対数表示）が既定（--xscale / --yscale で変更可能）。
     エラーバーは実験間 SEM、網掛け帯はプールしたフレームブロック SEM（実効独立サンプル数 ≈ フレーム数）
     を示す（error_mode は凡例のフィット重み表記に反映）。
     """
@@ -1395,6 +1457,33 @@ def plot_par_perp_panels(
     if not conds:
         print("[WARNING] par/perp データが空のため図 3 をスキップします")
         return
+
+    # 半対数表示では線形用 ylim（負値を含む）が使えないため、全パネル共通の y 範囲を
+    # 実際に描画する正の値（total / par / perp の平均 ± 帯, ± SEM）から推定する。
+    if str(yscale) == 'log':
+        pp_vals: List[np.ndarray] = []
+        for binfo in conds:
+            s = df_curves[df_curves['bead_name'] == binfo['name']]
+            for mid_col, err_col, band_col in (
+                ('mean_c', 'sem_c', 'pooled_sem_c_frame'),
+                ('mean_c_par', 'sem_c_par', 'pooled_sem_c_par_frame'),
+                ('mean_c_perp', 'sem_c_perp', 'pooled_sem_c_perp_frame'),
+            ):
+                if mid_col not in s.columns:
+                    continue
+                mid = s[mid_col].to_numpy(dtype=float)
+                pp_vals.append(mid)
+                band = (s[band_col].to_numpy(dtype=float)
+                        if band_col in s.columns else np.full_like(mid, np.nan))
+                pp_vals.append(mid - band)
+                pp_vals.append(mid + band)
+                sem = (s[err_col].to_numpy(dtype=float)
+                       if err_col in s.columns else np.full_like(mid, np.nan))
+                pp_vals.append(mid + sem)
+        pp_flat = np.concatenate([np.ravel(v) for v in pp_vals]) if pp_vals else np.array([])
+        panel_ylim = _log_positive_ylim(pp_flat)
+    else:
+        panel_ylim = tuple(ylim)
 
     ncols = 3
     nrows = int(np.ceil(len(conds) / ncols))
@@ -1436,11 +1525,15 @@ def plot_par_perp_panels(
         else:
             title = rf"$2R_c = {binfo['diameter_um']:.2f}\,\mu\mathrm{{m}}$"
         ax.set_title(title, fontsize=10.5, fontweight='bold')
-        ax.axhline(0.0, color='gray', ls='--', lw=0.8, alpha=0.6)
         ax.set_xscale(xscale)
+        ax.set_yscale(yscale)
+        if str(yscale) == 'log':
+            ax.set_ylim(*panel_ylim)
+        else:
+            ax.axhline(0.0, color='gray', ls='--', lw=0.8, alpha=0.6)
+            ax.set_ylim(*ylim)
         ax.set_xlim(float(max(np.nanmin(df_curves['distance_um']) * 0.8, 1e-3)) if xscale == 'log' else 0.0,
                     max_dist)
-        ax.set_ylim(*ylim)
         ax.grid(True, which='both', ls='--', alpha=0.35)
         if i // ncols == nrows - 1:
             ax.set_xlabel(r"Distance $r$ [$\mu\mathrm{m}$]", fontsize=11)
@@ -1529,13 +1622,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="xi_bg フィットに使う距離範囲 [um]（既定 0 20）.")
     parser.add_argument('--min_corr_threshold', type=float, default=0.01,
                         help="対数をとる C_bg の下限閾値（既定 0.01）.")
-    parser.add_argument('--max_dist', type=float, default=60.0, help="C_bg(r) 図の横軸上限 [um].")
-    parser.add_argument('--xscale', type=str, default='log', choices=['log', 'linear'],
-                        help="C_bg(r) 図の横軸スケール（既定 log）.")
+    parser.add_argument('--max_dist', type=float, default=12.0, help="C_bg(r) 図の横軸上限 [um].")
+    parser.add_argument('--xscale', type=str, default='linear', choices=['log', 'linear'],
+                        help="C_bg(r) 図の横軸スケール（既定 linear）.")
+    parser.add_argument('--yscale', type=str, default='log', choices=['log', 'linear'],
+                        help="C_bg(r) 図の縦軸スケール（既定 log = 半対数表示。フィットは ln C で線形化）.")
     parser.add_argument('--xi_xscale', type=str, default='log', choices=['log', 'linear'],
                         help="xi_bg vs 2R_c 図の横軸スケール（既定 log）.")
     parser.add_argument('--ylim', type=float, nargs=2, default=[-0.1, 1.05], metavar=('MIN', 'MAX'),
-                        help="C_bg(r) 図の縦軸範囲（既定 -0.1 1.05）.")
+                        help="C_bg(r) 図の縦軸範囲（--yscale linear のときのみ適用。既定 -0.1 1.05。"
+                             "log 軸では正のデータから自動決定）.")
     return parser
 
 
@@ -1728,12 +1824,14 @@ def main():
     # --- 作図 ---
     plot_condition_curves(df_curves, df_points, df_summary, out_dirs, meta,
                           fit_range, args.min_corr_threshold,
-                          xscale=args.xscale, max_dist=args.max_dist, ylim=ylim,
+                          xscale=args.xscale, yscale=args.yscale,
+                          max_dist=args.max_dist, ylim=ylim,
                           error_mode=args.error_mode)
     plot_xi_vs_diameter(df_xi, df_summary, out_dirs, global_xi, xscale=args.xi_xscale,
                         error_mode=args.error_mode)
     plot_par_perp_panels(df_curves, df_summary, out_dirs,
-                         xscale=args.xscale, max_dist=args.max_dist,
+                         xscale=args.xscale, yscale=args.yscale,
+                         max_dist=args.max_dist,
                          error_mode=args.error_mode)
 
     # --- ログ出力 ---
