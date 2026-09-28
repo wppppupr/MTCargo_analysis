@@ -81,8 +81,11 @@ n -> -n で sigma は反転するため、M の符号（したがって v との
                                                   （横軸 = M_{i,t}, 縦軸 = v_{i,t}, 色 = P(v, M)）
 12. polar_order_vs_velocity_heatmap.png/.svg     : 同（横軸 = P_{i,t}）
     （--heatmap_per_condition で条件別の ..._heatmap_<bead>.png/.svg も出力）
-13. cargo_spin_velocity_heatmap.csv              : 2D ヒストグラムの各ビン（境界・個数・
-                                                  同時確率密度）。count = 0 のビンは省略
+13. *_heatmap_abs.png/.svg                        : --heatmap_abs を指定したときの絶対値版
+                                                  （横軸 = |M_{i,t}| / P_{i,t}, 縦軸 = |v_{i,t}|）
+14. cargo_spin_velocity_heatmap.csv              : 2D ヒストグラムの各ビン（境界・個数・
+                                                  同時確率密度・abs_values フラグ）。
+                                                  count = 0 のビンは省略
 
 【2D ヒートマップ（色 = 同時確率密度 P(v, M)）】
 散布図は 1 点 = 1 (i, t) をそのまま描くため、点数が多いと密度の偏りが見えにくい。
@@ -98,6 +101,13 @@ N_in はビン範囲内の点数（横軸は M / P の物理範囲、縦軸は�
 白線は散布図と同じ等点数ビンの中央値 ± IQR（色 = 個数の右肩上がりとは独立な、
 v の条件付き分布の代表値）。周辺分布（上 = x の個数、右 = v の個数）も併置する。
 
+【絶対値版（--heatmap_abs）】
+M はディレクターの符号規約（dir_sign）に依存し、v も変位ベクトルの向きに依存するため、
+符号を落とした「強さ」だけで見たい場合は --heatmap_abs を付ける。横軸 = |M|（P は元から
+0 <= P <= 1 なのでそのまま）、縦軸 = |v| に折り畳んで集計し（v = 0 の点は対数ビンに
+入らないため範囲外として図中に個数を表示）、統計量（r, rho, 傾き）も |v| vs |M| で
+計算し直す。散布図は従来どおり符号付きのまま。
+
 【実行例】
     pixi run python plot_cargo_spin_velocity.py --beads all \\
         --pixel_stride 4 --frame_stride 5 --flow_cache_dir /tmp/mtcache
@@ -105,6 +115,7 @@ v の条件付き分布の代表値）。周辺分布（上 = x の個数、右 
         --region_factor 3 --velocity flow --yscale log
     pixi run python plot_cargo_spin_velocity.py --beads 1um \\
         --heatmap_per_condition --heatmap_log_color            # ヒートマップを条件別 + 対数色
+    pixi run python plot_cargo_spin_velocity.py --heatmap_abs   # |v| vs |M| のヒートマップも
     pixi run python plot_cargo_spin_velocity.py --no_heatmap   # 散布図だけを出力
 """
 
@@ -175,14 +186,30 @@ X_PHYS_LIMITS = {
     'polar': (0.0, 1.0),
 }
 
+# --heatmap_abs: 符号をもつ量（v と M）を絶対値に折り畳んだヒートマップ用の定義。
+# P は 0 <= P <= 1 で元から非負なので折り畳んでも変わらない。
+X_PHYS_LIMITS_ABS = {
+    'm_ising': (0.0, 1.0),
+    'polar': (0.0, 1.0),
+}
+X_LABELS_ABS = {
+    'm_ising': r'Ising spin average $|M_{i,t}|$ (region under cargo)',
+    'polar': X_LABELS['polar'],
+}
+
 # 2D ヒートマップの色の量（同時確率密度）のラベルと単位
 JOINT_LABELS = {
     'm_ising': r'$P(v_{i,t},\, M_{i,t})$',
     'polar': r'$P(v_{i,t},\, P_{i,t})$',
 }
+JOINT_LABELS_ABS = {
+    'm_ising': r'$P(|v_{i,t}|,\, |M_{i,t}|)$',
+    'polar': r'$P(|v_{i,t}|,\, P_{i,t})$',
+}
 JOINT_DENSITY_UNIT = r'[($\mu$m/s)$^{-1}$] '
 
 VELOCITY_LABEL = r'cargo velocity $v_{i,t}$ [$\mu$m/s]'
+VELOCITY_LABEL_ABS = r'cargo speed $|v_{i,t}|$ [$\mu$m/s]'
 
 
 
@@ -960,17 +987,21 @@ def _stats_text(
     v: np.ndarray,
     groups: Sequence,
     x_var: str,
+    abs_values: bool = False,
 ) -> str:
     """図中に載せる統計量のテキスト（N, r, rho, OLS 傾き, 粒子内相関）。"""
-    head = ('Ising spin $M_{i,t}$' if str(x_var) == 'm_ising'
-            else 'polar order $P_{i,t}$')
+    if str(x_var) == 'm_ising':
+        head = ('Ising spin $|M_{i,t}|$' if abs_values else 'Ising spin $M_{i,t}$')
+    else:
+        head = 'polar order $P_{i,t}$'
     st = _corr_stats(x, v, groups)
+    tail = ("\ny = $|v_{i,t}|$ (speed), folded about 0" if abs_values else "")
     return (f"{head}\n"
             f"$N$ = {st['within_n']:,} (i, t) points\n"
             f"Pearson $r$ = {st['pearson_r']:+.3f} ($p$ = {st['pearson_p']:.1e})\n"
             f"Spearman $\\rho$ = {st['spearman_rho']:+.3f}\n"
             f"OLS slope = {st['slope_ols']:+.4f} $\\pm$ {st['slope_stderr']:.4f} $\\mu$m/s per unit\n"
-            f"within-particle $r$ = {st['within_r']:+.3f}")
+            f"within-particle $r$ = {st['within_r']:+.3f}{tail}")
 
 
 # =============================================================================
@@ -1035,12 +1066,14 @@ def heatmap_edges(
     x_edges_mode: str = 'uniform',
     y_edges_mode: str = 'log',
     upper_percentile: float = 99.5,
+    x_limits: Optional[Sequence[float]] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     2D ヒストグラム（横軸 = 秩序変数 x、縦軸 = 速度 v）のビン境界を作る。
 
     - 横軸: 物理的な範囲（M は [-1, 1]、P は [0, 1]）を既定で等幅に切る
-      （x_edges_mode = 'quantile' では等点数ビン）。
+      （x_edges_mode = 'quantile' では等点数ビン）。x_limits を渡すとその範囲を
+      使う（--heatmap_abs では |M| の [0, 1] を渡す）。
     - 縦軸: 速度は裾が重いので、既定（'log'）では**対数等間隔**ビンにして低速度側の
       分解能を確保し、上限を upper_percentile 分位点で打ち切る（それより速い点は
       ヒストグラムの範囲外になる）。'linear' は 0 から上限までの等幅、'quantile' は
@@ -1058,7 +1091,11 @@ def heatmap_edges(
 
     default_lo = float(np.min(xs)) if xs.size else 0.0
     default_hi = float(np.max(xs)) if xs.size else 1.0
-    lo, hi = X_PHYS_LIMITS.get(str(x_var), (default_lo, default_hi))
+    limits = x_limits if x_limits is not None else X_PHYS_LIMITS.get(str(x_var))
+    if limits is not None:
+        lo, hi = float(limits[0]), float(limits[1])
+    else:
+        lo, hi = default_lo, default_hi
     n_x = max(2, int(x_bins))
     if str(x_edges_mode) == 'quantile' and xs.size >= n_x:
         x_edges = _monotone_edges(np.quantile(xs, np.linspace(0.0, 1.0, n_x + 1)),
@@ -1116,24 +1153,34 @@ def heatmap_density_data(
     x_edges_mode: str = 'uniform',
     y_edges_mode: str = 'log',
     upper_percentile: float = 99.5,
+    abs_values: bool = False,
 ) -> Optional[dict]:
     """
     条件（粒子径）をまたいでプールした (x, v) から 2D ヒストグラム（同時分布）を作る。
+
+    abs_values = True では符号をもつ量（速度 v と、横軸が M のときは M）を絶対値に
+    折り畳んでから集計する（|M| ∈ [0, 1]、|v| >= 0。P は元から非負なのでそのまま）。
+    横軸の範囲も [0, 1] に切り替わる。
 
     Returns
     -------
     dict or None
         x / v / group（生データ: トレンド線と統計量の再計算に使う）、x_edges /
-        y_edges / counts / density / n_points / n_points_in_range / ビンモード。
-        点が 1 つも無ければ None。
+        y_edges / counts / density / n_points / n_points_in_range / ビンモード /
+        abs_values。点が 1 つも無ければ None。
     """
     x, v, _, g = pooled_arrays(df_long, target_beads, x_var)
     if x.size == 0:
         return None
+    if abs_values:                        # |v| と |M| に折り畳む（P は非負なので不変）
+        x = np.abs(x)
+        v = np.abs(v)
+    x_limits = (X_PHYS_LIMITS_ABS if abs_values else X_PHYS_LIMITS).get(str(x_var))
     x_edges, y_edges = heatmap_edges(x, v, x_var, x_bins=x_bins, y_bins=y_bins,
                                      x_edges_mode=x_edges_mode,
                                      y_edges_mode=y_edges_mode,
-                                     upper_percentile=upper_percentile)
+                                     upper_percentile=upper_percentile,
+                                     x_limits=x_limits)
     counts, density, n_in = joint_density(x, v, x_edges, y_edges)
     return {
         'x_var': str(x_var),
@@ -1142,6 +1189,7 @@ def heatmap_density_data(
         'counts': counts, 'density': density,
         'n_points': int(x.size), 'n_points_in_range': int(n_in),
         'x_edges_mode': str(x_edges_mode), 'y_edges_mode': str(y_edges_mode),
+        'abs_values': bool(abs_values),
         'bead_names': [b.get('name') for b in (target_beads or [])],
     }
 
@@ -1151,13 +1199,15 @@ def heatmap_density_table(data: Optional[dict], bead_label: str = 'all') -> pd.D
     2D ヒストグラムの中身を long 形式（1 行 = 1 ビン）のテーブルにする。
 
     count = 0 のビンは省く。y_center は対数等間隔ビンのときは幾何平均
-    （= 対数軸上でのビンの中心）を入れる。列: bead_name / x_variable / x_low /
-    x_high / x_center / y_low / y_high / y_center / count / prob_density /
-    bin_area / n_points / n_points_in_range。
+    （= 対数軸上でのビンの中心）を入れる。abs_values は |v| / |M| に折り畳んだ
+    ヒートマップ（--heatmap_abs）かどうかのフラグ。列: bead_name / x_variable /
+    x_low / x_high / x_center / y_low / y_high / y_center / count / prob_density /
+    bin_area / n_points / n_points_in_range / abs_values。
     """
     columns = ['bead_name', 'x_variable',
                'x_low', 'x_high', 'x_center', 'y_low', 'y_high', 'y_center',
-               'count', 'prob_density', 'bin_area', 'n_points', 'n_points_in_range']
+               'count', 'prob_density', 'bin_area', 'n_points', 'n_points_in_range',
+               'abs_values']
     if not data:
         return pd.DataFrame(columns=columns)
     xe = np.asarray(data['x_edges'], dtype=float)
@@ -1181,6 +1231,7 @@ def heatmap_density_table(data: Optional[dict], bead_label: str = 'all') -> pd.D
         'bin_area': (ye[iy + 1] - ye[iy]) * (xe[ix + 1] - xe[ix]),
         'n_points': int(data['n_points']),
         'n_points_in_range': int(data['n_points_in_range']),
+        'abs_values': bool(data.get('abs_values', False)),
     })
     return df.sort_values(['y_low', 'x_low']).reset_index(drop=True)
 
@@ -1206,10 +1257,18 @@ def plot_heatmap(
     ∫ P dv dM = 1。白線は散布図と同一の等点数ビン中央値 ± IQR、上と右の周辺分布は
     個数ヒストグラム（ビン境界は 2D ヒストグラムと共通）で、y 軸は速度分布が
     大きく裾を引くことを踏まえて既定で対数等間隔ビン（= 対数軸表示）になる。
+
+    data['abs_values'] = True（--heatmap_abs）のときは |v| と |M| に折り畳んだ図と
+    して、軸・カラーバー・統計ボックスのラベルを絶対値用に切り替える。
     """
     if not data:
         print(f"  [SKIP] no heatmap data for {x_var}")
         return
+
+    use_abs = bool(data.get('abs_values', False))
+    x_label = X_LABELS_ABS[x_var] if use_abs else X_LABELS[x_var]
+    y_label = VELOCITY_LABEL_ABS if use_abs else VELOCITY_LABEL
+    joint_label = JOINT_LABELS_ABS[x_var] if use_abs else JOINT_LABELS[x_var]
 
     xe = np.asarray(data['x_edges'], dtype=float)
     ye = np.asarray(data['y_edges'], dtype=float)
@@ -1258,8 +1317,8 @@ def plot_heatmap(
     ax.set_yscale('log' if log_axis else 'linear')
     ax.set_xlim(float(xe[0]), float(xe[-1]))
     ax.set_ylim(float(ye[0]), float(ye[-1]))
-    ax.set_xlabel(X_LABELS[x_var])
-    ax.set_ylabel(VELOCITY_LABEL)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
     # 横軸はビン数が多いので目盛りを間引く（既定スタイルの大きいラベルの重なり防止）
     ax.xaxis.set_major_locator(MaxNLocator(nbins=5, steps=[1, 2, 2.5, 5, 10]))
     ax.grid(False)
@@ -1283,12 +1342,12 @@ def plot_heatmap(
     # --- カラーバー ---
     if cax is not None:
         fig.colorbar(mesh, cax=cax, orientation='horizontal')
-        cax.set_title(f"{JOINT_LABELS[x_var]}\n{JOINT_DENSITY_UNIT.strip()}",
+        cax.set_title(f"{joint_label}\n{JOINT_DENSITY_UNIT.strip()}",
                       fontsize=10, pad=6)
         cax.tick_params(labelsize=8, length=3)
     else:
         cbar = fig.colorbar(mesh, ax=ax, pad=0.02, fraction=0.05)
-        cbar.set_label(f"{JOINT_LABELS[x_var]} {JOINT_DENSITY_UNIT.strip()}", fontsize=10)
+        cbar.set_label(f"{joint_label} {JOINT_DENSITY_UNIT.strip()}", fontsize=10)
         cbar.ax.tick_params(labelsize=8)
 
     # --- トレンド線（等点数ビンの中央値 ± IQR。散布図と同じ定義） ---
@@ -1308,7 +1367,7 @@ def plot_heatmap(
                         ms=4.0, lw=1.8, capsize=2.0, markeredgecolor='0.25',
                         markeredgewidth=0.7, zorder=6)
 
-    txt = _stats_text(x, v, g, x_var)
+    txt = _stats_text(x, v, g, x_var, abs_values=use_abs)
     txt += f"\n{n_in:,} / {n_points:,} points in range"
     if curve:
         txt += "\nwhite line: binned median $\\pm$ IQR"
@@ -1602,6 +1661,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="2D ヒートマップ（横軸 M / P, 縦軸 v, 色 = 同時確率密度）を出力しない")
     parser.add_argument('--heatmap_per_condition', action='store_true',
                         help="ヒートマップを条件（粒子径）ごとにも出力する（既定は全条件プールのみ）")
+    parser.add_argument('--heatmap_abs', action='store_true',
+                        help="符号をもつ量（速度 v とスピン平均 M）を絶対値に折り畳んだ"
+                             "ヒートマップ（横軸 |M|, 縦軸 |v|）も追加出力する")
     parser.add_argument('--heatmap_bins_x', type=int, default=25,
                         help="ヒートマップ横軸（M / P）のビン数")
     parser.add_argument('--heatmap_bins_y', type=int, default=30,
@@ -1781,26 +1843,34 @@ def main() -> None:
             marginals=not args.no_heatmap_marginals,
             trend_bins=args.v_bins, trend_min_count=args.v_bin_min_count)
 
-        data = heatmap_density_data(df_long, target_beads, x_var, **heat_kwargs)
-        if data is not None:
-            df_heat_frames.append(heatmap_density_table(data, 'all'))
-            print(f"  Heatmap {X_FILE_TAG[x_var]}_heatmap: "
-                  f"{data['n_points_in_range']:,} / {data['n_points']:,} points, "
-                  f"{data['counts'].shape[1]} x {data['counts'].shape[0]} bins")
-            plot_heatmap(data, x_var, out_dirs,
-                         title=(f"{JOINT_LABELS[x_var]} : all conditions "
-                                f"($N$ = {data['n_points']:,})"),
-                         **plot_kwargs)
-        for bead in (target_beads if args.heatmap_per_condition else []):
-            d_bead = heatmap_density_data(df_long, [bead], x_var, **heat_kwargs)
-            if d_bead is None:
-                continue
-            df_heat_frames.append(heatmap_density_table(d_bead, bead['name']))
-            plot_heatmap(d_bead, x_var, out_dirs,
-                         basename=f"{X_FILE_TAG[x_var]}_heatmap_{bead['name']}",
-                         title=(f"{JOINT_LABELS[x_var]} : {_bead_label(bead)} "
-                                f"($N$ = {d_bead['n_points']:,})"),
-                         **plot_kwargs)
+        # --heatmap_abs では符号をもつ量（v と M）を絶対値に折り畳んだ版も追加する
+        abs_modes = (False, True) if args.heatmap_abs else (False,)
+        for use_abs in abs_modes:
+            suffix = '_heatmap_abs' if use_abs else '_heatmap'
+            joint_label = JOINT_LABELS_ABS[x_var] if use_abs else JOINT_LABELS[x_var]
+            data = heatmap_density_data(df_long, target_beads, x_var,
+                                        abs_values=use_abs, **heat_kwargs)
+            if data is not None:
+                df_heat_frames.append(heatmap_density_table(data, 'all'))
+                print(f"  Heatmap {X_FILE_TAG[x_var]}{suffix}: "
+                      f"{data['n_points_in_range']:,} / {data['n_points']:,} points, "
+                      f"{data['counts'].shape[1]} x {data['counts'].shape[0]} bins")
+                plot_heatmap(data, x_var, out_dirs,
+                             basename=f"{X_FILE_TAG[x_var]}{suffix}",
+                             title=(f"{joint_label} : all conditions "
+                                    f"($N$ = {data['n_points']:,})"),
+                             **plot_kwargs)
+            for bead in (target_beads if args.heatmap_per_condition else []):
+                d_bead = heatmap_density_data(df_long, [bead], x_var,
+                                              abs_values=use_abs, **heat_kwargs)
+                if d_bead is None:
+                    continue
+                df_heat_frames.append(heatmap_density_table(d_bead, bead['name']))
+                plot_heatmap(d_bead, x_var, out_dirs,
+                             basename=f"{X_FILE_TAG[x_var]}{suffix}_{bead['name']}",
+                             title=(f"{joint_label} : {_bead_label(bead)} "
+                                    f"($N$ = {d_bead['n_points']:,})"),
+                             **plot_kwargs)
 
     if df_heat_frames:
         mt_ori.save_csv_to_all(pd.concat(df_heat_frames, ignore_index=True),

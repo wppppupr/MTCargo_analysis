@@ -271,7 +271,8 @@ P(v, M) = \frac{\mathrm{count}(v, M)}{N_{\mathrm{in}}\,\Delta M\,\Delta v}\qquad
 $$
 
 で、$N_{\mathrm{in}}$ はビン範囲内の点数なので図の範囲内で $\int P\,dv\,dM = 1$ になります。横軸は物理範囲（$M \in [-1, 1]$、$P \in [0, 1]$）を等幅に、縦軸は速度分布が裾を引くため既定で**対数等間隔ビン**（`--heatmap_y_edges log`、対数軸表示）にして低速度側の分解能を確保し、上限は `--heatmap_upper_percentile`（既定 `99.5`）分位点で打ち切ります（範囲外の点数は図中に表示）。色の上限は 0 でないビンの `--heatmap_vmax_percentile`（既定 `99`）分位点に取って 1 ビンの突出による白飛びを防ぎ、`--heatmap_log_color` で対数スケールにできます。白線は散布図と同一の等点数ビン中央値 ± IQR、上・右の周辺分布は個数ヒストグラム（`--no_heatmap_marginals` で省略）、ビン数は `--heatmap_bins_x`（既定 `25`）/ `--heatmap_bins_y`（既定 `30`）、ビン境界は `--heatmap_x_edges`（`uniform` / `quantile`）と `--heatmap_y_edges`（`log` / `linear` / `quantile`）で切り替えられます。
-- **CSV**: `cargo_spin_velocity_points`（全 $(i,t)$ の生データ: `m_ising`, `polar`, `v_um_s`, 円板内画素数, 半径, `theta_rad` など）/ `cargo_spin_velocity_summary`（条件 × 横軸変数の統計量）/ `cargo_spin_velocity_binned`（ビン統計 = トレンド線の数値）/ `cargo_spin_velocity_extraction`（実験ごとの使用フレーム数・採用点数・棄却数・`theta_source`・円板半径・フローキャッシュ元）/ `cargo_spin_velocity_heatmap`（2D ヒストグラムの各ビン: 境界・中心・`count`・`prob_density`・`bin_area`。`count = 0` のビンは省略）。
+- **絶対値版ヒートマップ（`--heatmap_abs`）**: $M$ の符号はディレクターの向き（`dir_sign`）、$v$ の符号は変位ベクトルの向きに依存するため、符号を落とした「強さ」だけで見たい場合は `--heatmap_abs` を付けると `*_heatmap_abs`（横軸 $|M_{i,t}|$、縦軸 $|v_{i,t}|$、$P$ は元から $0 \le P \le 1$ なのでそのまま）も出力します。折り畳んだ $(|v|, |M|)$ に対して集計・トレンド線・統計量（$r$, $\rho$, 傾き）を計算し直します（散布図は従来どおり符号付き）。$v = 0$ の点は対数ビンに入らないため範囲外として図中に個数を表示します。
+- **CSV**: `cargo_spin_velocity_points`（全 $(i,t)$ の生データ: `m_ising`, `polar`, `v_um_s`, 円板内画素数, 半径, `theta_rad` など）/ `cargo_spin_velocity_summary`（条件 × 横軸変数の統計量）/ `cargo_spin_velocity_binned`（ビン統計 = トレンド線の数値）/ `cargo_spin_velocity_extraction`（実験ごとの使用フレーム数・採用点数・棄却数・`theta_source`・円板半径・フローキャッシュ元）/ `cargo_spin_velocity_heatmap`（2D ヒストグラムの各ビン: 境界・中心・`count`・`prob_density`・`bin_area`・絶対値版かどうかの `abs_values`。`count = 0` のビンは省略）。
 - **解像度の注意**: 円板内のサンプル数は `--pixel_stride` に反比例するため、既定は `4`（1 µm の円板でも 10 点以上）。`--pixel_stride` を大きくすると $M$ が離散化されて見かけの相関が弱まります。実行ヘッダに条件ごとの円板半径 [µm / px / grid px] を表示します。`--yscale log` で速度軸を対数にできます。
 
 ```bash
@@ -286,6 +287,8 @@ pixi run python plot_cargo_spin_velocity.py \
     --beads 1um --heatmap_per_condition --heatmap_log_color   # ヒートマップを条件別 + 対数色
 pixi run python plot_cargo_spin_velocity.py \
     --heatmap_y_edges linear --heatmap_bins_x 20 --heatmap_bins_y 20   # 等幅ビンのヒートマップ
+pixi run python plot_cargo_spin_velocity.py \
+    --heatmap_abs --heatmap_log_color   # |v| vs |M| の絶対値版ヒートマップも出力（対数色）
 ```
 
 ---

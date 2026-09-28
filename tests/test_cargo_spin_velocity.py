@@ -537,6 +537,97 @@ class TestJointDensityHeatmap(unittest.TestCase):
             csv_mod.plot_heatmap(None, 'm_ising', out)
         plt.close('all')
 
+    def test_heatmap_abs_folds_signs(self):
+        """--heatmap_abs: |M| と |v| に折り畳んだ同時密度（符号反転で不変、横軸 [0, 1]）。"""
+        df_long = csv_mod.long_points_table(make_synthetic_points(n_per_bead=50))
+        beads = [mt_ori.BEAD_LOOKUP['beads1um'], mt_ori.BEAD_LOOKUP['beads3um']]
+        kw = dict(x_bins=8, y_bins=10)
+
+        # (M, v) -> (-M, -v) としても |M| / |v| は変わらない（不変性の確認用）
+        flipped = df_long.copy()
+        mask = flipped['x_var'] == 'm_ising'
+        flipped.loc[mask, 'x_value'] = -flipped.loc[mask, 'x_value']
+        flipped.loc[mask, 'v_um_s'] = -flipped.loc[mask, 'v_um_s']
+
+        data = csv_mod.heatmap_density_data(df_long, beads, 'm_ising',
+                                            abs_values=True, **kw)
+        self.assertTrue(data['abs_values'])
+        self.assertTrue(np.all(data['x'] >= 0.0))       # |M| >= 0
+        self.assertTrue(np.all(data['v'] >= 0.0))       # |v| >= 0
+        self.assertAlmostEqual(float(data['x_edges'][0]), 0.0)
+        self.assertAlmostEqual(float(data['x_edges'][-1]), 1.0)
+        self.assertTrue(np.all(data['y_edges'] > 0.0))  # 対数ビン
+
+        # 折り畳んだ値を手で集計した結果と一致する
+        x, v, _, _ = csv_mod.pooled_arrays(df_long, beads, 'm_ising')
+        counts, density, n_in = csv_mod.joint_density(np.abs(x), np.abs(v),
+                                                      data['x_edges'], data['y_edges'])
+        np.testing.assert_array_equal(data['counts'], counts)
+        np.testing.assert_allclose(data['density'], density)
+        self.assertEqual(int(data['n_points']), x.size)
+        self.assertEqual(int(data['n_points_in_range']), n_in)
+
+        # 符号を反転しても同じヒストグラムになる
+        data_flip = csv_mod.heatmap_density_data(flipped, beads, 'm_ising',
+                                                 abs_values=True, **kw)
+        np.testing.assert_array_equal(data['counts'], data_flip['counts'])
+
+        # テーブルは abs_values フラグ付きで、ビンが非負側だけになる
+        df = csv_mod.heatmap_density_table(data, 'all')
+        self.assertFalse(df.empty)
+        self.assertTrue(df['abs_values'].all())
+        self.assertTrue((df['x_low'] >= 0.0).all())
+        self.assertTrue((df['y_low'] > 0.0).all())
+        self.assertEqual(int(df['count'].sum()), int(data['n_points_in_range']))
+
+        # 既定（abs_values なし）は従来どおり符号付きのまま
+        signed = csv_mod.heatmap_density_data(df_long, beads, 'm_ising', **kw)
+        self.assertFalse(signed['abs_values'])
+        self.assertAlmostEqual(float(signed['x_edges'][0]), -1.0)
+        self.assertFalse(bool(csv_mod.heatmap_density_table(signed)['abs_values'].any()))
+
+        # P は元から非負なので横軸 [0, 1] のまま、縦軸だけ |v| になる
+        pol = csv_mod.heatmap_density_data(df_long, beads, 'polar',
+                                           abs_values=True, **kw)
+        self.assertTrue(pol['abs_values'])
+        self.assertTrue(np.all(pol['x'] >= 0.0))
+        self.assertTrue(np.all(pol['v'] >= 0.0))
+
+        # 統計ボックスの見出しとラベル（横軸は |M|、縦軸は |v|）
+        txt = csv_mod._stats_text(np.abs(x), np.abs(v),
+                                  np.zeros(x.size, dtype=np.int64),
+                                  'm_ising', abs_values=True)
+        self.assertIn('|M_{i,t}|', txt)
+        self.assertIn('|v_{i,t}|', txt)
+        self.assertIn('|M_{i,t}|', csv_mod.X_LABELS_ABS['m_ising'])
+        self.assertEqual(csv_mod.X_LABELS_ABS['polar'], csv_mod.X_LABELS['polar'])
+        self.assertIn('|v_{i,t}|', csv_mod.VELOCITY_LABEL_ABS)
+
+        # x_limits を渡すと境界を上書きできる
+        xe, _ = csv_mod.heatmap_edges(np.abs(x), np.abs(v), 'm_ising', x_bins=5,
+                                      x_limits=(0.0, 1.0))
+        self.assertAlmostEqual(float(xe[0]), 0.0)
+        self.assertAlmostEqual(float(xe[-1]), 1.0)
+
+    def test_heatmap_abs_figures_are_written(self):
+        """絶対値版の図（<tag>_heatmap_abs）が PNG と SVG を出力する。"""
+        df_long = csv_mod.long_points_table(make_synthetic_points(n_per_bead=60))
+        beads = [mt_ori.BEAD_LOOKUP['beads1um'], mt_ori.BEAD_LOOKUP['beads3um']]
+        with tempfile.TemporaryDirectory() as td:
+            out = [Path(td)]
+            for x_var in csv_mod.X_VARIABLES:
+                tag = csv_mod.X_FILE_TAG[x_var]
+                data = csv_mod.heatmap_density_data(df_long, beads, x_var,
+                                                    x_bins=6, y_bins=8,
+                                                    abs_values=True)
+                self.assertTrue(data['abs_values'])
+                csv_mod.plot_heatmap(data, x_var, out,
+                                     basename=f"{tag}_heatmap_abs",
+                                     title='unit-test', sign_note='unit-test')
+                for ext in ('png', 'svg'):
+                    self.assertTrue((Path(td) / f"{tag}_heatmap_abs.{ext}").exists())
+        plt.close('all')
+
 
 if __name__ == '__main__':
     unittest.main()
