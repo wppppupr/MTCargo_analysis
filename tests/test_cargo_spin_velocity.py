@@ -629,5 +629,151 @@ class TestJointDensityHeatmap(unittest.TestCase):
         plt.close('all')
 
 
+class TestPercentileCurves(unittest.TestCase):
+    """パーセンタイル速度 vs |M| の曲線（ビン・分位点・テーブル・作図）のテスト。"""
+
+    def test_percentile_edges_modes(self):
+        """横軸は [0, 1] の等幅、quantile では等点数、退化入力でも境界を返す。"""
+        xe = csv_mod.percentile_edges(np.array([0.1, 0.5, 0.9]), x_bins=5)
+        self.assertEqual(xe.size, 6)
+        self.assertAlmostEqual(float(xe[0]), 0.0)
+        self.assertAlmostEqual(float(xe[-1]), 1.0)
+        np.testing.assert_allclose(np.diff(xe), np.diff(xe)[0])
+
+        x = np.linspace(0.0, 1.0, 200) ** 2          # 低 |M| 側に偏った分布
+        xe_q = csv_mod.percentile_edges(x, x_bins=8, x_edges_mode='quantile')
+        cnt, _ = np.histogram(x, bins=xe_q)
+        self.assertEqual(int(cnt.sum()), x.size)
+        self.assertLess(int(cnt.max() - cnt.min()), 5)
+
+        xe_deg = csv_mod.percentile_edges(np.zeros(3), x_bins=4)
+        self.assertGreaterEqual(xe_deg.size, 3)
+
+    def test_percentile_profile_values(self):
+        """ビンごとの p80/p90/p95 が np.percentile と一致し、min_count で間引かれる。"""
+        x = np.array([0.05, 0.10, 0.15, 0.20, 0.85])     # 最後の 1 点だけ別のビン
+        v = np.array([1.0, 2.0, 3.0, 4.0, 9.0])
+        xe = np.array([0.0, 0.5, 1.0])
+        recs = csv_mod.percentile_profile(x, v, xe, percentiles=(80.0, 90.0, 95.0),
+                                          min_count=1)
+        self.assertEqual(len(recs), 2)
+        lo = recs[0]
+        self.assertEqual(lo['count'], 4)
+        self.assertAlmostEqual(lo['x_center'], 0.25)
+        for p in (80.0, 90.0, 95.0):
+            self.assertAlmostEqual(lo['percentiles'][p], float(np.percentile(v[:4], p)))
+        self.assertEqual(recs[1]['count'], 1)
+        self.assertAlmostEqual(recs[1]['percentiles'][80.0], 9.0)
+
+        # |M| = 1（上限）は最後のビンに含める
+        recs2 = csv_mod.percentile_profile(np.array([1.0, 1.0, 1.0]),
+                                           np.array([1.0, 2.0, 3.0]), xe, min_count=1)
+        self.assertEqual(len(recs2), 1)
+        self.assertEqual(recs2[0]['count'], 3)
+
+        # min_count 未満のビンは出力しない
+        self.assertEqual(len(csv_mod.percentile_profile(x, v, xe, min_count=2)), 1)
+
+    def test_percentile_data_and_table(self):
+        """|M| に折り畳まれ、全体分位点とビン別分位点が整合する。"""
+        df_long = csv_mod.long_points_table(make_synthetic_points(n_per_bead=50))
+        beads = [mt_ori.BEAD_LOOKUP['beads1um'], mt_ori.BEAD_LOOKUP['beads3um']]
+        data = csv_mod.percentile_data(df_long, beads, percentiles=(80.0, 90.0, 95.0),
+                                       x_bins=8, min_count=5)
+        self.assertIsNotNone(data)
+        self.assertEqual(data['x_var'], 'm_ising')
+        self.assertTrue(np.all(data['x'] >= 0.0))       # |M|
+        self.assertTrue(np.all(data['v'] >= 0.0))       # |v|
+        self.assertAlmostEqual(float(data['x_edges'][0]), 0.0)
+        self.assertAlmostEqual(float(data['x_edges'][-1]), 1.0)
+        self.assertEqual(data['n_points'], 200)         # 2 条件 x 2 粒子 x 50
+        self.assertEqual(data['n_points_in_range'], data['n_points'])
+        self.assertGreater(len(data['records']), 0)
+        for p, val in data['global_percentiles'].items():
+            self.assertAlmostEqual(val, float(np.percentile(np.abs(data['v']), p)))
+
+        df = csv_mod.percentile_table(data, 'all')
+        self.assertFalse(df.empty)
+        self.assertEqual(len(df), len(data['records']) * 3)       # ビン x 3 分位点
+        self.assertTrue((df['bead_name'] == 'all').all())
+        self.assertTrue(df['abs_values'].all())
+        self.assertTrue(df['x_variable'].eq('m_ising').all())
+        self.assertTrue(df['percentile'].isin([80.0, 90.0, 95.0]).all())
+        self.assertTrue((df['count'] >= 5).all())
+        self.assertTrue((df['x_low'] >= 0.0).all())
+        self.assertTrue((df['v_percentile_um_s'] >= 0.0).all())
+
+        # 同じビン・同じ分位点の値が records と一致する
+        rec0 = data['records'][0]
+        row = df[(df['percentile'] == 80.0)
+                 & np.isclose(df['x_center'], rec0['x_center'])].iloc[0]
+        self.assertAlmostEqual(float(row['v_percentile_um_s']), rec0['percentiles'][80.0])
+        self.assertEqual(int(row['count']), rec0['count'])
+        # 分位点は 80 <= 90 <= 95 の順に単調
+        wide = df.pivot_table(index='x_center', columns='percentile',
+                              values='v_percentile_um_s')
+        self.assertTrue((wide[95.0] >= wide[90.0] - 1e-12).all())
+        self.assertTrue((wide[90.0] >= wide[80.0] - 1e-12).all())
+
+        # データが無い条件では None / 空テーブル
+        self.assertIsNone(csv_mod.percentile_data(df_long, [{'name': 'nosuch'}]))
+        self.assertTrue(csv_mod.percentile_table(None).empty)
+
+    def test_percentile_stats_text(self):
+        """統計ボックスの文言に N・Spearman・全体分位点・ビン情報と条件ラベルが入る。"""
+        df_long = csv_mod.long_points_table(make_synthetic_points(n_per_bead=50))
+        beads = [mt_ori.BEAD_LOOKUP['beads1um'], mt_ori.BEAD_LOOKUP['beads3um']]
+        data = csv_mod.percentile_data(df_long, beads, x_bins=6, min_count=5)
+        txt = csv_mod._percentile_stats_text(data, 'all conditions')
+        self.assertIn('all conditions', txt)
+        self.assertIn('Spearman', txt)
+        self.assertIn('global', txt)
+        self.assertIn('bins =', txt)
+        self.assertIn('$N$ = 200', txt)
+
+        # 点数が少なくても / 空の辞書でも例外を出さない
+        small = csv_mod.percentile_data(df_long, beads[:1], x_bins=2, min_count=0)
+        self.assertIsInstance(csv_mod._percentile_stats_text(small), str)
+        self.assertIsInstance(csv_mod._percentile_stats_text({}), str)
+
+    def test_percentile_figures_are_written(self):
+        """プール / 条件別 / 線形軸 / 基準線なしの図が PNG と SVG を出力する。"""
+        df_long = csv_mod.long_points_table(make_synthetic_points(n_per_bead=60))
+        beads = [mt_ori.BEAD_LOOKUP['beads1um'], mt_ori.BEAD_LOOKUP['beads3um']]
+        kw = dict(percentiles=(80.0, 90.0, 95.0), x_bins=6, min_count=5)
+        data = csv_mod.percentile_data(df_long, beads, **kw)
+        with tempfile.TemporaryDirectory() as td:
+            out = [Path(td)]
+            csv_mod.plot_percentiles([('all conditions', data)], out,
+                                     title='unit-test', sign_note='unit-test')
+            for ext in ('png', 'svg'):
+                self.assertTrue((Path(td) / f"{csv_mod.PERCENTILE_TAG}.{ext}").exists())
+
+            csv_mod.plot_percentiles([('all conditions', data)], out,
+                                     basename=f"{csv_mod.PERCENTILE_TAG}_lin",
+                                     yscale='linear', show_global=False)
+            self.assertTrue((Path(td) / f"{csv_mod.PERCENTILE_TAG}_lin.png").exists())
+
+            series = [(csv_mod._bead_label(b), csv_mod.percentile_data(df_long, [b], **kw))
+                      for b in beads]
+            csv_mod.plot_percentiles(series, out,
+                                     basename=f"{csv_mod.PERCENTILE_TAG}_per_condition",
+                                     global_ref=data)
+            self.assertTrue(
+                (Path(td) / f"{csv_mod.PERCENTILE_TAG}_per_condition.png").exists())
+
+            # データが無ければ何も描かずに戻る（例外を出さない）
+            csv_mod.plot_percentiles([('none', None)], out)
+
+            # 分位点やビン境界を変えても例外を出さない
+            data_q = csv_mod.percentile_data(df_long, beads, percentiles=(50.0, 99.0),
+                                             x_bins=4, x_edges_mode='quantile',
+                                             min_count=5)
+            csv_mod.plot_percentiles([('all conditions', data_q)], out,
+                                     basename=f"{csv_mod.PERCENTILE_TAG}_q")
+            self.assertTrue((Path(td) / f"{csv_mod.PERCENTILE_TAG}_q.png").exists())
+        plt.close('all')
+
+
 if __name__ == '__main__':
     unittest.main()

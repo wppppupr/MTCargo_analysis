@@ -83,9 +83,14 @@ n -> -n で sigma は反転するため、M の符号（したがって v との
     （--heatmap_per_condition で条件別の ..._heatmap_<bead>.png/.svg も出力）
 13. *_heatmap_abs.png/.svg                        : --heatmap_abs を指定したときの絶対値版
                                                   （横軸 = |M_{i,t}| / P_{i,t}, 縦軸 = |v_{i,t}|）
-14. cargo_spin_velocity_heatmap.csv              : 2D ヒストグラムの各ビン（境界・個数・
+14. magnetization_abs_vs_speed_percentiles.png/.svg : |M_{i,t}| のビンごとの速度パーセン
+                                                  タイル（既定 80 / 90 / 95、縦軸 = 速度）
+    （--percentile_per_condition で条件別の ..._per_condition.png/.svg も出力）
+15. cargo_spin_velocity_heatmap.csv              : 2D ヒストグラムの各ビン（境界・個数・
                                                   同時確率密度・abs_values フラグ）。
                                                   count = 0 のビンは省略
+16. cargo_spin_velocity_percentiles.csv          : パーセンタイル曲線の数値（1 行 = 1 ビン
+                                                  x 1 パーセンタイル: 境界・個数・分位点）
 
 【2D ヒートマップ（色 = 同時確率密度 P(v, M)）】
 散布図は 1 点 = 1 (i, t) をそのまま描くため、点数が多いと密度の偏りが見えにくい。
@@ -108,6 +113,22 @@ M はディレクターの符号規約（dir_sign）に依存し、v も変位�
 入らないため範囲外として図中に個数を表示）、統計量（r, rho, 傾き）も |v| vs |M| で
 計算し直す。散布図は従来どおり符号付きのまま。
 
+【パーセンタイル速度 vs |M|（縦軸 = 速度、横軸 = |M|）】
+--no_percentiles を指定しない限り、|M| のビンごとに速度 |v| の**パーセンタイル**
+（既定 80 / 90 / 95、--percentile_list）を曲線で描く。裾の重い速度分布では平均や
+標準偏差より分位点の方が「速い側の代表値」として解釈しやすく、ビンごとの
+パーセンタイルは「その |M| 帯で |v| がこの値を超える割合が 20 / 10 / 5 %」を意味する。
+
+- 横軸: 折り畳んだ |M| ∈ [0, 1] を等幅ビン（--percentile_bins_x 既定 10、
+  --percentile_x_edges quantile で等点数ビン）。点数が --percentile_min_count
+  （既定 20）未満のビンは描かない（曲線が途切れる）。
+- 縦軸: 速度 |v|（--percentile_yscale log / linear、既定 log）。点線は全条件プールの
+  パーセンタイル基準線（--no_percentile_global で省略）。
+- 図: magnetization_abs_vs_speed_percentiles.png/.svg（全条件プール）。
+  --percentile_per_condition を付けると条件（粒子径）別に色 = パーセンタイル・
+  線種/マーカー = 条件で重ねた ..._per_condition.png/.svg も出力する。
+- 数値: cargo_spin_velocity_percentiles.csv（1 行 = 1 ビン x 1 パーセンタイル）。
+
 【実行例】
     pixi run python plot_cargo_spin_velocity.py --beads all \\
         --pixel_stride 4 --frame_stride 5 --flow_cache_dir /tmp/mtcache
@@ -116,6 +137,8 @@ M はディレクターの符号規約（dir_sign）に依存し、v も変位�
     pixi run python plot_cargo_spin_velocity.py --beads 1um \\
         --heatmap_per_condition --heatmap_log_color            # ヒートマップを条件別 + 対数色
     pixi run python plot_cargo_spin_velocity.py --heatmap_abs   # |v| vs |M| のヒートマップも
+    pixi run python plot_cargo_spin_velocity.py --percentile_per_condition \\
+        --percentile_yscale linear      # p80/90/95 の曲線を条件別・線形軸で
     pixi run python plot_cargo_spin_velocity.py --no_heatmap   # 散布図だけを出力
 """
 
@@ -1600,6 +1623,291 @@ def plot_overlay(
 
 
 # =============================================================================
+# パーセンタイル速度の曲線（横軸 = |M|、縦軸 = 速度 |v|）
+# =============================================================================
+
+# 横軸は折り畳んだ |M| のみ（物理範囲は [0, 1]）
+PERCENTILE_X_VAR = 'm_ising'
+PERCENTILE_TAG = 'magnetization_abs_vs_speed_percentiles'
+PERCENTILE_CSV_TAG = 'cargo_spin_velocity_percentiles'
+
+
+def percentile_edges(
+    x: np.ndarray,
+    x_bins: int = 10,
+    x_edges_mode: str = 'uniform',
+    x_limits: Sequence[float] = (0.0, 1.0),
+) -> np.ndarray:
+    """
+    |M| のビン境界を作る。
+
+    uniform（既定）は |M| の物理範囲 [0, 1] を等幅に、quantile では等点数に切る。
+    """
+    xs = np.asarray(x, dtype=float)
+    xs = xs[np.isfinite(xs)]
+    n_x = max(2, int(x_bins))
+    lo, hi = float(x_limits[0]), float(x_limits[1])
+    if str(x_edges_mode) == 'quantile' and xs.size >= n_x:
+        return _monotone_edges(np.quantile(xs, np.linspace(0.0, 1.0, n_x + 1)),
+                               n_x, (lo, hi))
+    return np.linspace(lo, hi, n_x + 1)
+
+
+def percentile_profile(
+    x: np.ndarray,
+    v: np.ndarray,
+    x_edges: np.ndarray,
+    percentiles: Sequence[float] = (80.0, 90.0, 95.0),
+    min_count: int = 20,
+) -> List[dict]:
+    """
+    横軸（|M|）ビンごとに速度 |v| のパーセンタイルを計算する。
+
+    点数が min_count 未満のビンは曲線が暴れるため出力しない（= 線が途切れる）。
+    Returns
+    -------
+    list of dict
+        ビンごとに {'x_low', 'x_high', 'x_center', 'count', 'percentiles'}。
+        percentiles は {パーセンタイル値: |v| のその分位点}。
+    """
+    xs = np.asarray(x, dtype=float)
+    vs = np.asarray(v, dtype=float)
+    xe = np.asarray(x_edges, dtype=float)
+    keep = np.isfinite(xs) & np.isfinite(vs)
+    xs, vs = xs[keep], vs[keep]
+    ps = [float(p) for p in percentiles]
+
+    records: List[dict] = []
+    n_bins = max(1, xe.size - 1)
+    for k in range(n_bins):
+        lo, hi = float(xe[k]), float(xe[k + 1])
+        # 最後のビンは上限を含める（|M| = 1 の点が落ちないように）
+        sel = (xs >= lo) & ((xs <= hi) if k == n_bins - 1 else (xs < hi))
+        count = int(sel.sum())
+        if count < int(min_count):
+            continue
+        vals = vs[sel]
+        records.append({
+            'x_low': lo, 'x_high': hi, 'x_center': 0.5 * (lo + hi), 'count': count,
+            'percentiles': {p: float(np.percentile(vals, p)) for p in ps},
+        })
+    return records
+
+
+def percentile_data(
+    df_long: pd.DataFrame,
+    target_beads: Sequence[dict],
+    percentiles: Sequence[float] = (80.0, 90.0, 95.0),
+    x_bins: int = 10,
+    x_edges_mode: str = 'uniform',
+    min_count: int = 20,
+) -> Optional[dict]:
+    """
+    条件（粒子径）をまたいでプールした (|M|, |v|) からビンごとの速度パーセンタイルを作る。
+
+    縦軸を速度・横軸を |M| にするため、必ず絶対値に折り畳んでから集計する
+    （相関統計も |v| vs |M| で計算する）。点が 1 つも無ければ None。
+    """
+    x, v, _, g = pooled_arrays(df_long, target_beads, PERCENTILE_X_VAR)
+    if x.size == 0:
+        return None
+    x = np.abs(x)
+    v = np.abs(v)
+    x_edges = percentile_edges(x, x_bins=x_bins, x_edges_mode=x_edges_mode)
+    records = percentile_profile(x, v, x_edges, percentiles=percentiles,
+                                 min_count=min_count)
+    ps = [float(p) for p in percentiles]
+    return {
+        'x_var': PERCENTILE_X_VAR,
+        'x': x, 'v': v, 'group': g,
+        'percentiles': ps,
+        'x_edges': x_edges, 'records': records,
+        'min_count': int(min_count),
+        'n_points': int(x.size),
+        'n_points_in_range': int(((x >= x_edges[0]) & (x <= x_edges[-1])).sum()),
+        'global_percentiles': {p: float(np.percentile(v, p)) for p in ps},
+        'bead_names': [b.get('name') for b in (target_beads or [])],
+    }
+
+
+def percentile_table(data: Optional[dict], bead_label: str = 'all') -> pd.DataFrame:
+    """
+    パーセンタイル曲線の数値（1 行 = 1 ビン x 1 パーセンタイル）を long 形式にする。
+
+    列: bead_name / x_variable / abs_values / percentile / x_low / x_high / x_center /
+    count / v_percentile_um_s / n_points / n_points_in_range。
+    """
+    columns = ['bead_name', 'x_variable', 'abs_values', 'percentile',
+               'x_low', 'x_high', 'x_center', 'count', 'v_percentile_um_s',
+               'n_points', 'n_points_in_range']
+    if not data:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    for rec in data.get('records', []):
+        for p in data.get('percentiles', []):
+            rows.append({
+                'bead_name': str(bead_label),
+                'x_variable': str(data['x_var']),
+                'abs_values': True,
+                'percentile': float(p),
+                'x_low': rec['x_low'], 'x_high': rec['x_high'],
+                'x_center': rec['x_center'],
+                'count': int(rec['count']),
+                'v_percentile_um_s': rec['percentiles'][float(p)],
+                'n_points': int(data['n_points']),
+                'n_points_in_range': int(data['n_points_in_range']),
+            })
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return (pd.DataFrame(rows, columns=columns)
+            .sort_values(['percentile', 'x_low']).reset_index(drop=True))
+
+
+def _percentile_colors(n: int, cmap: str = 'viridis') -> List:
+    """パーセンタイル曲線用の色（白背景で薄すぎない範囲に収める）。"""
+    n = int(n)
+    if n <= 0:
+        return []
+    cm = plt.get_cmap(cmap)
+    if n == 1:
+        return [cm(0.45)]
+    return [cm(0.08 + 0.68 * k / (n - 1)) for k in range(n)]
+
+
+def _percentile_stats_text(data: dict, label: str = '') -> str:
+    """図中に載せる統計量（N, Spearman, 全体パーセンタイル, ビン数と個数）。"""
+    x = np.asarray(data.get('x', np.empty(0)), dtype=float)
+    v = np.asarray(data.get('v', np.empty(0)), dtype=float)
+    g = np.asarray(data.get('group', np.empty(0, dtype=object)), dtype=object)
+    head = '$|M_{i,t}|$ vs speed $|v_{i,t}|$'
+    if label:
+        head += f' ({label})'
+    lines = [head, f"$N$ = {x.size:,} (i, t) points"]
+    if x.size >= 3 and np.unique(x).size > 1 and np.unique(v).size > 1:
+        groups = g if g.size == x.size else np.array(['all'] * x.size, dtype=object)
+        st = _corr_stats(x, v, groups)
+        lines.append(f"Spearman $\\rho$ = {st['spearman_rho']:+.3f} "
+                     f"($p$ = {st['spearman_p']:.1e})")
+    gl = data.get('global_percentiles', {})
+    if gl:
+        lines.append('global ' + ', '.join(f'$p_{{{p:g}}}$ = {gl[p]:.4g}'
+                                           for p in sorted(gl)) + r' [$\mu$m/s]')
+    recs = list(data.get('records', []))
+    if recs:
+        counts = [int(r['count']) for r in recs]
+        n_bins = int(np.asarray(data.get('x_edges', []), dtype=float).size - 1)
+        lines.append(f"bins = {n_bins} ($n$ = {min(counts):,}-{max(counts):,}), "
+                     f"$n$ < {int(data.get('min_count', 0))} omitted")
+    return '\n'.join(lines)
+
+
+def plot_percentiles(
+    series: Sequence[Tuple[str, Optional[dict]]],
+    out_dirs: Sequence[Path],
+    basename: str = PERCENTILE_TAG,
+    title: str = '',
+    sign_note: str = '',
+    yscale: str = 'log',
+    show_global: bool = True,
+    global_ref: Optional[dict] = None,
+) -> None:
+    """
+    |M_{i,t}| のビンごとの速度パーセンタイル（既定 80 / 90 / 95）を曲線で描く。
+
+    縦軸 = 速度 |v|（既定で対数）、横軸 = |M| ∈ [0, 1] の等幅ビン。series は
+    (条件ラベル, percentile_data の返り値) の並びで、1 要素なら全条件プール、
+    複数なら色 = パーセンタイル・線種とマーカー = 条件で重ね描きする。点線は
+    全体（プール）のパーセンタイル基準線で、統計ボックスも global_ref を渡したときは
+    そちら（プール）の値を示す。
+    """
+    usable = [(str(lab), d) for lab, d in (series or []) if d and d.get('records')]
+    if not usable:
+        print(f"  [SKIP] no percentile data for {basename}")
+        return
+
+    ps = list(usable[0][1]['percentiles'])
+    colors = _percentile_colors(len(ps))
+    styles = [('-', 'o'), ('--', 's'), (':', '^'), ('-.', 'D'), ('-', 'v')]
+
+    fig, ax = plt.subplots(figsize=(8.4, 6.2))
+    y_vals: List[float] = []
+    handles_pct = [Line2D([], [], ls='-', marker='o', color=colors[k], ms=5.5,
+                          label=f"$p_{{{p:g}}}$") for k, p in enumerate(ps)]
+    handles_cond: List[Line2D] = []
+    for si, (lab, d) in enumerate(usable):
+        ls, mk = styles[si % len(styles)]
+        recs = list(d['records'])
+        cx = np.array([r['x_center'] for r in recs], dtype=float)
+        for k, p in enumerate(ps):
+            cy = np.array([r['percentiles'][p] for r in recs], dtype=float)
+            keep = np.isfinite(cy)
+            if str(yscale) == 'log':
+                keep &= cy > 0.0          # 対数軸では 0 は描けない
+            if not keep.any():
+                continue
+            ax.plot(cx[keep], cy[keep], ls=ls, marker=mk, color=colors[k],
+                    ms=5.5, lw=1.9, mec='white', mew=0.8, alpha=0.95, zorder=4)
+            y_vals.extend(cy[keep].tolist())
+        handles_cond.append(Line2D([], [], ls=ls, marker=mk, color='0.3', label=lab))
+
+    # --- 全体（プール）のパーセンタイルを基準線として重ねる ---
+    ref = global_ref if global_ref is not None else usable[0][1]
+    if bool(show_global) and ref:
+        gl = ref.get('global_percentiles', {}) or {}
+        for k, p in enumerate(ps):
+            val = gl.get(p)
+            if val is None or not np.isfinite(val) or float(val) <= 0.0:
+                continue
+            ax.axhline(float(val), color=colors[k], ls=':', lw=1.4, alpha=0.85, zorder=3)
+            y_vals.append(float(val))
+
+    xe = np.asarray(usable[0][1]['x_edges'], dtype=float)
+    ax.set_xlim(float(xe[0]), float(xe[-1]))
+    ax.set_xscale('linear')
+    ax.set_yscale('log' if str(yscale) == 'log' else 'linear')
+    if y_vals:
+        y_hi = float(np.max(y_vals)) * 1.5
+        if str(yscale) == 'log':
+            pos = [yy for yy in y_vals if yy > 0.0]
+            y_lo = float(np.min(pos)) * 0.55 if pos else y_hi / 100.0
+        else:
+            y_lo = 0.0
+        ax.set_ylim(y_lo, y_hi)
+    ax.set_xlabel(X_LABELS_ABS[PERCENTILE_X_VAR])
+    ax.set_ylabel(VELOCITY_LABEL_ABS)
+    ax.grid(True, which='both', alpha=0.35)
+
+    ax.set_title(title or f"{X_LABELS_ABS[PERCENTILE_X_VAR]} vs {VELOCITY_LABEL_ABS}",
+                 fontsize=13, pad=30)
+    # 凡例は「色 = パーセンタイル」（左上）と「線種 = 条件」（右上）を分けて 1 段ずつ置く
+    leg_pct = ax.legend(handles=handles_pct, fontsize=9, loc='lower left',
+                        bbox_to_anchor=(0.0, 1.005),
+                        ncol=max(1, min(6, len(handles_pct))), framealpha=0.95,
+                        borderaxespad=0.0, handletextpad=0.4, columnspacing=0.9)
+    if len(handles_cond) > 1:
+        ax.add_artist(leg_pct)
+        ax.legend(handles=handles_cond, fontsize=9, loc='lower right',
+                  bbox_to_anchor=(1.0, 1.005),
+                  ncol=max(1, min(4, len(handles_cond))), framealpha=0.95,
+                  borderaxespad=0.0, handletextpad=0.4, columnspacing=0.9)
+    # 条件別に重ねるときは、統計量と基準線はプール（= global_ref）側の値を示す
+    stats_src = global_ref if global_ref is not None else usable[0][1]
+    txt = _percentile_stats_text(stats_src, 'all conditions' if len(usable) > 1 else '')
+    if len(usable) > 1:
+        txt += f"\n{len(usable)} conditions overlaid"
+    ax.text(0.025, 0.975, txt, transform=ax.transAxes, ha='left', va='top',
+            fontsize=9, color='0.15',
+            bbox=dict(boxstyle='round,pad=0.35', fc='white', ec='0.7', alpha=0.9))
+    if sign_note:
+        wrapped = '\n'.join(textwrap.wrap(str(sign_note), width=110)) or str(sign_note)
+        fig.text(0.5, 0.008, wrapped, ha='center', va='bottom', fontsize=8.5,
+                 color='0.3', multialignment='center')
+
+    mt_ori.save_figure_to_all(fig, basename, list(out_dirs))
+    plt.close(fig)
+
+
+# =============================================================================
 # CLI
 # =============================================================================
 
@@ -1684,6 +1992,25 @@ def build_parser() -> argparse.ArgumentParser:
                         help="ヒートマップのカラーマップ名")
     parser.add_argument('--no_heatmap_marginals', action='store_true',
                         help="ヒートマップに周辺分布（上 = x の個数、右 = v の個数）を付けない")
+    parser.add_argument('--no_percentiles', action='store_true',
+                        help="パーセンタイル速度の図（横軸 |M|、縦軸 = 速度）を出力しない")
+    parser.add_argument('--percentile_list', type=float, nargs='+',
+                        default=[80.0, 90.0, 95.0],
+                        help="描くパーセンタイル [%%]（横軸 |M|、縦軸 = 速度）")
+    parser.add_argument('--percentile_bins_x', type=int, default=10,
+                        help="パーセンタイル曲線の横軸（|M|）のビン数")
+    parser.add_argument('--percentile_x_edges', type=str, default='uniform',
+                        choices=['uniform', 'quantile'],
+                        help="パーセンタイル曲線の横軸ビン（uniform = [0, 1] 等幅、quantile = 等点数）")
+    parser.add_argument('--percentile_min_count', type=int, default=20,
+                        help="パーセンタイルを計算するビンの最小点数（これ未満は描かない）")
+    parser.add_argument('--percentile_yscale', type=str, default='log',
+                        choices=['linear', 'log'],
+                        help="パーセンタイル曲線の縦軸（速度）のスケール")
+    parser.add_argument('--no_percentile_global', action='store_true',
+                        help="パーセンタイル曲線に全体（プール）の基準線（点線）を描かない")
+    parser.add_argument('--percentile_per_condition', action='store_true',
+                        help="パーセンタイル曲線を条件（粒子径）別にも重ね描きする")
     parser.add_argument('--flow_cache', type=str, default='auto',
                         choices=['auto', 'off', 'refresh'],
                         help="光学フローの間引きキャッシュ（plot_mt_orientation_distribution と共通）")
@@ -1875,6 +2202,49 @@ def main() -> None:
     if df_heat_frames:
         mt_ori.save_csv_to_all(pd.concat(df_heat_frames, ignore_index=True),
                                'cargo_spin_velocity_heatmap', out_dirs)
+
+    # --- パーセンタイル速度 vs |M|（縦軸 = 速度、横軸 = |M|） ---
+    df_pct_frames: List[pd.DataFrame] = []
+    if not args.no_percentiles:
+        pct_kwargs = dict(percentiles=args.percentile_list,
+                          x_bins=args.percentile_bins_x,
+                          x_edges_mode=args.percentile_x_edges,
+                          min_count=args.percentile_min_count)
+        pct_title = f"{X_LABELS_ABS[PERCENTILE_X_VAR]} vs speed $|v_{{i,t}}|$"
+        data_pct = percentile_data(df_long, target_beads, **pct_kwargs)
+        if data_pct is not None:
+            df_pct_frames.append(percentile_table(data_pct, 'all'))
+            print(f"  Percentiles {PERCENTILE_TAG}: p = "
+                  f"{', '.join(f'{p:g}' for p in data_pct['percentiles'])}, "
+                  f"{data_pct['n_points_in_range']:,} / {data_pct['n_points']:,} points, "
+                  f"{len(data_pct['records'])} bin(s)")
+            plot_percentiles(
+                [('all conditions', data_pct)], out_dirs,
+                title=f"{pct_title}: all conditions ($N$ = {data_pct['n_points']:,})",
+                sign_note=heat_note, yscale=args.percentile_yscale,
+                show_global=not args.no_percentile_global)
+        if args.percentile_per_condition:
+            series_pct = []
+            for bead in target_beads:
+                d_bead = percentile_data(df_long, [bead], **pct_kwargs)
+                if d_bead is None or not d_bead['records']:
+                    continue
+                df_pct_frames.append(percentile_table(d_bead, bead['name']))
+                series_pct.append((_bead_label(bead), d_bead))
+            if series_pct:
+                print(f"  Percentiles {PERCENTILE_TAG}_per_condition: "
+                      f"{len(series_pct)} condition(s)")
+                plot_percentiles(
+                    series_pct, out_dirs,
+                    basename=f"{PERCENTILE_TAG}_per_condition",
+                    title=f"{pct_title}: per condition",
+                    sign_note=heat_note, yscale=args.percentile_yscale,
+                    show_global=not args.no_percentile_global,
+                    global_ref=data_pct)
+
+    if df_pct_frames:
+        mt_ori.save_csv_to_all(pd.concat(df_pct_frames, ignore_index=True),
+                               PERCENTILE_CSV_TAG, out_dirs)
 
     # --- コンソール要約 ---
     print("-" * 78)
