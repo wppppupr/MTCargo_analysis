@@ -72,6 +72,10 @@ flowchart TD
 | `plot_polar` | `pixi run plot_polar` | 局所ポーラーオーダーの全ビーズ比較プロット |
 | `mt_orientation` | `pixi run mt_orientation` | 光学フロー配向角のネマチック主軸基準ヒストグラム & レーダーチャート（$\Delta\theta$ が 0 / $\pi$ にピーク） |
 | `mt_orientation_quick` | `pixi run mt_orientation_quick` | 上記の高速確認版（フレーム / 画素を間引いて全条件を一括処理） |
+| `ising` | `pixi run ising` | 光学フローの Ising スピン $\sigma_i = \mathrm{sign}(\mathbf{u}_i \cdot \mathbf{n})$ から $\langle|M_{\mathrm{Ising}}(R)|\rangle$ の窓サイズ依存を計算 |
+| `ising_all` | `pixi run ising_all` | 上記の全ビーズ条件一括版 |
+| `ising_quick` | `pixi run ising_quick` | 上記の高速確認版（`frame_stride 20` / `pixel_stride 16`） |
+| `ising_local` | `pixi run ising_local` | 局所主軸 $\theta(\mathbf{x},t)$ をディレクターに使う版（`--director local`） |
 
 ### 2. 角度空間相関タスク（全体・第1主成分・第2主成分を GPU で自動計算）
 | タスク名 | コマンド例 | 対象 |
@@ -174,6 +178,42 @@ pixi run python plot_mt_orientation_distribution.py \
 - 出力図: `mt_orientation_histogram_panels` / `mt_orientation_histogram_overlay` / `mt_orientation_radar_panels` / `mt_orientation_radar_overlay` / `mt_orientation_nematic_folded` / `mt_orientation_theta_time_series`（`.png` / `.svg`）、出力 CSV: `mt_orientation_per_experiment`, `mt_orientation_histogram`, `mt_orientation_nematic_folded_histogram`, `mt_orientation_theta_nem_timeseries`, `mt_orientation_summary`
 - **計算コスト（実測）**: `GFP_flows.h5` のチャンクは 1 フレーム = 22 MB（2160×2560 float16）で、ストライド読み出しでも「使用フレーム数 × フレームサイズ」のバイト数を読むため（`pixel_stride` を下げても I/O はほぼ不変、計算のみ増加）、実行時間は **I/O 支配（>95%）**です。角度計算＋ビン集計は単一パス `O(使用フレーム数 × 使用画素数)` で 6.1 ms/frame（2160×2560, `pixel_stride 8`）。最適化として (1) ch0/ch1 を 1 アクセスでまとめて読む（別アクセスだと同一チャンクを 2 回読み 581 ms → 292 ms/frame）、(2) `np.bincount` ベースの一様ビンヒストグラム（12.9 → 6.1 ms/frame）、(3) 間引きフローキャッシュ `--flow_cache auto`（初回パス中に作成＝追加 I/O なし、再実行は実測 187.7 s → 17.1 s / 106 フレーム = **11 倍高速**）を実装しています。NAS が遅い場合は `--flow_cache_dir /tmp/mt_flow_cache` のようにローカルディスクを指定してください。複数実験の並列読みは本 NAS では逆効果（実測: 3 並列で合計 16.6 MB/s < 単一 69 MB/s）のため並列化は行いません。
 - 出力図: `mt_orientation_histogram_panels` / `mt_orientation_histogram_overlay` / `mt_orientation_radar_panels` / `mt_orientation_radar_overlay` / `mt_orientation_nematic_folded` / `mt_orientation_theta_time_series`（`.png` / `.svg`）、出力 CSV: `mt_orientation_per_experiment`, `mt_orientation_histogram`, `mt_orientation_nematic_folded_histogram`, `mt_orientation_theta_nem_timeseries`, `mt_orientation_summary`
+
+### 光学フローの Ising スピン磁化 $\langle|M_{\mathrm{Ising}}(R)|\rangle$ (`plot_ising_magnetization.py`, [`libs/ising_magnetization.py`](libs/ising_magnetization.py))
+
+`GFP_flows.h5` の流速場を「ディレクター $\mathbf{n}$ に平行 / 反平行な 2 状態スピン」とみなし、空間スケール $R$ における秩序（磁化）の減衰を定量化します。
+
+$$
+\sigma_i = \mathrm{sign}\!\left(\mathbf{u}_i \cdot \mathbf{n}\right),\qquad
+M_{\mathrm{Ising}}(R) = \frac{1}{N_R}\sum_{i \in \text{block}(R)} \sigma_i,\qquad
+\text{block} = R \times R\ \text{px}
+$$
+
+$R \times R$ のブロックを重複率 `--window_overlap` で敷き詰め、**全ブロック × 全フレーム × 全実験**で平均した $\langle|M_{\mathrm{Ising}}(R)|\rangle$ を窓サイズの関数として両対数プロットし、局所傾き $p(R) = -d\log\langle|M|\rangle / d\log R$ とべき乗則フィット指数を同時に出力します。$|M|$ を取るため **$\mathbf{n} \to -\mathbf{n}$ で不変**（headless ネマチック軸の 2 状態縮退を消去）で、$|M(R)| \le 1$ かつ $p \le 1$ が常に成り立ちます。
+
+| 期待されるスケーリング | 指数 $p$ | 物理的意味 |
+| :--- | :--- | :--- |
+| $\langle\|M(R)\|\rangle = \mathrm{const.}$ | $0$ | 流速場が完全に配向（強磁性）→ 相関長 $\xi \gg R$ |
+| $\langle\|M(R)\|\rangle \sim R^{-1/8}$ | $0.125$ | 2D Ising 臨界点（スピン間の短距離相関のみ） |
+| $\langle\|M(R)\|\rangle \sim R^{-1}$ | $1$ | 窓内でスピンが空間的に無相関（ランダム）→ 上下限 |
+
+```bash
+pixi run ising                                  # 既定（frame_stride 5 / pixel_stride 8、director = global）
+pixi run ising_quick                            # 全条件の高速確認（frame_stride 20 / pixel_stride 16）
+pixi run ising_local                            # 局所主軸 theta(x,t) をディレクターに使用
+pixi run python plot_ising_magnetization.py \
+    --beads beads06um beads1um --window_sizes '16:1024:16' --window_overlap 0.5
+pixi run python plot_ising_magnetization.py \
+    --director global --theta_sign auto --mask_radius_factor 1.5   # 貨物粒子近傍を除外
+```
+
+- **ディレクター $\mathbf{n}$**: `--director global`（既定）はフレームごとの大域ネマチック主軸 $\theta_{\mathrm{nem}}(t)$ を `MTs_im_theta.zarr` から読み（2 テンソル平均、無ければフロー配向から算出）、`--director local` は同ファイルの**局所**配向場 $\theta(\mathbf{x},t)$ を各画素のディレクターに使います。
+- **角度規約の自動整合**: `plot_mt_orientation_distribution.py` と同様に $\pm\theta$ の両方を評価し、$\langle\cos 2\Delta\theta\rangle$ が大きい側を採用（`--theta_sign auto`、既定）。採用符号は CSV の `theta_source` / 図タイトルに記録されます。
+- **重複窓の平均**（`--window_overlap 0.5` 等）は窓サイズが大きい領域での統計量を増やせます。ただしブロック同士は独立でなくなるため、**誤差バー（フレーム・実験間 SEM）はその分だけ過小評価**になります（既定 `0.0` = 非重複タイル）。
+- **無効画素の扱い**: `|u| < --min_flow_mag` の画素はスピン未定義（$\sigma = 0$）として除外し、有効画素率が `--min_valid_fraction` 未満のブロックは $\langle|M|\rangle$ の集計から除外します（スピンマップ図では灰色 = 無効画素）。粒子近傍の流れの乱れを避けたい場合は `--mask_radius_factor`（$\times R_c$、既定 `0` = マスクなし）で除外できます。
+- **計算コスト**: ブロック磁化は**積分画像（summed-area table）**で $O(1)$ 集計するため、窓サイズを増やしてもほぼ追加コストはありません（支配的なのは `GFP_flows.h5` の読み込み I/O）。`plot_mt_orientation_distribution.py` と共通の間引きフローキャッシュ（`--flow_cache auto` / `--flow_cache_dir`）を再利用するので、`mt_orientation` 実行後は 2 回目が高速です。
+- 出力図: `ising_magnetization_vs_window`（両対数 + 局所傾き $p(R)$）/ `ising_magnetization_vs_window_linear`（線形軸）/ `ising_magnetization_per_experiment`（実験別カーブ + 条件平均）/ `ising_polar_bias`（$\langle\sigma\rangle$ と $\sigma = +1$ の割合）/ `ising_spin_map_examples`（$\pm$ スピンマップ例、`.png` / `.svg`）
+- 出力 CSV: `ising_magnetization_curve`（条件 × 窓サイズの $\langle|M|\rangle$ ± SEM / $n$）/ `ising_magnetization_per_experiment`（実験別）/ `ising_magnetization_summary`（条件別集計: `abs_mean_at_min_R` / `abs_mean_at_max_R`、`power_law_exponent` / `power_law_r2`（フィット区間）と `power_law_upper_exponent`（$R$ が大きい後半区間）、`polar_bias_mean`、`frac_plus_mean`、`nematic_order_cos2_mean`、`theta_source` など）
 
 ---
 
