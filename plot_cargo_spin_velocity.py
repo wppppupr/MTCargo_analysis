@@ -103,6 +103,9 @@ v の条件付き分布の代表値）。周辺分布（上 = x の個数、右 
         --pixel_stride 4 --frame_stride 5 --flow_cache_dir /tmp/mtcache
     pixi run python plot_cargo_spin_velocity.py --beads 1um 3um \\
         --region_factor 3 --velocity flow --yscale log
+    pixi run python plot_cargo_spin_velocity.py --beads 1um \\
+        --heatmap_per_condition --heatmap_log_color            # ヒートマップを条件別 + 対数色
+    pixi run python plot_cargo_spin_velocity.py --no_heatmap   # 散布図だけを出力
 """
 
 import argparse
