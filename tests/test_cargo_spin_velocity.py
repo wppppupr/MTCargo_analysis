@@ -455,7 +455,6 @@ class TestJointDensityHeatmap(unittest.TestCase):
         self.assertEqual(n_in, 2)
         self.assertEqual(int(counts.sum()), 2)
 
-
     def test_pooled_arrays_concatenates_conditions(self):
         """プールすると各条件の点が連結される（空指定なら空配列）。"""
         df_long = csv_mod.long_points_table(make_synthetic_points(n_per_bead=10))
