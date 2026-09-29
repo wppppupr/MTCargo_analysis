@@ -28,6 +28,8 @@ def make_synthetic_points(n_per_bead: int = 40, seed: int = 0) -> pd.DataFrame:
             for k in range(n_per_bead):
                 m = float(np.clip(rng.normal(0.0, 0.5), -1, 1))
                 v = float(abs(0.1 + offset + 0.3 * m + rng.normal(0, 0.02)))
+                v_mt = 0.25
+                v_tilde = v / v_mt
                 polar = float(np.clip(0.5 + 0.3 * rng.random(), 0, 1))
                 rows.append({
                     'bead_name': bead_name,
@@ -40,10 +42,14 @@ def make_synthetic_points(n_per_bead: int = 40, seed: int = 0) -> pd.DataFrame:
                     'x_um': 10.0, 'y_um': 10.0,
                     'm_ising': m,
                     'polar': polar,
+                    'v_tilde': v_tilde,
+                    'v_track_tilde': v_tilde,
+                    'v_flow_tilde': v_tilde,
                     'v_um_s': v,
                     'v_track_um_s': v,
                     'v_flow_um_s': v,
                     'v_flow_absmean_um_s': v,
+                    'v_mt_um_s': v_mt,
                     'region_n_valid': 30,
                     'region_n_disk': 32,
                     'region_valid_fraction': 30 / 32,
@@ -136,10 +142,18 @@ class TestVelocityUtilities(unittest.TestCase):
         np.testing.assert_allclose(xs, [3.0, 0.0])
         np.testing.assert_allclose(ys, [4.0, 5.0])
 
-        v = csv_mod.tracked_velocity_lookup(tracks, tau=1, scale=0.11, frame_interval=4.0)
-        # |dr| = 5 px -> 5 * 0.11 / 4 = 0.1375 um/s
-        self.assertAlmostEqual(v[(0, 0)], 5.0 * 0.11 / 4.0, places=12)
-        self.assertAlmostEqual(v[(1, 0)], 5.0 * 0.11 / 4.0, places=12)
+        v = csv_mod.tracked_velocity_lookup(tracks, tau=1, scale=0.11, frame_interval=4.0,
+                                            smooth_method='none')
+        # (vx, vy, v_mag)
+        # dx = 3, dy = 4 -> vx = 3 * 0.11 / 4, vy = 4 * 0.11 / 4, v_mag = 5 * 0.11 / 4 = 0.1375 um/s
+        vx0, vy0, vmag0 = v[(0, 0)]
+        self.assertAlmostEqual(vx0, 3.0 * 0.11 / 4.0, places=12)
+        self.assertAlmostEqual(vy0, 4.0 * 0.11 / 4.0, places=12)
+        self.assertAlmostEqual(vmag0, 5.0 * 0.11 / 4.0, places=12)
+        vx1, vy1, vmag1 = v[(1, 0)]
+        self.assertAlmostEqual(vx1, 0.0, places=12)
+        self.assertAlmostEqual(vy1, 5.0 * 0.11 / 4.0, places=12)
+        self.assertAlmostEqual(vmag1, 5.0 * 0.11 / 4.0, places=12)
         # frame 2 -> 3 が存在しないので (0, 2) は無い
         self.assertNotIn((0, 2), v)
         self.assertNotIn((0, 3), v)
@@ -154,12 +168,105 @@ class TestVelocityUtilities(unittest.TestCase):
             'x': [0.0, 1.0, 3.0],
             'y': [0.0, 0.0, 0.0],
         })
-        v1 = csv_mod.tracked_velocity_lookup(tracks, tau=1, scale=1.0, frame_interval=2.0)
-        v2 = csv_mod.tracked_velocity_lookup(tracks, tau=2, scale=1.0, frame_interval=2.0)
-        self.assertAlmostEqual(v1[(0, 0)], 1.0 / 2.0)
-        self.assertAlmostEqual(v1[(0, 1)], 2.0 / 2.0)
-        self.assertAlmostEqual(v2[(0, 0)], 3.0 / 4.0)
+        v1 = csv_mod.tracked_velocity_lookup(tracks, tau=1, scale=1.0, frame_interval=2.0,
+                                             smooth_method='none')
+        v2 = csv_mod.tracked_velocity_lookup(tracks, tau=2, scale=1.0, frame_interval=2.0,
+                                             smooth_method='none')
+        self.assertAlmostEqual(v1[(0, 0)][2], 1.0 / 2.0)
+        self.assertAlmostEqual(v1[(0, 1)][2], 2.0 / 2.0)
+        self.assertAlmostEqual(v2[(0, 0)][2], 3.0 / 4.0)
         self.assertNotIn((0, 1), v2)
+
+    def test_moving_average_smoothing(self):
+        """移動平均フィルタ（moving_average_1d, tracked_velocity_lookup）による軌跡平滑化をテストする。"""
+        # 1D 移動平均の端点と内部の計算
+        x = np.array([1.0, 5.0, 2.0, 8.0, 3.0])
+        ma3 = csv_mod.moving_average_1d(x, window=3)
+        self.assertAlmostEqual(ma3[1], (1.0 + 5.0 + 2.0) / 3.0)
+        self.assertAlmostEqual(ma3[2], (5.0 + 2.0 + 8.0) / 3.0)
+        self.assertAlmostEqual(ma3[3], (2.0 + 8.0 + 3.0) / 3.0)
+
+        # 線形等速運動（x(t) = 2.0 * t）: 移動平均をかけても速度は厳密に保たれる
+        frames = np.arange(20)
+        tracks_linear = pd.DataFrame({
+            'particle': 0,
+            'frame': frames,
+            'x': 2.0 * frames,
+            'y': 1.0 * frames,
+        })
+        v_ma = csv_mod.tracked_velocity_lookup(tracks_linear, tau=1, scale=1.0, frame_interval=1.0,
+                                               smooth_method='moving_average', smooth_window=3)
+        for f in range(1, 18):
+            vx, vy, vmag = v_ma[(0, f)]
+            self.assertAlmostEqual(vx, 2.0, places=6)
+            self.assertAlmostEqual(vy, 1.0, places=6)
+            self.assertAlmostEqual(vmag, np.sqrt(5.0), places=6)
+
+        # ノイズ付き軌跡: 移動平均により速度の標準偏差が減少する
+        rng = np.random.default_rng(42)
+        noise_x = rng.normal(0, 0.5, size=50)
+        noise_y = rng.normal(0, 0.5, size=50)
+        tracks_noisy = pd.DataFrame({
+            'particle': 0,
+            'frame': np.arange(50),
+            'x': 2.0 * np.arange(50) + noise_x,
+            'y': 1.0 * np.arange(50) + noise_y,
+        })
+        v_raw = csv_mod.tracked_velocity_lookup(tracks_noisy, tau=1, scale=1.0, frame_interval=1.0,
+                                                smooth_method='none')
+        v_smooth = csv_mod.tracked_velocity_lookup(tracks_noisy, tau=1, scale=1.0, frame_interval=1.0,
+                                                   smooth_method='moving_average', smooth_window=3)
+        vx_raw = np.array([v_raw[(0, f)][0] for f in range(49)])
+        vx_smooth = np.array([v_smooth[(0, f)][0] for f in range(49)])
+        self.assertLess(np.std(vx_smooth), np.std(vx_raw))
+
+    def test_savgol_filter_smoothing(self):
+        """Savitzky-Golay フィルタによる軌跡平滑化と速度ゆらぎ低減をテストする。"""
+        # 線形等速運動（x(t) = 2.0 * t, y(t) = 1.0 * t）: SGフィルタをかけても速度は厳密に保たれる
+        frames = np.arange(20)
+        tracks_linear = pd.DataFrame({
+            'particle': 0,
+            'frame': frames,
+            'x': 2.0 * frames,
+            'y': 1.0 * frames,
+        })
+        v_sg = csv_mod.tracked_velocity_lookup(tracks_linear, tau=1, scale=1.0, frame_interval=1.0,
+                                               savgol_window=5, savgol_poly=2)
+        for f in range(19):
+            vx, vy, vmag = v_sg[(0, f)]
+            self.assertAlmostEqual(vx, 2.0, places=6)
+            self.assertAlmostEqual(vy, 1.0, places=6)
+            self.assertAlmostEqual(vmag, np.sqrt(5.0), places=6)
+
+        # ノイズ付き軌跡: SGフィルタ適用により速度の標準偏差が減少する
+        rng = np.random.default_rng(42)
+        noise_x = rng.normal(0, 0.5, size=50)
+        noise_y = rng.normal(0, 0.5, size=50)
+        tracks_noisy = pd.DataFrame({
+            'particle': 0,
+            'frame': np.arange(50),
+            'x': 2.0 * np.arange(50) + noise_x,
+            'y': 1.0 * np.arange(50) + noise_y,
+        })
+        v_raw = csv_mod.tracked_velocity_lookup(tracks_noisy, tau=1, scale=1.0, frame_interval=1.0,
+                                                savgol_window=1)
+        v_smooth = csv_mod.tracked_velocity_lookup(tracks_noisy, tau=1, scale=1.0, frame_interval=1.0,
+                                                   savgol_window=7, savgol_poly=2)
+        vx_raw = np.array([v_raw[(0, f)][0] for f in range(49)])
+        vx_smooth = np.array([v_smooth[(0, f)][0] for f in range(49)])
+        self.assertLess(np.std(vx_smooth), np.std(vx_raw))
+
+    def test_load_mean_mt_velocity(self):
+        """velocities_mean.csv からの平均微小管速度の読み込みをテストする。"""
+        with tempfile.TemporaryDirectory() as td:
+            exp_path = Path(td)
+            # ファイルが存在しない場合
+            self.assertTrue(np.isnan(csv_mod.load_mean_mt_velocity(exp_path)))
+
+            # mean_velocity 列がある場合
+            df = pd.DataFrame({'frame': [0, 1, 2], 'mean_velocity': [0.2, 0.3, 0.4]})
+            df.to_csv(exp_path / 'velocities_mean.csv', index=False)
+            self.assertAlmostEqual(csv_mod.load_mean_mt_velocity(exp_path), 0.3)
 
 
 class TestBinning(unittest.TestCase):
@@ -205,6 +312,9 @@ def make_synthetic_results() -> list:
     for pid in range(2):
         for k in range(6):
             m = 0.2 * (k - 2.5)
+            v_t = 0.3 + 0.1 * m
+            v_f = 0.25 + 0.1 * m
+            v_mt = 0.25
             records.append({
                 'bead_name': 'beads1um',
                 'exp_dir': 'exp',
@@ -215,9 +325,14 @@ def make_synthetic_results() -> list:
                 'm_ising_plus': m,
                 'm_ising_minus': -m,
                 'polar': abs(m),
-                'v_track_um_s': 0.3 + 0.1 * m,
-                'v_flow_um_s': 0.25 + 0.1 * m,
+                'v_tilde': v_t / v_mt,
+                'v_track_tilde': v_t / v_mt,
+                'v_flow_tilde': v_f / v_mt,
+                'v_selected_um_s': v_t,
+                'v_track_um_s': v_t,
+                'v_flow_um_s': v_f,
                 'v_flow_absmean_um_s': 0.25 + 0.12 * m,
+                'v_mt_um_s': v_mt,
                 'region_n_valid': 10,
                 'region_n_disk': 12,
                 'region_valid_fraction': 10.0 / 12.0,
@@ -231,6 +346,7 @@ def make_synthetic_results() -> list:
         'variants': {'plus': {'cos2_sum': 1.0, 'n_valid_sum': 10.0},
                      'minus': {'cos2_sum': 2.0, 'n_valid_sum': 10.0}},
         'region_radius_um': 1.18, 'region_radius_px': 10.7, 'region_inner_um': 0.0,
+        'v_mt_mean_um_s': 0.25,
         'n_rejected_region': 1, 'n_rejected_no_velocity': 2,
         'n_frames_without_positions': 0, 'flow_cache_source': 'cache',
         'flow_cache_path': '/tmp/cache.h5', 'tau': 1, 'velocity': 'tracked',
@@ -537,6 +653,36 @@ class TestJointDensityHeatmap(unittest.TestCase):
             csv_mod.plot_heatmap(None, 'm_ising', out)
         plt.close('all')
 
+    def test_hexbin_figures_are_written(self):
+        """Hexbin プロット（全条件プール / 周辺分布なし / 線形色 / 絶対値）が PNG と SVG を出力する。"""
+        df_long = csv_mod.long_points_table(make_synthetic_points(n_per_bead=60))
+        beads = [mt_ori.BEAD_LOOKUP['beads1um'], mt_ori.BEAD_LOOKUP['beads3um']]
+        with tempfile.TemporaryDirectory() as td:
+            out = [Path(td)]
+            for x_var in csv_mod.X_VARIABLES:
+                tag = csv_mod.X_FILE_TAG[x_var]
+                csv_mod.plot_hexbin(df_long, beads, x_var, out, title='unit-test',
+                                    sign_note='unit-test', gridsize=15)
+                for ext in ('png', 'svg'):
+                    self.assertTrue((Path(td) / f"{tag}_hexbin.{ext}").exists())
+
+                csv_mod.plot_hexbin(df_long, beads, x_var, out, basename=f"{tag}_nomarg",
+                                    marginals=False, gridsize=15)
+                self.assertTrue((Path(td) / f"{tag}_nomarg.png").exists())
+
+                csv_mod.plot_hexbin(df_long, beads, x_var, out, basename=f"{tag}_linc",
+                                    log_color=False, gridsize=15)
+                self.assertTrue((Path(td) / f"{tag}_linc.png").exists())
+
+                csv_mod.plot_hexbin(df_long, beads, x_var, out, basename=f"{tag}_abs",
+                                    abs_values=True, gridsize=15)
+                self.assertTrue((Path(td) / f"{tag}_abs.png").exists())
+
+            # 空データではスキップ（例外を出さない）
+            csv_mod.plot_hexbin(pd.DataFrame(columns=['bead_name', 'x_var', 'x_value', 'v_um_s']),
+                                beads, 'm_ising', out)
+        plt.close('all')
+
     def test_heatmap_abs_folds_signs(self):
         """--heatmap_abs: |M| と |v| に折り畳んだ同時密度（符号反転で不変、横軸 [0, 1]）。"""
         df_long = csv_mod.long_points_table(make_synthetic_points(n_per_bead=50))
@@ -597,11 +743,10 @@ class TestJointDensityHeatmap(unittest.TestCase):
         txt = csv_mod._stats_text(np.abs(x), np.abs(v),
                                   np.zeros(x.size, dtype=np.int64),
                                   'm_ising', abs_values=True)
-        self.assertIn('|M_{i,t}|', txt)
-        self.assertIn('|v_{i,t}|', txt)
-        self.assertIn('|M_{i,t}|', csv_mod.X_LABELS_ABS['m_ising'])
+        self.assertIn(r'|\tilde{v}_{\parallel,i,t}|', txt)
+        self.assertIn(r'|M_{i,t}|', csv_mod.X_LABELS_ABS['m_ising'])
         self.assertEqual(csv_mod.X_LABELS_ABS['polar'], csv_mod.X_LABELS['polar'])
-        self.assertIn('|v_{i,t}|', csv_mod.VELOCITY_LABEL_ABS)
+        self.assertIn(r'|\tilde{v}_{\parallel,i,t}|', csv_mod.VELOCITY_LABEL_ABS)
 
         # x_limits を渡すと境界を上書きできる
         xe, _ = csv_mod.heatmap_edges(np.abs(x), np.abs(v), 'm_ising', x_bins=5,
@@ -701,17 +846,17 @@ class TestPercentileCurves(unittest.TestCase):
         self.assertTrue(df['percentile'].isin([80.0, 90.0, 95.0]).all())
         self.assertTrue((df['count'] >= 5).all())
         self.assertTrue((df['x_low'] >= 0.0).all())
-        self.assertTrue((df['v_percentile_um_s'] >= 0.0).all())
+        self.assertTrue((df['v_percentile_tilde'] >= 0.0).all())
 
         # 同じビン・同じ分位点の値が records と一致する
         rec0 = data['records'][0]
         row = df[(df['percentile'] == 80.0)
                  & np.isclose(df['x_center'], rec0['x_center'])].iloc[0]
-        self.assertAlmostEqual(float(row['v_percentile_um_s']), rec0['percentiles'][80.0])
+        self.assertAlmostEqual(float(row['v_percentile_tilde']), rec0['percentiles'][80.0])
         self.assertEqual(int(row['count']), rec0['count'])
         # 分位点は 80 <= 90 <= 95 の順に単調
         wide = df.pivot_table(index='x_center', columns='percentile',
-                              values='v_percentile_um_s')
+                              values='v_percentile_tilde')
         self.assertTrue((wide[95.0] >= wide[90.0] - 1e-12).all())
         self.assertTrue((wide[90.0] >= wide[80.0] - 1e-12).all())
 

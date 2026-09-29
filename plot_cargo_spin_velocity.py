@@ -17,10 +17,11 @@ plot_cargo_spin_velocity.py
 
     P_{i,t} = | < u_hat >_{region(i, t)} |,   u_hat = u / |u|   ( 0 <= P <= 1 )
 
-を計算し、貨物粒子 i のフレーム t における速度
+を計算し、貨物粒子 i のフレーム t におけるダイレクター方向への射影無次元化速度
 
-    v_{i,t} = | r_i(t + tau) - r_i(t) | / ( tau * dt )   [um/s]
-    （dt = --frame_interval [s], tau = --tau [frames]、beads_tracks.csv の位置から算出）
+    \\tilde{v}_{\\parallel,i,t} = v_{\\parallel,i,t} / v_{\\mathrm{MT}}   [-]
+    （v_{\\parallel,i,t} = \\mathbf{v}_{i,t} \\cdot \\mathbf{n}(t) [um/s]、
+      v_{\\mathrm{MT}} は同一視野の平均微小管速度 [um/s]（velocities_mean.csv より取得））
 
 に対する散布図を作ります。出力は 2 系統です:
 
@@ -34,6 +35,8 @@ plot_cargo_spin_velocity.py
 - 軌跡・速度 : beads_tracks.csv（'particle', 'frame', 'x', 'y'）。
                速度は libs.hmm_cargo.extract_hmm_features と同一の定義
                （連続フレーム対 t -> t+tau のみを使用）で計算する。
+- 微小管平均流速: velocities_mean.csv（同一視野の平均微小管速度 v_MT、
+               無次元化 \\tilde{v} = v_{cargo} / v_{MT} に使用）。
 - ディレクター: MTs_im_theta.zarr（局所配向角マップ、--director local）もしくは
                大域ネマチック主軸 theta_nem(t)（--director global, 既定）。
                zarr が読めない場合はフロー配向から同じ定義（2 テンソル平均）で推定する。
@@ -63,28 +66,28 @@ n -> -n で sigma は反転するため、M の符号（したがって v との
 
 【出力ファイル（既定: ./figure/cargo_spin_velocity と <root>/figure/cargo_spin_velocity）】
 1. cargo_spin_velocity_points.csv       : すべての (実験, 粒子 i, フレーム t) の生データ
-                                          （M, P, v, 有効画素数, 円板半径, theta ...）
-2. cargo_spin_velocity_summary.csv      : 条件（粒子径）ごとの統計量。M / P と v の
+                                          （M, P, v_tilde, v_track_um_s, v_mt_um_s ...）
+2. cargo_spin_velocity_summary.csv      : 条件（粒子径）ごとの統計量。M / P と v_tilde の
                                           Pearson r, Spearman rho, OLS 傾き・切片・R^2,
                                           粒子内（時間変動のみ）の相関 within_r など
 3. cargo_spin_velocity_binned.csv       : 条件 x 横軸変数ごとの等点数ビン統計（中央値・
                                           四分位・SEM）＝図のトレンド線の数値
 4. cargo_spin_velocity_extraction.csv   : 実験ごとのフレーム数・採用点数・棄却数・
-                                          theta_source・円板半径・フローキャッシュ元
-5. magnetization_vs_velocity_<bead>.png/.svg    : 条件別 M_{i,t} vs v_{i,t}
-6. polar_order_vs_velocity_<bead>.png/.svg       : 条件別 P_{i,t} vs v_{i,t}
+                                          theta_source・円板半径・v_MT・フローキャッシュ元
+5. magnetization_vs_velocity_<bead>.png/.svg    : 条件別 M_{i,t} vs \\tilde{v}_{i,t}
+6. polar_order_vs_velocity_<bead>.png/.svg       : 条件別 P_{i,t} vs \\tilde{v}_{i,t}
 7. magnetization_vs_velocity_all_beads.png/.svg  : 条件別パネル（M）
 8. polar_order_vs_velocity_all_beads.png/.svg    : 条件別パネル（P）
 9. magnetization_vs_velocity_overlay.png/.svg    : 全条件を 1 軸に重ね描き（M）
 10. polar_order_vs_velocity_overlay.png/.svg     : 全条件を 1 軸に重ね描き（P）
 11. magnetization_vs_velocity_heatmap.png/.svg  : 全条件プールの 2D ヒストグラム
-                                                  （横軸 = M_{i,t}, 縦軸 = v_{i,t}, 色 = P(v, M)）
+                                                  （横軸 = M_{i,t}, 縦軸 = \\tilde{v}_{i,t}, 色 = P(\\tilde{v}, M)）
 12. polar_order_vs_velocity_heatmap.png/.svg     : 同（横軸 = P_{i,t}）
     （--heatmap_per_condition で条件別の ..._heatmap_<bead>.png/.svg も出力）
 13. *_heatmap_abs.png/.svg                        : --heatmap_abs を指定したときの絶対値版
-                                                  （横軸 = |M_{i,t}| / P_{i,t}, 縦軸 = |v_{i,t}|）
-14. magnetization_abs_vs_speed_percentiles.png/.svg : |M_{i,t}| のビンごとの速度パーセン
-                                                  タイル（既定 80 / 90 / 95、縦軸 = 速度）
+                                                  （横軸 = |M_{i,t}| / P_{i,t}, 縦軸 = |\\tilde{v}_{i,t}|）
+14. magnetization_abs_vs_speed_percentiles.png/.svg : |M_{i,t}| のビンごとの無次元化速度パーセン
+                                                  タイル（既定 80 / 90 / 95、縦軸 = \\tilde{v}）
     （--percentile_per_condition で条件別の ..._per_condition.png/.svg も出力）
 15. cargo_spin_velocity_heatmap.csv              : 2D ヒストグラムの各ビン（境界・個数・
                                                   同時確率密度・abs_values フラグ）。
@@ -92,37 +95,37 @@ n -> -n で sigma は反転するため、M の符号（したがって v との
 16. cargo_spin_velocity_percentiles.csv          : パーセンタイル曲線の数値（1 行 = 1 ビン
                                                   x 1 パーセンタイル: 境界・個数・分位点）
 
-【2D ヒートマップ（色 = 同時確率密度 P(v, M)）】
+【2D ヒートマップ（色 = 同時確率密度 P(\\tilde{v}, M)）】
 散布図は 1 点 = 1 (i, t) をそのまま描くため、点数が多いと密度の偏りが見えにくい。
 --no_heatmap を指定しない限り、全条件・全粒子をプールした 2D ヒストグラムも出力する。
 
-    P(v, M) = count(v, M) / ( N_in * dM * dv )      [ (um/s)^-1 ]
+    P(\\tilde{v}, M) = count(\\tilde{v}, M) / ( N_in * dM * d\\tilde{v} )      [-]
 
 N_in はビン範囲内の点数（横軸は M / P の物理範囲、縦軸は速度の分位点まで）なので、
-図の範囲内で ∫ P dv dM = 1 になる。色は既定で線形（--heatmap_log_color で対数）、
+図の範囲内で ∫ P d\\tilde{v} dM = 1 になる。色は既定で線形（--heatmap_log_color で対数）、
 上限は 0 でないビンの --heatmap_vmax_percentile 分位点（既定 99）に取って
 1 ビンだけが突出して他が白飛びするのを防ぐ。縦軸は速度分布が裾を引くため、既定では
 **対数等間隔ビン**（--heatmap_y_edges log）にして低速度側の分解能を確保する。
 白線は散布図と同じ等点数ビンの中央値 ± IQR（色 = 個数の右肩上がりとは独立な、
-v の条件付き分布の代表値）。周辺分布（上 = x の個数、右 = v の個数）も併置する。
+\\tilde{v} の条件付き分布の代表値）。周辺分布（上 = x の個数、右 = \\tilde{v} の個数）も併置する。
 
 【絶対値版（--heatmap_abs）】
 M はディレクターの符号規約（dir_sign）に依存し、v も変位ベクトルの向きに依存するため、
 符号を落とした「強さ」だけで見たい場合は --heatmap_abs を付ける。横軸 = |M|（P は元から
-0 <= P <= 1 なのでそのまま）、縦軸 = |v| に折り畳んで集計し（v = 0 の点は対数ビンに
-入らないため範囲外として図中に個数を表示）、統計量（r, rho, 傾き）も |v| vs |M| で
+0 <= P <= 1 なのでそのまま）、縦軸 = |\\tilde{v}| に折り畳んで集計し（\\tilde{v} = 0 の点は対数ビンに
+入らないため範囲外として図中に個数を表示）、統計量（r, rho, 傾き）も |\\tilde{v}| vs |M| で
 計算し直す。散布図は従来どおり符号付きのまま。
 
-【パーセンタイル速度 vs |M|（縦軸 = 速度、横軸 = |M|）】
---no_percentiles を指定しない限り、|M| のビンごとに速度 |v| の**パーセンタイル**
+【パーセンタイル速度 vs |M|（縦軸 = 無次元化速度、横軸 = |M|）】
+--no_percentiles を指定しない限り、|M| のビンごとに無次元化速度 |\\tilde{v}| の**パーセンタイル**
 （既定 80 / 90 / 95、--percentile_list）を曲線で描く。裾の重い速度分布では平均や
 標準偏差より分位点の方が「速い側の代表値」として解釈しやすく、ビンごとの
-パーセンタイルは「その |M| 帯で |v| がこの値を超える割合が 20 / 10 / 5 %」を意味する。
+パーセンタイルは「その |M| 帯で |\\tilde{v}| がこの値を超える割合が 20 / 10 / 5 %」を意味する。
 
 - 横軸: 折り畳んだ |M| ∈ [0, 1] を等幅ビン（--percentile_bins_x 既定 10、
   --percentile_x_edges quantile で等点数ビン）。点数が --percentile_min_count
   （既定 20）未満のビンは描かない（曲線が途切れる）。
-- 縦軸: 速度 |v|（--percentile_yscale log / linear、既定 log）。点線は全条件プールの
+- 縦軸: 無次元化速度 |\\tilde{v}|（--percentile_yscale log / linear、既定 log）。点線は全条件プールの
   パーセンタイル基準線（--no_percentile_global で省略）。
 - 図: magnetization_abs_vs_speed_percentiles.png/.svg（全条件プール）。
   --percentile_per_condition を付けると条件（粒子径）別に色 = パーセンタイル・
@@ -159,6 +162,7 @@ from matplotlib.colors import LogNorm, Normalize
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 from scipy import stats as scipy_stats
+from scipy.signal import savgol_filter
 from tqdm import tqdm
 
 # 親ディレクトリのパス設定
@@ -222,17 +226,17 @@ X_LABELS_ABS = {
 
 # 2D ヒートマップの色の量（同時確率密度）のラベルと単位
 JOINT_LABELS = {
-    'm_ising': r'$P(v_{i,t},\, M_{i,t})$',
-    'polar': r'$P(v_{i,t},\, P_{i,t})$',
+    'm_ising': r'$P(\tilde{v}_{\parallel,i,t},\, M_{i,t})$',
+    'polar': r'$P(\tilde{v}_{\parallel,i,t},\, P_{i,t})$',
 }
 JOINT_LABELS_ABS = {
-    'm_ising': r'$P(|v_{i,t}|,\, |M_{i,t}|)$',
-    'polar': r'$P(|v_{i,t}|,\, P_{i,t})$',
+    'm_ising': r'$P(|\tilde{v}_{\parallel,i,t}|,\, |M_{i,t}|)$',
+    'polar': r'$P(|\tilde{v}_{\parallel,i,t}|,\, P_{i,t})$',
 }
-JOINT_DENSITY_UNIT = r'[($\mu$m/s)$^{-1}$] '
+JOINT_DENSITY_UNIT = ''
 
-VELOCITY_LABEL = r'cargo velocity $v_{i,t}$ [$\mu$m/s]'
-VELOCITY_LABEL_ABS = r'cargo speed $|v_{i,t}|$ [$\mu$m/s]'
+VELOCITY_LABEL = r'normalized projected cargo velocity $\tilde{v}_{\parallel,i,t} = v_{\parallel} / v_{\mathrm{MT}}$'
+VELOCITY_LABEL_ABS = r'normalized projected cargo speed $|\tilde{v}_{\parallel,i,t}| = |v_{\parallel}| / v_{\mathrm{MT}}$'
 
 
 
@@ -241,14 +245,14 @@ VELOCITY_LABEL_ABS = r'cargo speed $|v_{i,t}|$ [$\mu$m/s]'
 # =============================================================================
 
 def region_radius_um(bead: dict, region_factor: float = 2.0,
-                     min_region_um: float = 1.0) -> float:
+                     min_region_um: float = 3.37) -> float:
     """
     「貨物粒子の下の領域」の半径 [um] を返す。
 
         R_region = max( region_factor * R_c , min_region_um )
 
-    既定（factor = 2.0, min = 1.0 um）は「ビーズ直径と同程度の円板」で、かつ最小径の
-    ビーズ (0.63 um) でも間引き格子上で十分な画素数（~16 点 @ pixel_stride 4）を確保する。
+    既定（factor = 2.0, min = 3.37 um）は、小粒子 (0.63 um, 1.18 um) でも
+    微小管サンプリング数を十分に確保して M 判定精度を向上させるため、半径 3.37 um を下限とする。
     """
     r_bead = float(bead.get('radius_um', 0.0))
     return float(max(float(region_factor) * r_bead, float(min_region_um)))
@@ -272,39 +276,140 @@ def cargo_positions_with_ids(
     return positions
 
 
+def moving_average_1d(arr: np.ndarray, window: int = 3) -> np.ndarray:
+    """
+    1D 軌跡の移動平均（窓幅 window の局所線形平滑化、端点は線形外挿）。
+    """
+    n = len(arr)
+    w = max(1, int(window))
+    if w <= 1 or n < w:
+        return np.asarray(arr, dtype=float).copy()
+    if w % 2 == 0:
+        w -= 1
+    if w <= 1:
+        return np.asarray(arr, dtype=float).copy()
+    try:
+        return savgol_filter(np.asarray(arr, dtype=float), window_length=w, polyorder=1, mode='interp')
+    except Exception:
+        return np.asarray(arr, dtype=float).copy()
+
+
 def tracked_velocity_lookup(
     df_tracks: Optional[pd.DataFrame],
     tau: int = 1,
     scale: float = 0.11,
     frame_interval: float = 4.0,
-) -> Dict[Tuple[int, int], float]:
+    smooth_method: str = 'moving_average',
+    smooth_window: int = 3,
+    savgol_poly: int = 2,
+    savgol_window: Optional[int] = None,
+) -> Dict[Tuple[int, int], Tuple[float, float, float]]:
     """
-    beads_tracks.csv から (particle, frame) -> v_{i,t} [um/s] の辞書を作る。
+    beads_tracks.csv から (particle, frame) -> (vx, vy, v_mag) [um/s] の辞書を作る。
 
-    定義は libs.hmm_cargo.extract_hmm_features と同一:
+    移動平均フィルタ（smooth_method='moving_average',既定）または Savitzky-Golay フィルタ
+    により各粒子の連続軌跡 (x, y) を平滑化してから速度ベクトル (vx, vy) および速力 v_mag を算出する。
 
-        v_{i,t} = | r_i(t + tau) - r_i(t) | / (tau * frame_interval)
+    定義:
+        dt = tau * frame_interval [s]
+        vx = (x_smooth(t + tau) - x_smooth(t)) / dt
+        vy = (y_smooth(t + tau) - y_smooth(t)) / dt
+        v_mag = sqrt(vx^2 + vy^2)
 
     連続フレーム対 (t, t + tau) が存在する場合のみ値を持つ（欠損フレームは含まれない）。
     """
     if df_tracks is None or df_tracks.empty:
         return {}
-    try:
-        _, _, df_obs = hc.extract_hmm_features(
-            df_tracks, tau=int(tau), scale=float(scale),
-            frame_interval=float(frame_interval), epsilon=1e-3)
-    except Exception as e:
-        print(f"    [WARNING] could not compute velocities: {e}", flush=True)
+    required_cols = {'particle', 'frame', 'x', 'y'}
+    if not required_cols.issubset(df_tracks.columns):
         return {}
-    if df_obs is None or df_obs.empty:
+    df_sorted = df_tracks[['particle', 'frame', 'x', 'y']].sort_values(by=['particle', 'frame'])
+    out: Dict[Tuple[int, int], Tuple[float, float, float]] = {}
+    dt_sec = float(tau) * float(frame_interval)
+    if dt_sec <= 0:
         return {}
-    out: Dict[Tuple[int, int], float] = {}
-    for p, f, v in zip(df_obs['particle'].to_numpy(dtype=np.int64),
-                       df_obs['frame'].to_numpy(dtype=np.int64),
-                       df_obs['v'].to_numpy(dtype=float)):
-        out[(int(p), int(f))] = float(v)
+    scale = float(scale)
+    tau = max(1, int(tau))
+    s_method = str(smooth_method).lower()
+    if savgol_window is not None:
+        smooth_window = int(savgol_window)
+        if s_method == 'moving_average':
+            s_method = 'savgol'
+    w_smooth = max(1, int(smooth_window))
+
+    for pid, group in df_sorted.groupby('particle'):
+        frames = group['frame'].to_numpy(dtype=np.int64)
+        xs = group['x'].to_numpy(dtype=float) * scale
+        ys = group['y'].to_numpy(dtype=float) * scale
+        n_pts = len(frames)
+        if n_pts < tau + 1:
+            continue
+
+        # 連続フレーム区間（diff == 1）ごとに分割して平滑化フィルタを適用
+        splits = np.where(np.diff(frames) != 1)[0] + 1
+        segments = np.split(np.arange(n_pts), splits)
+
+        for seg_indices in segments:
+            n_seg = len(seg_indices)
+            if n_seg < tau + 1:
+                continue
+            f_seg = frames[seg_indices]
+            x_seg = xs[seg_indices]
+            y_seg = ys[seg_indices]
+
+            if s_method in ('moving_average', 'ma') and w_smooth > 1 and n_seg >= w_smooth:
+                x_smooth = moving_average_1d(x_seg, window=w_smooth)
+                y_smooth = moving_average_1d(y_seg, window=w_smooth)
+            elif s_method in ('savgol', 'sg') and w_smooth > 1 and n_seg >= 3:
+                w = min(w_smooth, n_seg)
+                if w % 2 == 0:
+                    w -= 1
+                poly = min(int(savgol_poly), w - 1)
+                if w > poly and w >= 3 and poly >= 1:
+                    try:
+                        x_smooth = savgol_filter(x_seg, window_length=w, polyorder=poly, mode='interp')
+                        y_smooth = savgol_filter(y_seg, window_length=w, polyorder=poly, mode='interp')
+                    except Exception:
+                        x_smooth, y_smooth = x_seg, y_seg
+                else:
+                    x_smooth, y_smooth = x_seg, y_seg
+            else:
+                x_smooth, y_smooth = x_seg, y_seg
+
+            for k in range(n_seg - tau):
+                if f_seg[k + tau] == f_seg[k] + tau:
+                    dx = x_smooth[k + tau] - x_smooth[k]
+                    dy = y_smooth[k + tau] - y_smooth[k]
+                    vx = dx / dt_sec
+                    vy = dy / dt_sec
+                    v_mag = float(np.hypot(vx, vy))
+                    out[(int(pid), int(f_seg[k]))] = (float(vx), float(vy), v_mag)
     return out
 
+
+def load_mean_mt_velocity(exp_dir: Path) -> float:
+    """
+    同一視野（実験ディレクトリ）の平均微小管速度 v_MT [um/s] を velocities_mean.csv から取得する。
+
+    見つからないか無効な場合は np.nan を返す。
+    """
+    v_mt_path = Path(exp_dir) / "velocities_mean.csv"
+    if not v_mt_path.exists():
+        return float('nan')
+    try:
+        df_v_mt = pd.read_csv(v_mt_path)
+        if 'mean_velocity' in df_v_mt.columns:
+            s = pd.to_numeric(df_v_mt['mean_velocity'], errors='coerce').dropna()
+            if not s.empty:
+                return float(s.mean())
+        num_cols = df_v_mt.select_dtypes(include=[np.number]).columns
+        if len(num_cols) > 0:
+            s = df_v_mt[num_cols[0]].dropna()
+            if not s.empty:
+                return float(s.mean())
+    except Exception as e:
+        print(f"    [WARNING] could not read {v_mt_path}: {e}", flush=True)
+    return float('nan')
 
 
 def disk_region_sums(
@@ -391,7 +496,7 @@ def process_experiment_cargo(
     min_valid_fraction: float = 0.5,
     min_region_pixels: int = 6,
     region_factor: float = 2.0,
-    min_region_um: float = 1.0,
+    min_region_um: float = 3.37,
     region_inner_factor: float = 0.0,
     scale: float = 0.11,
     frame_interval: float = 4.0,
@@ -401,6 +506,10 @@ def process_experiment_cargo(
     flow_cache: str = 'auto',
     flow_cache_name: Optional[str] = None,
     progress: bool = True,
+    smooth_method: str = 'moving_average',
+    smooth_window: int = 3,
+    savgol_poly: int = 2,
+    savgol_window: Optional[int] = None,
 ) -> Optional[dict]:
     """
     1 つの実験ディレクトリについて、各フレーム t・各貨物粒子 i の
@@ -451,11 +560,22 @@ def process_experiment_cargo(
         return None
 
     positions = cargo_positions_with_ids(df_tracks)
-    v_track = tracked_velocity_lookup(df_tracks, tau=tau, scale=scale,
-                                      frame_interval=frame_interval)
+    if savgol_window is not None:
+        smooth_window = int(savgol_window)
+    v_track = tracked_velocity_lookup(
+        df_tracks, tau=tau, scale=scale, frame_interval=frame_interval,
+        smooth_method=smooth_method, smooth_window=smooth_window, savgol_poly=savgol_poly)
     if not positions:
         print(f"    [WARNING] no usable cargo positions in {tracks_path}", flush=True)
         return None
+
+    v_mt = load_mean_mt_velocity(exp_dir)
+    if not np.isfinite(v_mt) or v_mt <= 0:
+        print(f"    [WARNING] velocities_mean.csv not found or invalid in {exp_dir.name} (v_MT = {v_mt}); "
+              "falling back to v_MT = 1.0 um/s for dimensionless scaling", flush=True)
+        v_mt_scale = 1.0
+    else:
+        v_mt_scale = v_mt
 
     try:
         reader = mt_ori.FlowFrameReader(exp_dir, pixel_stride=st, frame_stride=fs,
@@ -582,15 +702,52 @@ def process_experiment_cargo(
                     n_rejected_region += 1
                     continue
 
-                v_t = float(v_track.get((int(pid), t), float('nan')))
-                v_flow = float(np.hypot(res['sum_mx'], res['sum_my']) / n_valid_region
-                               * float(scale) / float(frame_interval))
-                v_flow_absmean = float(res['sum_mag'] / n_valid_region
-                                       * float(scale) / float(frame_interval))
-                v_selected = v_t if str(velocity) == 'tracked' else v_flow
-                if not np.isfinite(v_selected):
+                v_track_entry = v_track.get((int(pid), t))
+                if v_track_entry is not None:
+                    if isinstance(v_track_entry, (tuple, list)):
+                        vx, vy, v_t_mag = float(v_track_entry[0]), float(v_track_entry[1]), float(v_track_entry[2])
+                    else:
+                        vx, vy, v_t_mag = float('nan'), float('nan'), float(v_track_entry)
+                else:
+                    vx, vy, v_t_mag = float('nan'), float('nan'), float('nan')
+
+                # フロー平均速度ベクトル
+                ux_mean = float(res['sum_mx'] / n_valid_region * float(scale) / float(frame_interval))
+                uy_mean = float(res['sum_my'] / n_valid_region * float(scale) / float(frame_interval))
+                v_flow_mag = float(np.hypot(ux_mean, uy_mean))
+                v_flow_absmean = float(res['sum_mag'] / n_valid_region * float(scale) / float(frame_interval))
+
+                # ダイレクター軸への射影速度 (VARIANT_PLUS: n = (ct, stt), VARIANT_MINUS: n = (ct, -stt))
+                if np.isfinite(vx) and np.isfinite(vy):
+                    v_track_plus = float(vx * ct + vy * stt)
+                    v_track_minus = float(vx * ct - vy * stt)
+                else:
+                    v_track_plus = v_t_mag
+                    v_track_minus = v_t_mag
+
+                v_flow_plus = float(ux_mean * ct + uy_mean * stt)
+                v_flow_minus = float(ux_mean * ct - uy_mean * stt)
+
+                if str(velocity) == 'tracked':
+                    v_plus = v_track_plus
+                    v_minus = v_track_minus
+                    v_selected_mag = v_t_mag
+                else:
+                    v_plus = v_flow_plus
+                    v_minus = v_flow_minus
+                    v_selected_mag = v_flow_mag
+
+                if not np.isfinite(v_plus) and not np.isfinite(v_selected_mag):
                     n_rejected_no_velocity += 1
                     continue
+
+                v_plus_tilde = float(v_plus / v_mt_scale) if np.isfinite(v_plus) else float('nan')
+                v_minus_tilde = float(v_minus / v_mt_scale) if np.isfinite(v_minus) else float('nan')
+                v_track_plus_tilde = float(v_track_plus / v_mt_scale) if np.isfinite(v_track_plus) else float('nan')
+                v_track_minus_tilde = float(v_track_minus / v_mt_scale) if np.isfinite(v_track_minus) else float('nan')
+                v_flow_plus_tilde = float(v_flow_plus / v_mt_scale) if np.isfinite(v_flow_plus) else float('nan')
+                v_flow_minus_tilde = float(v_flow_minus / v_mt_scale) if np.isfinite(v_flow_minus) else float('nan')
+                v_mag_tilde = float(v_selected_mag / v_mt_scale) if np.isfinite(v_selected_mag) else float('nan')
 
                 records.append({
                     'bead_name': bead['name'],
@@ -603,9 +760,26 @@ def process_experiment_cargo(
                     'm_ising_plus': float(res['sum_sigma_plus'] / n_valid_region),
                     'm_ising_minus': float(res['sum_sigma_minus'] / n_valid_region),
                     'polar': float(np.hypot(res['sum_ux'], res['sum_uy']) / n_valid_region),
-                    'v_track_um_s': v_t,
-                    'v_flow_um_s': v_flow,
+                    'v_tilde_plus': v_plus_tilde,
+                    'v_tilde_minus': v_minus_tilde,
+                    'v_track_tilde_plus': v_track_plus_tilde,
+                    'v_track_tilde_minus': v_track_minus_tilde,
+                    'v_flow_tilde_plus': v_flow_plus_tilde,
+                    'v_flow_tilde_minus': v_flow_minus_tilde,
+                    'v_selected_um_s_plus': v_plus,
+                    'v_selected_um_s_minus': v_minus,
+                    'v_track_um_s_plus': v_track_plus,
+                    'v_track_um_s_minus': v_track_minus,
+                    'v_flow_um_s_plus': v_flow_plus,
+                    'v_flow_um_s_minus': v_flow_minus,
+                    'v_mag_tilde': v_mag_tilde,
+                    'v_mag_um_s': float(v_selected_mag),
+                    'v_track_mag_um_s': float(v_t_mag),
+                    'v_flow_mag_um_s': float(v_flow_mag),
                     'v_flow_absmean_um_s': v_flow_absmean,
+                    'v_mt_um_s': float(v_mt),
+                    'vx_um_s': float(vx) if np.isfinite(vx) else float('nan'),
+                    'vy_um_s': float(vy) if np.isfinite(vy) else float('nan'),
                     'region_n_valid': n_valid_region,
                     'region_n_disk': int(res['n_disk']),
                     'region_valid_fraction': float(valid_frac_region),
@@ -633,6 +807,7 @@ def process_experiment_cargo(
         'region_radius_um': float(r_um),
         'region_radius_px': float(r_px),
         'region_inner_um': float(r_in_um),
+        'v_mt_mean_um_s': float(v_mt),
         'n_rejected_region': int(n_rejected_region),
         'n_rejected_no_velocity': int(n_rejected_no_velocity),
         'n_frames_without_positions': int(n_no_positions),
@@ -640,6 +815,10 @@ def process_experiment_cargo(
         'flow_cache_path': cache_path,
         'tau': int(tau),
         'velocity': str(velocity),
+        'smooth_method': str(smooth_method),
+        'smooth_window': int(smooth_window),
+        'savgol_window': int(smooth_window),
+        'savgol_poly': int(savgol_poly),
     }
 
 
@@ -656,15 +835,39 @@ def points_table(
     全実験のレコードを 1 つの DataFrame にまとめる。
 
     採用したディレクター符号 sign（+1 / -1）に対応する磁化を m_ising 列に入れ、
-    縦軸に使う速度を v_um_s 列に入れる（v_track_um_s / v_flow_um_s は常に保持）。
+    ダイレクター方向への射影無次元化速度を v_tilde 列に入れる
+    （v_um_s / v_track_um_s / v_mag_um_s / v_mt_um_s 等も保持）。
     """
     sgn = 1 if int(sign) >= 0 else -1
-    vkey = 'v_track_um_s' if str(velocity) == 'tracked' else 'v_flow_um_s'
+    vkey_um_base = 'v_track_um_s' if str(velocity) == 'tracked' else 'v_flow_um_s'
+    vkey_tilde_base = 'v_track_tilde' if str(velocity) == 'tracked' else 'v_flow_tilde'
+    vkey_um_plus = 'v_track_um_s_plus' if str(velocity) == 'tracked' else 'v_flow_um_s_plus'
+    vkey_um_minus = 'v_track_um_s_minus' if str(velocity) == 'tracked' else 'v_flow_um_s_minus'
+    vkey_tilde_plus = 'v_track_tilde_plus' if str(velocity) == 'tracked' else 'v_flow_tilde_plus'
+    vkey_tilde_minus = 'v_track_tilde_minus' if str(velocity) == 'tracked' else 'v_flow_tilde_minus'
+
     rows: List[dict] = []
     for res in results:
         bead = BEAD_LOOKUP.get(res['bead_name'], {})
         for rec in res['records']:
             m = rec['m_ising_plus'] if sgn > 0 else rec['m_ising_minus']
+
+            # 射影速度（符号付き）
+            if sgn > 0:
+                v_tilde = rec.get('v_tilde_plus', rec.get(vkey_tilde_plus, rec.get(vkey_tilde_base, rec.get('v_tilde', np.nan))))
+                v_track_tilde = rec.get('v_track_tilde_plus', rec.get('v_track_tilde', np.nan))
+                v_flow_tilde = rec.get('v_flow_tilde_plus', rec.get('v_flow_tilde', np.nan))
+                v_um_s = rec.get('v_selected_um_s_plus', rec.get(vkey_um_plus, rec.get(vkey_um_base, rec.get('v_selected_um_s', rec.get('v_um_s', np.nan)))))
+                v_track_um_s = rec.get('v_track_um_s_plus', rec.get('v_track_um_s', np.nan))
+                v_flow_um_s = rec.get('v_flow_um_s_plus', rec.get('v_flow_um_s', np.nan))
+            else:
+                v_tilde = rec.get('v_tilde_minus', rec.get(vkey_tilde_minus, rec.get(vkey_tilde_base, rec.get('v_tilde', np.nan))))
+                v_track_tilde = rec.get('v_track_tilde_minus', rec.get('v_track_tilde', np.nan))
+                v_flow_tilde = rec.get('v_flow_tilde_minus', rec.get('v_flow_tilde', np.nan))
+                v_um_s = rec.get('v_selected_um_s_minus', rec.get(vkey_um_minus, rec.get(vkey_um_base, rec.get('v_selected_um_s', rec.get('v_um_s', np.nan)))))
+                v_track_um_s = rec.get('v_track_um_s_minus', rec.get('v_track_um_s', np.nan))
+                v_flow_um_s = rec.get('v_flow_um_s_minus', rec.get('v_flow_um_s', np.nan))
+
             rows.append({
                 'bead_name': rec['bead_name'],
                 'diameter_um': float(bead.get('diameter_um', np.nan)),
@@ -677,10 +880,22 @@ def points_table(
                 'y_um': rec['y_um'],
                 'm_ising': m,
                 'polar': rec['polar'],
-                'v_um_s': rec[vkey],
-                'v_track_um_s': rec['v_track_um_s'],
-                'v_flow_um_s': rec['v_flow_um_s'],
-                'v_flow_absmean_um_s': rec['v_flow_absmean_um_s'],
+                'v_tilde': v_tilde,
+                'v_parallel_tilde': v_tilde,
+                'v_track_tilde': v_track_tilde,
+                'v_flow_tilde': v_flow_tilde,
+                'v_mag_tilde': rec.get('v_mag_tilde', np.nan),
+                'v_um_s': v_um_s,
+                'v_parallel_um_s': v_um_s,
+                'v_track_um_s': v_track_um_s,
+                'v_flow_um_s': v_flow_um_s,
+                'v_mag_um_s': rec.get('v_mag_um_s', np.nan),
+                'v_track_mag_um_s': rec.get('v_track_mag_um_s', np.nan),
+                'v_flow_mag_um_s': rec.get('v_flow_mag_um_s', np.nan),
+                'v_flow_absmean_um_s': rec.get('v_flow_absmean_um_s', np.nan),
+                'v_mt_um_s': rec.get('v_mt_um_s', np.nan),
+                'vx_um_s': rec.get('vx_um_s', np.nan),
+                'vy_um_s': rec.get('vy_um_s', np.nan),
                 'region_n_valid': int(rec['region_n_valid']),
                 'region_n_disk': int(rec['region_n_disk']),
                 'region_valid_fraction': rec['region_valid_fraction'],
@@ -755,10 +970,11 @@ def binned_table(
     """
     if df_points is None or df_points.empty:
         return pd.DataFrame()
+    v_col = 'v_tilde' if 'v_tilde' in df_points.columns else 'v_um_s'
     rows: List[dict] = []
     for (bname, x_var), grp in df_points.groupby(['bead_name', 'x_var'], sort=True):
         x = grp['x_value'].to_numpy(dtype=float)
-        v = grp['v_um_s'].to_numpy(dtype=float)
+        v = grp[v_col].to_numpy(dtype=float)
         n_pts = int(np.count_nonzero(np.isfinite(x) & np.isfinite(v)))
         n_eff = max(1, min(int(n_bins), n_pts // max(1, int(min_count))))
         recs = bin_profile_records(x, v, n_bins=n_eff, min_count=min_count)
@@ -864,10 +1080,12 @@ def summary_table(
     """
     if df_long is None or df_long.empty:
         return pd.DataFrame()
+    v_col = 'v_tilde' if 'v_tilde' in df_long.columns else 'v_um_s'
     rows: List[dict] = []
     for (bname, x_var), grp in df_long.groupby(['bead_name', 'x_var'], sort=True):
         x = grp['x_value'].to_numpy(dtype=float)
-        v = grp['v_um_s'].to_numpy(dtype=float)
+        v = grp[v_col].to_numpy(dtype=float)
+        v_um = grp['v_um_s'].to_numpy(dtype=float) if 'v_um_s' in grp.columns else v
         keep = np.isfinite(x) & np.isfinite(v)
         groups = np.asarray(
             [f"{e}|{int(pp)}" for e, pp in
@@ -885,9 +1103,12 @@ def summary_table(
             'x_mean': (float(np.mean(x[keep])) if n_keep else float('nan')),
             'x_median': (float(np.median(x[keep])) if n_keep else float('nan')),
             'x_std': (float(np.std(x[keep], ddof=1)) if n_keep > 1 else float('nan')),
-            'v_median_um_s': (float(np.median(v[keep])) if n_keep else float('nan')),
-            'v_mean_um_s': (float(np.mean(v[keep])) if n_keep else float('nan')),
-            'v_p90_um_s': (float(np.quantile(v[keep], 0.9)) if n_keep else float('nan')),
+            'v_tilde_median': (float(np.median(v[keep])) if n_keep else float('nan')),
+            'v_tilde_mean': (float(np.mean(v[keep])) if n_keep else float('nan')),
+            'v_tilde_p90': (float(np.quantile(v[keep], 0.9)) if n_keep else float('nan')),
+            'v_median_um_s': (float(np.median(v_um[keep])) if n_keep else float('nan')),
+            'v_mean_um_s': (float(np.mean(v_um[keep])) if n_keep else float('nan')),
+            'v_mt_mean_um_s': (float(grp['v_mt_um_s'].dropna().mean()) if 'v_mt_um_s' in grp.columns and grp['v_mt_um_s'].notna().any() else float('nan')),
             'velocity_source': str(velocity),
             'n_bins': int(n_bins),
             'bin_min_count': int(min_count),
@@ -915,6 +1136,7 @@ def extraction_table(results: Sequence[dict]) -> pd.DataFrame:
             'region_inner_um': float(res['region_inner_um']),
             'region_n_valid_median': (float(np.median(n_valid)) if n_valid else float('nan')),
             'region_n_valid_min': (int(np.min(n_valid)) if n_valid else 0),
+            'v_mt_mean_um_s': float(res.get('v_mt_mean_um_s', np.nan)),
             'n_rejected_region': int(res['n_rejected_region']),
             'n_rejected_no_velocity': int(res['n_rejected_no_velocity']),
             'n_frames_without_positions': int(res['n_frames_without_positions']),
@@ -923,6 +1145,10 @@ def extraction_table(results: Sequence[dict]) -> pd.DataFrame:
             'flow_cache_path': res['flow_cache_path'],
             'tau': int(res['tau']),
             'velocity_source': res['velocity'],
+            'smooth_method': res.get('smooth_method', 'moving_average'),
+            'smooth_window': int(res.get('smooth_window', res.get('savgol_window', 3))),
+            'savgol_window': int(res.get('savgol_window', 3)),
+            'savgol_poly': int(res.get('savgol_poly', 2)),
         })
     return pd.DataFrame(rows)
 
@@ -938,11 +1164,18 @@ def _bead_label(bead: dict) -> str:
 
 def _velocity_limits(v: np.ndarray, yscale: str = 'linear',
                      upper_percentile: float = 99.5) -> Tuple[float, float]:
-    """速度軸の範囲をデータから決める（対数軸では正の分位点を基準にする）。"""
+    """速度軸の範囲をデータから決める（符号付きの場合はゼロ対称、非負の場合は 0 から上限）。"""
     vals = np.asarray(v, dtype=float)
     vals = vals[np.isfinite(vals)]
     if vals.size == 0:
         return 0.0, 1.0
+    if np.any(vals < 0.0) and str(yscale) != 'log':
+        # 符号付き（4象限）: 原点対称にする
+        v_max = float(np.quantile(np.abs(vals), upper_percentile / 100.0)) * 1.05
+        if v_max <= 0.0:
+            v_max = float(np.max(np.abs(vals))) * 1.05 if vals.size else 1.0
+        return -v_max, v_max
+
     upper = float(np.quantile(vals, upper_percentile / 100.0)) * 1.05
     if str(yscale) == 'log':
         pos = vals[vals > 0.0]
@@ -957,7 +1190,7 @@ def _velocity_limits(v: np.ndarray, yscale: str = 'linear',
             upper = lower * 10.0
         return lower, upper
     if upper <= 0.0:
-        upper = float(np.max(vals)) * 1.05
+        upper = float(np.max(vals)) * 1.05 if vals.size else 1.0
     return 0.0, upper
 
 
@@ -977,8 +1210,9 @@ def _condition_arrays(
     if d.empty:
         empty = np.empty(0)
         return empty, empty, empty.astype(np.int64), np.empty(0, dtype=object)
+    v_col = 'v_tilde' if 'v_tilde' in d.columns else 'v_um_s'
     x = d['x_value'].to_numpy(dtype=float)
-    v = d['v_um_s'].to_numpy(dtype=float)
+    v = d[v_col].to_numpy(dtype=float)
     p = d['particle'].to_numpy(dtype=np.int64)
     g = np.asarray([f"{e}|{int(pp)}" for e, pp in zip(d['exp_dir'].to_numpy(), p)],
                    dtype=object)
@@ -1018,12 +1252,12 @@ def _stats_text(
     else:
         head = 'polar order $P_{i,t}$'
     st = _corr_stats(x, v, groups)
-    tail = ("\ny = $|v_{i,t}|$ (speed), folded about 0" if abs_values else "")
+    tail = ("\ny = $|\\tilde{v}_{\\parallel,i,t}|$ (speed), folded about 0" if abs_values else "")
     return (f"{head}\n"
             f"$N$ = {st['within_n']:,} (i, t) points\n"
             f"Pearson $r$ = {st['pearson_r']:+.3f} ($p$ = {st['pearson_p']:.1e})\n"
             f"Spearman $\\rho$ = {st['spearman_rho']:+.3f}\n"
-            f"OLS slope = {st['slope_ols']:+.4f} $\\pm$ {st['slope_stderr']:.4f} $\\mu$m/s per unit\n"
+            f"OLS slope = {st['slope_ols']:+.4f} $\\pm$ {st['slope_stderr']:.4f} per unit\n"
             f"within-particle $r$ = {st['within_r']:+.3f}{tail}")
 
 
@@ -1344,7 +1578,11 @@ def plot_heatmap(
     ax.set_ylabel(y_label)
     # 横軸はビン数が多いので目盛りを間引く（既定スタイルの大きいラベルの重なり防止）
     ax.xaxis.set_major_locator(MaxNLocator(nbins=5, steps=[1, 2, 2.5, 5, 10]))
-    ax.grid(False)
+    # 4象限（原点を跨ぐ）の場合、ゼロ基準線を引いてフロー方向（正/負）を視覚化
+    if float(xe[0]) < 0.0 < float(xe[-1]):
+        ax.axvline(0.0, color='0.65', ls='--', lw=0.9, alpha=0.7, zorder=3)
+    if float(ye[0]) < 0.0 < float(ye[-1]):
+        ax.axhline(0.0, color='0.65', ls='--', lw=0.9, alpha=0.7, zorder=3)
 
     # --- 周辺分布（個数。ビン境界は 2D ヒストグラムと共通） ---
     if marginals and ax_top is not None and ax_right is not None:
@@ -1407,6 +1645,152 @@ def plot_heatmap(
     plt.close(fig)
 
 
+def plot_hexbin(
+    df_long: pd.DataFrame,
+    target_beads: Sequence[dict],
+    x_var: str,
+    out_dirs: Sequence[Path],
+    basename: Optional[str] = None,
+    title: str = '',
+    sign_note: str = '',
+    gridsize: int = 35,
+    cmap: str = 'magma',
+    log_color: bool = True,
+    mincnt: int = 1,
+    marginals: bool = True,
+    trend_bins: int = 12,
+    trend_min_count: int = 10,
+    upper_percentile: float = 99.5,
+    abs_values: bool = False,
+) -> None:
+    """
+    2D Hexbin プロット（横軸 = M / P、縦軸 = v、色 = 六角形ビン内のカウント数）を描く。
+
+    白線は等点数ビン中央値 ± IQR、上と右の周辺分布は個数ヒストグラム。
+    abs_values=True のときは |v| と |M| に折り畳んだ図として描画する。
+    """
+    x, v, _, g = pooled_arrays(df_long, target_beads, x_var)
+    if x.size == 0:
+        print(f"  [SKIP] no hexbin data for {x_var}")
+        return
+
+    if abs_values:
+        x = np.abs(x)
+        v = np.abs(v)
+
+    x_label = X_LABELS_ABS[x_var] if abs_values else X_LABELS[x_var]
+    y_label = VELOCITY_LABEL_ABS if abs_values else VELOCITY_LABEL
+    joint_label = JOINT_LABELS_ABS[x_var] if abs_values else JOINT_LABELS[x_var]
+
+    x_lims = (X_PHYS_LIMITS_ABS if abs_values else X_PHYS_LIMITS).get(str(x_var), (0.0, 1.0) if abs_values else (-1.0, 1.0))
+    x_lo, x_hi = float(x_lims[0]), float(x_lims[1])
+    y_lo, y_hi = _velocity_limits(v, 'linear', upper_percentile=upper_percentile)
+    extent = [x_lo, x_hi, y_lo, y_hi]
+
+    fig = plt.figure(figsize=(7.6, 6.4))
+    try:
+        fig.set_layout_engine('none')
+    except Exception:
+        pass
+
+    ax_top = ax_right = cax = None
+    if marginals:
+        gs = fig.add_gridspec(2, 2, width_ratios=(4.6, 1.0), height_ratios=(1.0, 4.6),
+                              left=0.135, right=0.925, bottom=0.20, top=0.85,
+                              wspace=0.05, hspace=0.05)
+        ax_top = fig.add_subplot(gs[0, 0])
+        ax = fig.add_subplot(gs[1, 0], sharex=ax_top)
+        ax_right = fig.add_subplot(gs[1, 1], sharey=ax)
+        cax = fig.add_subplot(gs[0, 1])
+    else:
+        gs = fig.add_gridspec(1, 1, left=0.135, right=0.90, bottom=0.20, top=0.90)
+        ax = fig.add_subplot(gs[0, 0])
+
+    # hexbin 描画
+    hb = ax.hexbin(x, v, gridsize=int(gridsize), cmap=cmap, mincnt=int(mincnt),
+                   bins='log' if log_color else None, extent=extent,
+                   linewidths=0.2, edgecolors='none')
+    ax.set_xscale('linear')
+    ax.set_yscale('linear')
+    ax.set_xlim(x_lo, x_hi)
+    ax.set_ylim(y_lo, y_hi)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=5, steps=[1, 2, 2.5, 5, 10]))
+    ax.grid(False)
+
+    # 4象限のゼロ基準線
+    if x_lo < 0.0 < x_hi:
+        ax.axvline(0.0, color='0.65', ls='--', lw=0.9, alpha=0.7, zorder=3)
+    if y_lo < 0.0 < y_hi:
+        ax.axhline(0.0, color='0.65', ls='--', lw=0.9, alpha=0.7, zorder=3)
+
+    # 周辺分布
+    if marginals and ax_top is not None and ax_right is not None:
+        xe = np.linspace(x_lo, x_hi, max(15, int(gridsize)))
+        ye = np.linspace(y_lo, y_hi, max(15, int(gridsize)))
+        ax_top.hist(x, bins=xe, color='0.5', lw=0)
+        ax_top.set_yscale('log')
+        ax_top.set_ylabel('counts', fontsize=10)
+        ax_top.tick_params(labelbottom=False, labelsize=9, length=3)
+        ax_top.grid(False)
+        ax_top.set_title(title or '', fontsize=13, pad=8)
+        if x_lo < 0.0 < x_hi:
+            ax_top.axvline(0.0, color='0.65', ls='--', lw=0.9, alpha=0.7, zorder=3)
+
+        ax_right.hist(v, bins=ye, orientation='horizontal', color='0.5', lw=0)
+        ax_right.set_xscale('log')
+        ax_right.set_xlabel('counts', fontsize=10)
+        ax_right.tick_params(labelleft=False, labelsize=9, length=3)
+        ax_right.grid(False)
+        if y_lo < 0.0 < y_hi:
+            ax_right.axhline(0.0, color='0.65', ls='--', lw=0.9, alpha=0.7, zorder=3)
+    else:
+        ax.set_title(title or '', fontsize=13)
+
+    # カラーバー
+    cbar_label = r"$\log_{10}(\mathrm{counts})$" if log_color else "counts"
+    if cax is not None:
+        fig.colorbar(hb, cax=cax, orientation='horizontal')
+        cax.set_title(cbar_label, fontsize=10, pad=6)
+        cax.tick_params(labelsize=8, length=3)
+    else:
+        cbar = fig.colorbar(hb, ax=ax, pad=0.02, fraction=0.05)
+        cbar.set_label(cbar_label, fontsize=10)
+        cbar.ax.tick_params(labelsize=8)
+
+    # トレンド線
+    curve = bin_profile_records(x, v, n_bins=int(trend_bins), min_count=int(trend_min_count))
+    if curve:
+        cx = np.array([c['x_center'] for c in curve], dtype=float)
+        cy = np.array([c['y_median'] for c in curve], dtype=float)
+        cq25 = np.array([c['y_q25'] for c in curve], dtype=float)
+        cq75 = np.array([c['y_q75'] for c in curve], dtype=float)
+        if cx.size:
+            yerr = np.vstack([np.maximum(cy - cq25, 0.0), np.maximum(cq75 - cy, 0.0)])
+            ax.errorbar(cx, cy, yerr=yerr, fmt='o-', color='white', ecolor='white',
+                        ms=4.0, lw=1.8, capsize=2.0, markeredgecolor='0.25',
+                        markeredgewidth=0.7, zorder=6)
+
+    n_points = int(x.size)
+    in_range = int(((x >= x_lo) & (x <= x_hi) & (v >= y_lo) & (v <= y_hi)).sum())
+    txt = _stats_text(x, v, g, x_var, abs_values=abs_values)
+    txt += f"\n{in_range:,} / {n_points:,} points in range"
+    if curve:
+        txt += "\nwhite line: binned median $\\pm$ IQR"
+    ax.text(0.025, 0.975, txt, transform=ax.transAxes, ha='left', va='top',
+            fontsize=8.5, color='0.15',
+            bbox=dict(boxstyle='round,pad=0.3', fc='white', ec='0.7', alpha=0.88))
+
+    if sign_note:
+        wrapped = '\n'.join(textwrap.wrap(str(sign_note), width=115)) or str(sign_note)
+        fig.text(0.5, 0.008, wrapped, ha='center', va='bottom', fontsize=8.0,
+                 color='0.3', multialignment='center')
+
+    mt_ori.save_figure_to_all(fig, basename or f"{X_FILE_TAG[x_var]}_hexbin", list(out_dirs))
+    plt.close(fig)
+
+
 def plot_per_condition(
     df_long: pd.DataFrame,
     df_binned: Optional[pd.DataFrame],
@@ -1458,6 +1842,10 @@ def plot_per_condition(
     ax.set_ylabel(VELOCITY_LABEL)
     ax.set_title(_bead_label(bead), pad=30)
     ax.grid(True, which='both', alpha=0.35)
+    if xlo < 0.0 < xhi:
+        ax.axvline(0.0, color='0.6', ls='--', lw=0.8, alpha=0.5, zorder=1)
+    if ylo < 0.0 < yhi:
+        ax.axhline(0.0, color='0.6', ls='--', lw=0.8, alpha=0.5, zorder=1)
 
     ax.text(0.02, 0.98, _stats_text(x, v, g, x_var), transform=ax.transAxes,
             ha='left', va='top', fontsize=9.5,
@@ -1509,12 +1897,9 @@ def plot_panels(
     nrows = int(np.ceil(n / float(ncols)))
     fig, axes = plt.subplots(nrows, ncols, figsize=(4.1 * ncols, 4.0 * nrows),
                              squeeze=False)
-
-    y_all = df_long[df_long['bead_name'].isin([b['name'] for b in selected])]['v_um_s']
-    if str(yscale) == 'log':
-        y_lo, y_hi = _velocity_limits(y_all.to_numpy(dtype=float), yscale)
-    else:
-        y_lo, y_hi = 0.0, float(np.nanmax(y_all.to_numpy(dtype=float))) * 1.05
+    v_col = 'v_tilde' if 'v_tilde' in df_long.columns else 'v_um_s'
+    y_all = df_long[df_long['bead_name'].isin([b['name'] for b in selected])][v_col]
+    y_lo, y_hi = _velocity_limits(y_all.to_numpy(dtype=float), yscale)
 
     xlo, xhi = X_LIMITS[x_var]
     for k, bead in enumerate(selected):
@@ -1529,6 +1914,11 @@ def plot_panels(
                               curve['y_q75'] - curve['y_median']])
             ax.errorbar(curve['x_center'], curve['y_median'], yerr=yerr, fmt='o-',
                         color='0.1', ms=3.5, lw=1.6, capsize=2.0, zorder=5)
+
+        if xlo < 0.0 < xhi:
+            ax.axvline(0.0, color='0.6', ls='--', lw=0.7, alpha=0.5, zorder=1)
+        if y_lo < 0.0 < y_hi:
+            ax.axhline(0.0, color='0.6', ls='--', lw=0.7, alpha=0.5, zorder=1)
 
         st = _corr_stats(x, v, g)
         ax.set_xlim(xlo, xhi)
@@ -1611,6 +2001,10 @@ def plot_overlay(
     ax.set_ylabel(VELOCITY_LABEL)
     ax.set_title(f"{X_LABELS[x_var]} vs {VELOCITY_LABEL}")
     ax.grid(True, which='both', alpha=0.35)
+    if xlo < 0.0 < xhi:
+        ax.axvline(0.0, color='0.6', ls='--', lw=0.8, alpha=0.5, zorder=1)
+    if y_lo < 0.0 < y_hi:
+        ax.axhline(0.0, color='0.6', ls='--', lw=0.8, alpha=0.5, zorder=1)
     ax.legend(fontsize=10, loc='upper left', framealpha=0.92)
     ax.text(0.99, 0.02, '\n'.join(lines), transform=ax.transAxes, ha='right', va='bottom',
             fontsize=8.5, family='monospace',
@@ -1735,10 +2129,10 @@ def percentile_table(data: Optional[dict], bead_label: str = 'all') -> pd.DataFr
     パーセンタイル曲線の数値（1 行 = 1 ビン x 1 パーセンタイル）を long 形式にする。
 
     列: bead_name / x_variable / abs_values / percentile / x_low / x_high / x_center /
-    count / v_percentile_um_s / n_points / n_points_in_range。
+    count / v_percentile_tilde / n_points / n_points_in_range。
     """
     columns = ['bead_name', 'x_variable', 'abs_values', 'percentile',
-               'x_low', 'x_high', 'x_center', 'count', 'v_percentile_um_s',
+               'x_low', 'x_high', 'x_center', 'count', 'v_percentile_tilde',
                'n_points', 'n_points_in_range']
     if not data:
         return pd.DataFrame(columns=columns)
@@ -1753,7 +2147,7 @@ def percentile_table(data: Optional[dict], bead_label: str = 'all') -> pd.DataFr
                 'x_low': rec['x_low'], 'x_high': rec['x_high'],
                 'x_center': rec['x_center'],
                 'count': int(rec['count']),
-                'v_percentile_um_s': rec['percentiles'][float(p)],
+                'v_percentile_tilde': rec['percentiles'][float(p)],
                 'n_points': int(data['n_points']),
                 'n_points_in_range': int(data['n_points_in_range']),
             })
@@ -1779,7 +2173,7 @@ def _percentile_stats_text(data: dict, label: str = '') -> str:
     x = np.asarray(data.get('x', np.empty(0)), dtype=float)
     v = np.asarray(data.get('v', np.empty(0)), dtype=float)
     g = np.asarray(data.get('group', np.empty(0, dtype=object)), dtype=object)
-    head = '$|M_{i,t}|$ vs speed $|v_{i,t}|$'
+    head = '$|M_{i,t}|$ vs projected speed $|\\tilde{v}_{\\parallel,i,t}|$'
     if label:
         head += f' ({label})'
     lines = [head, f"$N$ = {x.size:,} (i, t) points"]
@@ -1791,7 +2185,7 @@ def _percentile_stats_text(data: dict, label: str = '') -> str:
     gl = data.get('global_percentiles', {})
     if gl:
         lines.append('global ' + ', '.join(f'$p_{{{p:g}}}$ = {gl[p]:.4g}'
-                                           for p in sorted(gl)) + r' [$\mu$m/s]')
+                                           for p in sorted(gl)))
     recs = list(data.get('records', []))
     if recs:
         counts = [int(r['count']) for r in recs]
@@ -1932,8 +2326,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="（デバッグ用）1 実験あたりの使用フレーム数上限")
     parser.add_argument('--region_factor', type=float, default=2.0,
                         help="円板半径 = region_factor * R_c（ビーズ半径の何倍か）")
-    parser.add_argument('--min_region_um', type=float, default=1.0,
-                        help="円板半径の下限 [um]（小さいビーズでサンプル数を確保する）")
+    parser.add_argument('--min_region_um', type=float, default=3.37,
+                        help="円板半径の下限 [um]（小粒子 0.63um, 1.18um のサンプリング数確保のため既定 3.37）")
     parser.add_argument('--region_inner_factor', type=float, default=0.0,
                         help="内側くり抜き半径 = factor * R_c（0 = 円板、1 = ビーズ直下を除外した円環）")
     parser.add_argument('--min_region_pixels', type=int, default=6,
@@ -1953,6 +2347,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--frame_interval', type=float, default=4.0, help="フレーム間隔 [s]")
     parser.add_argument('--tau', type=int, default=1,
                         help="速度計算のラグ [frames]（1 = 連続フレーム、光学フローと同時刻）")
+    parser.add_argument('--smooth_method', type=str, default='moving_average',
+                        choices=['moving_average', 'savgol', 'none'],
+                        help="貨物軌跡の平滑化方式（moving_average = 移動平均、savgol = Savitzky-Golay、none = なし）")
+    parser.add_argument('--smooth_window', type=int, default=3,
+                        help="貨物軌跡の平滑化窓幅 [frames]（既定 3 = 12 秒、<=1 で無効化）")
+    parser.add_argument('--savgol_window', type=int, default=None,
+                        help="--smooth_window のエイリアス（互換性用）")
+    parser.add_argument('--savgol_poly', type=int, default=2,
+                        help="Savitzky-Golay フィルタの多項式次数（smooth_method=savgol 時、既定 2）")
     parser.add_argument('--velocity', type=str, default='tracked', choices=['tracked', 'flow'],
                         help="縦軸の速度: tracked = 軌跡から、flow = 円板内の平均フロー")
     parser.add_argument('--v_bins', type=int, default=12, help="トレンド線の等点数ビン数")
@@ -1992,6 +2395,18 @@ def build_parser() -> argparse.ArgumentParser:
                         help="ヒートマップのカラーマップ名")
     parser.add_argument('--no_heatmap_marginals', action='store_true',
                         help="ヒートマップに周辺分布（上 = x の個数、右 = v の個数）を付けない")
+    parser.add_argument('--no_hexbin', action='store_true',
+                        help="2D Hexbin プロット（六角形ビンによる密度図）を出力しない")
+    parser.add_argument('--hexbin_gridsize', type=int, default=35,
+                        help="Hexbin のグリッド分割数")
+    parser.add_argument('--hexbin_linear_color', action='store_true',
+                        help="Hexbin のカウント色を線形スケールにする（既定は対数）")
+    parser.add_argument('--hexbin_mincnt', type=int, default=1,
+                        help="Hexbin の最小カウント数")
+    parser.add_argument('--hexbin_per_condition', action='store_true',
+                        help="Hexbin を条件（粒子径）ごとにも出力する")
+    parser.add_argument('--hexbin_abs', action='store_true',
+                        help="絶対値折り畳み版の Hexbin も出力する")
     parser.add_argument('--no_percentiles', action='store_true',
                         help="パーセンタイル速度の図（横軸 |M|、縦軸 = 速度）を出力しない")
     parser.add_argument('--percentile_list', type=float, nargs='+',
@@ -2042,15 +2457,17 @@ def main() -> None:
         raise RuntimeError("No target bead conditions selected.")
 
     print("=" * 78)
-    print(" Cargo velocity v_{i,t} vs Ising spin mean M_{i,t} and local polar order P_{i,t}")
+    print(" Dimensionless projected cargo velocity v_tilde vs Ising spin mean M and local polar order P")
     print("=" * 78)
     print(f"Data Root Directory : {root_dir}")
     print(f"Output Directories  : {', '.join(str(d) for d in out_dirs)}")
     print(f"Target Beads        : {[b['name'] for b in target_beads]}")
     print(f"Pixel / frame stride: {args.pixel_stride} px / {args.frame_stride} frames")
     print(f"Director            : {args.director} (theta_sign = {args.theta_sign})")
-    print(f"Velocity            : {args.velocity} "
-          f"(tracked: v = |dr| / ({args.tau} x {args.frame_interval} s), scale = {args.scale} um/px)")
+    w_smooth = args.smooth_window if args.savgol_window is None else args.savgol_window
+    print(f"Velocity            : {args.velocity} (dimensionless projected: v_tilde = v_parallel / v_MT, "
+          f"smooth={args.smooth_method}: window={w_smooth}, "
+          f"tracked: v = |dr| / ({args.tau} x {args.frame_interval} s), scale = {args.scale} um/px)")
     print(f"Region under cargo  : R = max({args.region_factor} R_c, {args.min_region_um} um), "
           f"inner = {args.region_inner_factor} R_c, min pixels = {args.min_region_pixels}, "
           f"min valid frac = {args.min_valid_fraction}")
@@ -2086,7 +2503,10 @@ def main() -> None:
                 scale=args.scale, frame_interval=args.frame_interval, tau=args.tau,
                 director=args.director, velocity=args.velocity,
                 flow_cache=args.flow_cache, flow_cache_name=cache_name,
-                progress=not args.no_progress)
+                progress=not args.no_progress,
+                smooth_method=args.smooth_method,
+                smooth_window=w_smooth,
+                savgol_poly=args.savgol_poly)
             if res is None:
                 continue
             print(f"    {exp_dir.name}: {res['n_frames_used']}/{res['n_frames_total']} frames, "
@@ -2203,6 +2623,32 @@ def main() -> None:
         mt_ori.save_csv_to_all(pd.concat(df_heat_frames, ignore_index=True),
                                'cargo_spin_velocity_heatmap', out_dirs)
 
+    # --- 2D Hexbin プロット ---
+    if not args.no_hexbin:
+        hex_kwargs = dict(
+            gridsize=args.hexbin_gridsize,
+            cmap=args.heatmap_cmap,
+            log_color=not args.hexbin_linear_color,
+            mincnt=args.hexbin_mincnt,
+            marginals=not args.no_heatmap_marginals,
+            trend_bins=args.v_bins, trend_min_count=args.v_bin_min_count,
+            upper_percentile=args.heatmap_upper_percentile)
+        abs_hex_modes = (False, True) if args.hexbin_abs else (False,)
+        for x_var in X_VARIABLES:
+            for use_abs in abs_hex_modes:
+                h_suffix = '_hexbin_abs' if use_abs else '_hexbin'
+                j_label = JOINT_LABELS_ABS[x_var] if use_abs else JOINT_LABELS[x_var]
+                plot_hexbin(df_long, target_beads, x_var, out_dirs,
+                            basename=f"{X_FILE_TAG[x_var]}{h_suffix}",
+                            title=(f"{j_label} (Hexbin) : all conditions "
+                                   f"($N$ = {len(df_long[df_long['x_var'] == x_var]):,})"),
+                            sign_note=heat_note, abs_values=use_abs, **hex_kwargs)
+                for bead in (target_beads if args.hexbin_per_condition else []):
+                    plot_hexbin(df_long, [bead], x_var, out_dirs,
+                                basename=f"{X_FILE_TAG[x_var]}{h_suffix}_{bead['name']}",
+                                title=(f"{j_label} (Hexbin) : {_bead_label(bead)}"),
+                                sign_note=heat_note, abs_values=use_abs, **hex_kwargs)
+
     # --- パーセンタイル速度 vs |M|（縦軸 = 速度、横軸 = |M|） ---
     df_pct_frames: List[pd.DataFrame] = []
     if not args.no_percentiles:
@@ -2210,7 +2656,7 @@ def main() -> None:
                           x_bins=args.percentile_bins_x,
                           x_edges_mode=args.percentile_x_edges,
                           min_count=args.percentile_min_count)
-        pct_title = f"{X_LABELS_ABS[PERCENTILE_X_VAR]} vs speed $|v_{{i,t}}|$"
+        pct_title = f"{X_LABELS_ABS[PERCENTILE_X_VAR]} vs projected speed $|\\tilde{{v}}_{{\\parallel,i,t}}|$"
         data_pct = percentile_data(df_long, target_beads, **pct_kwargs)
         if data_pct is not None:
             df_pct_frames.append(percentile_table(data_pct, 'all'))
@@ -2250,8 +2696,8 @@ def main() -> None:
     print("-" * 78)
     print(" Summary (per condition x x-variable)")
     cols = ['bead_name', 'x_variable', 'n_points', 'n_experiments', 'n_particles',
-            'x_mean', 'x_std', 'v_median_um_s', 'pearson_r', 'pearson_p',
-            'spearman_rho', 'slope_ols', 'r2_ols', 'within_r']
+            'x_mean', 'x_std', 'v_tilde_median', 'v_median_um_s', 'v_mt_mean_um_s',
+            'pearson_r', 'pearson_p', 'spearman_rho', 'slope_ols', 'r2_ols', 'within_r']
     print(df_summary[[c for c in cols if c in df_summary.columns]].to_string(index=False))
     print()
     print("Done.")
