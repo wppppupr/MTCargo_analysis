@@ -2,31 +2,42 @@
 """
 plot_odds_ratio_and_posterior_magnetization.py
 
-横軸を貨物領域における平均磁荷の絶対値 |M| とした以下の2つのグラフを作成するスクリプトです:
+横軸を貨物領域における平均磁荷の絶対値 |M| とした以下のグラフを作成するスクリプトです:
 1. Odds Ratio (濃縮比 / 相対比率):
-       \text{Odds Ratio} = \frac{ P(v > v_c \mid |M|) }{ P(v > v_c) } = \frac{ P(|M| \mid v > v_c) }{ P(|M|) }
+       \\text{Odds Ratio} = \\frac{ P(\\tilde{v}_\\parallel > \\tilde{v}_c \\mid |M|) }{ P(\\tilde{v}_\\parallel > \\tilde{v}_c) } = \\frac{ P(|M| \\mid \\tilde{v}_\\parallel > \\tilde{v}_c) }{ P(|M|) }
    - 1.0 より大きい領域: 全体平均よりも高速走行が促進・濃縮されている領域
    - 1.0 より小さい領域: 高速走行が抑制されている領域
 
 2. 条件付き磁荷分布 (事後分布):
-       P(|M| \mid v > v_c) = \frac{ N(v > v_c,\, |M|) }{ N(v > v_c) }
-   - 速度が v_c を超えている粒子に限定したとき、それらの粒子がどのような |M| の領域に存在しているかの確率分布
-   - 全体背景分布 P(|M|) と比較可能
+       P(|M| \\mid \\tilde{v}_\\parallel > \\tilde{v}_c) = \\frac{ N(\\tilde{v}_\\parallel > \\tilde{v}_c,\\, |M|) }{ N(\\tilde{v}_\\parallel > \\tilde{v}_c) }
+   - 速度が \\tilde{v}_c を超えている粒子に限定したときの、磁荷 |M| の存在確率分布
 
-速度閾値:
-    v_c = [0.025, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3] μm/s
+無次元速度閾値:
+    \\tilde{v}_c = [0.1, 0.5, 0.8, 1.0]
 
-出力ファイル:
-1. figure/cargo_spin_velocity/odds_ratio_and_posterior_magnetization_2panel.png / .svg
-   (左パネル: Odds Ratio, 右パネル: P(|M| | v > v_c))
-2. figure/cargo_spin_velocity/odds_ratio_vs_magnetization_abs.png / .svg
-   (Odds Ratio 単体図)
-3. figure/cargo_spin_velocity/posterior_magnetization_vs_vc.png / .svg
-   (条件付き磁荷分布 P(|M| | v > v_c) 単体図)
-4. figure/cargo_spin_velocity/odds_ratio_per_condition.png / .svg
-   (粒子径別 比較 4パネル図)
-5. figure/cargo_spin_velocity/odds_ratio_and_posterior_summary.csv
-   (集計サマリーCSV)
+出力ファイル（ローカルおよび root_dir / NAS-Ebanaru の両方に保存）:
+1. figure/cargo_spin_velocity/odds_ratio_per_condition.png / .svg
+   (全6粒子径 2x3 パネル図: 0.63, 1.18, 3.37, 5.00, 7.24, 20.0 um)
+2. figure/cargo_spin_velocity/odds_ratio_and_posterior_small_beads_pooled_2panel.png / .svg
+   (Small Beads Pooled (0.6, 1, 3 um): 左パネル Odds Ratio, 右パネル P(|M| | v_tilde > vc))
+3. figure/cargo_spin_velocity/odds_ratio_small_beads_pooled.png / .svg
+   (Small Beads Pooled: Odds Ratio 単体図)
+4. figure/cargo_spin_velocity/posterior_magnetization_small_beads_pooled.png / .svg
+   (Small Beads Pooled: P(|M| | v_tilde > vc) 単体図)
+5. figure/cargo_spin_velocity/odds_ratio_and_posterior_large_beads_pooled_2panel.png / .svg
+   (Large Beads Pooled (5, 7, 20 um): 左パネル Odds Ratio, 右パネル P(|M| | v_tilde > vc))
+6. figure/cargo_spin_velocity/odds_ratio_large_beads_pooled.png / .svg
+   (Large Beads Pooled: Odds Ratio 単体図)
+7. figure/cargo_spin_velocity/posterior_magnetization_large_beads_pooled.png / .svg
+   (Large Beads Pooled: P(|M| | v_tilde > vc) 単体図)
+8. figure/cargo_spin_velocity/odds_ratio_small_vs_large_beads_pooled_2panel.png / .svg
+   (Small vs Large Beads Pooled: Odds Ratio 2パネル比較図)
+9. figure/cargo_spin_velocity/odds_ratio_and_posterior_magnetization_2panel.png / .svg
+   (All Beads Pooled: 2パネル図)
+10. figure/cargo_spin_velocity/odds_ratio_overlay_across_diameters.png / .svg
+    (粒子径間 Odds Ratio 重ね合わせ図)
+11. figure/cargo_spin_velocity/odds_ratio_and_posterior_summary.csv
+    (集計サマリーCSV)
 """
 
 import argparse
@@ -44,14 +55,36 @@ CURRENT_DIR = Path(__file__).parent.resolve()
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
-# ビーズ基本情報
+# ビーズ基本情報 (全粒子径)
 BEADS_INFO = [
     {"name": "beads06um", "diameter_um": 0.63, "label": "0.63 μm", "marker": "^", "color": "#1f77b4"},
     {"name": "beads1um",  "diameter_um": 1.18, "label": "1.18 μm", "marker": "o", "color": "#ff7f0e"},
     {"name": "beads3um",  "diameter_um": 3.37, "label": "3.37 μm", "marker": "d", "color": "#2ca02c"},
+    {"name": "beads5um",  "diameter_um": 5.00, "label": "5.00 μm", "marker": "p", "color": "#d62728"},
+    {"name": "beads7um",  "diameter_um": 7.24, "label": "7.24 μm", "marker": "h", "color": "#9467bd"},
+    {"name": "beads20um", "diameter_um": 20.0, "label": "20.0 μm", "marker": "s", "color": "#8c564b"},
 ]
 
-DEFAULT_VC_LIST = [0.025, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3]
+DEFAULT_VC_LIST = [0.1, 0.5, 0.8, 1.0]
+
+POSSIBLE_ROOTS = [
+    Path('/Volumes/data-1/Sasaki/MTsingleBeads'),
+    Path('/Volumes/data-1/sasaki/MTsingleBeads'),
+    Path('/Volumes/data/Sasaki/MTsingleBeads'),
+    Path('/Volumes/data/sasaki/MTsingleBeads'),
+    Path('/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads'),
+    Path('/mnt/NAS-Ebanaru/sasaki/MTsingleBeads'),
+]
+
+
+def find_default_root() -> Optional[Path]:
+    """存在するデータルートを返す"""
+    for r in POSSIBLE_ROOTS:
+        if r.exists():
+            for b in ['beads1um', 'beads06um', 'beads3um', 'beads5um']:
+                if (r / b).exists():
+                    return r
+    return None
 
 
 def apply_custom_style():
@@ -65,16 +98,45 @@ def apply_custom_style():
     plt.rcParams['mathtext.fontset'] = 'cm'
 
 
-def load_points_data(csv_path: Path) -> pd.DataFrame:
+def save_figure_to_all(fig: plt.Figure, basename: str, out_dirs: List[Path], dpi: int = 300):
+    """指定されたすべての出力ディレクトリに png と svg を保存する"""
+    for d in out_dirs:
+        d.mkdir(parents=True, exist_ok=True)
+        png_path = d / f"{basename}.png"
+        svg_path = d / f"{basename}.svg"
+        fig.savefig(png_path, dpi=dpi, bbox_inches='tight')
+        fig.savefig(svg_path, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved figure: {basename}.png / .svg -> {len(out_dirs)} dir(s)")
+
+
+def save_csv_to_all(df: pd.DataFrame, basename: str, out_dirs: List[Path]):
+    """指定されたすべての出力ディレクトリに CSV を保存する"""
+    for d in out_dirs:
+        d.mkdir(parents=True, exist_ok=True)
+        csv_path = d / f"{basename}.csv"
+        df.to_csv(csv_path, index=False)
+    print(f"Saved CSV: {basename}.csv -> {len(out_dirs)} dir(s)")
+
+
+def load_points_data(csv_path: Path, vel_col: str = 'v_parallel_tilde') -> pd.DataFrame:
     """cargo_spin_velocity_points.csv を読み込み前処理"""
     if not csv_path.exists():
         raise FileNotFoundError(f"Points CSV not found: {csv_path}. Run plot_cargo_spin_velocity.py first.")
 
     df = pd.read_csv(csv_path)
     df['abs_m'] = df['m_ising'].abs()
-    valid = np.isfinite(df['m_ising']) & np.isfinite(df['v_um_s']) & (df['abs_m'] <= 1.0)
+
+    if vel_col not in df.columns:
+        if 'v_tilde' in df.columns:
+            vel_col = 'v_tilde'
+        elif 'v_um_s' in df.columns:
+            vel_col = 'v_um_s'
+    df['target_vel'] = df[vel_col]
+
+    valid = np.isfinite(df['m_ising']) & np.isfinite(df['target_vel']) & (df['abs_m'] <= 1.0)
     df_valid = df[valid].copy()
-    print(f"Loaded {len(df_valid)} valid points from {csv_path}")
+    print(f"Loaded {len(df_valid)} valid points from {csv_path} (velocity column: {vel_col})")
     return df_valid
 
 
@@ -94,8 +156,8 @@ def compute_odds_ratio_and_posterior(
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     |M| のビンごとに、
-    1. Odds Ratio = P(v > v_c | |M|) / P(v > v_c)
-    2. P(|M| | v > v_c)
+    1. Odds Ratio = P(v_tilde > v_c | |M|) / P(v_tilde > v_c)
+    2. P(|M| | v_tilde > v_c)
     3. 全体背景分布 P(|M|)
     を算出
     """
@@ -108,7 +170,6 @@ def compute_odds_ratio_and_posterior(
     p_m = counts_m / n_total
     p_m_err = np.sqrt(p_m * (1.0 - p_m) / n_total)
 
-    # 背景分布レコード
     bg_records = []
     for bin_i in range(n_bins):
         m_low, m_high = bins[bin_i], bins[bin_i + 1]
@@ -132,7 +193,7 @@ def compute_odds_ratio_and_posterior(
 
     records = []
     for vc in vc_list:
-        n_vc = (df_temp['v_um_s'] > vc).sum()
+        n_vc = (df_temp['target_vel'] > vc).sum()
         p_vc_overall = n_vc / n_total if n_total > 0 else 0.0
 
         for bin_i in range(n_bins):
@@ -142,24 +203,20 @@ def compute_odds_ratio_and_posterior(
             m_mean = float(bin_subset['abs_m'].mean()) if n_bin > 0 else (m_low + m_high) / 2.0
             m_median = float(bin_subset['abs_m'].median()) if n_bin > 0 else (m_low + m_high) / 2.0
 
-            sub_vc = bin_subset[bin_subset['v_um_s'] > vc]
+            sub_vc = bin_subset[bin_subset['target_vel'] > vc]
             k_vc = len(sub_vc)
 
             if n_bin >= min_count and n_vc > 0:
-                # 1. P(v > vc | M)
                 p_v_given_m = k_vc / n_bin
                 p_v_given_m_err = np.sqrt(max(p_v_given_m * (1.0 - p_v_given_m) / n_bin, 1e-6 / n_bin))
 
-                # 2. Odds ratio = P(v > vc | M) / P(v > vc)
                 odds_ratio = p_v_given_m / p_vc_overall if p_vc_overall > 0 else np.nan
-                # 誤差伝播 (二項比率)
                 if odds_ratio > 0:
                     rel_err_sq = (p_v_given_m_err / p_v_given_m)**2 + ((1.0 - p_vc_overall) / (n_total * p_vc_overall))
                     odds_ratio_err = odds_ratio * np.sqrt(rel_err_sq)
                 else:
                     odds_ratio_err = np.nan
 
-                # 3. P(M | v > vc) = k_vc / n_vc
                 p_m_given_vc = k_vc / n_vc
                 p_m_given_vc_err = np.sqrt(max(p_m_given_vc * (1.0 - p_m_given_vc) / n_vc, 1e-6 / n_vc))
             else:
@@ -199,13 +256,14 @@ def plot_odds_ratio_and_posterior_2panel(
     df_summary: pd.DataFrame,
     df_bg: pd.DataFrame,
     vc_list: List[float],
-    output_dir: Path,
+    out_dirs: List[Path],
+    filename_prefix: str = "odds_ratio_and_posterior_magnetization",
     title_suffix: str = "All Beads Pooled"
 ):
     """
     2パネル図:
-    左パネル: Odds Ratio = P(v > v_c | |M|) / P(v > v_c)
-    右パネル: P(|M| | v > v_c) (背景分布 P(|M|) も参照線として描画)
+    左パネル: Odds Ratio = P(\tilde{v}_\parallel > \tilde{v}_c | |M|) / P(\tilde{v}_\parallel > \tilde{v}_c)
+    右パネル: P(|M| | \tilde{v}_\parallel > \tilde{v}_c)
     """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.8))
     colors = get_vc_colors(vc_list)
@@ -226,22 +284,19 @@ def plot_odds_ratio_and_posterior_2panel(
         ax1.errorbar(
             x, y, yerr=yerr,
             fmt=f'-{marker}', color=color, lw=1.8, ms=6.5, capsize=3.5, elinewidth=1.3,
-            label=f'$v_c = {vc:g}\\ \\mu\\mathrm{{m/s}}$'
+            label=rf'$\tilde{{v}}_c = {vc:g}$'
         )
 
-    # 基準線 (Odds ratio = 1.0)
     ax1.axhline(1.0, color='#666666', ls='--', lw=1.5, alpha=0.8, label='Baseline (= 1.0)')
-
     ax1.set_xlabel(r"Magnetization Magnitude $|M|$", fontsize=12.5)
-    ax1.set_ylabel(r"$\mathrm{Odds\ Ratio} = \frac{P(v > v_c \mid |M|)}{P(v > v_c)}$", fontsize=13.5)
-    ax1.set_title(r"Odds Ratio $\frac{P(v > v_c \mid |M|)}{P(v > v_c)}$", fontsize=13.5, fontweight='bold')
+    ax1.set_ylabel(r"$\mathrm{Odds\ Ratio} = \frac{P(\tilde{v}_\parallel > \tilde{v}_c \mid |M|)}{P(\tilde{v}_\parallel > \tilde{v}_c)}$", fontsize=13.5)
+    ax1.set_title(r"Odds Ratio $\frac{P(\tilde{v}_\parallel > \tilde{v}_c \mid |M|)}{P(\tilde{v}_\parallel > \tilde{v}_c)}$", fontsize=13.5, fontweight='bold')
     ax1.set_xlim(-0.02, 1.02)
-    ax1.set_ylim(0.0, 1.6)
+    ax1.set_ylim(0.0, 2.0)
     ax1.grid(True, which='major', ls=':', alpha=0.6)
-    ax1.legend(title=r"Threshold $v_c$", fontsize=9.5, title_fontsize=10.5, loc='upper left', framealpha=0.9)
+    ax1.legend(title=r"Threshold $\tilde{v}_c$", fontsize=9.5, title_fontsize=10.5, loc='upper left', framealpha=0.9)
 
-    # --- 右パネル: P(|M| | v > v_c) ---
-    # 背景分布 P(|M|)
+    # --- 右パネル: P(|M| | \tilde{v}_\parallel > \tilde{v}_c) ---
     ax2.plot(
         df_bg['m_mean'], df_bg['p_m'],
         'k--', lw=2.0, marker='x', ms=7, label=r'Background $P(|M|)$'
@@ -261,16 +316,16 @@ def plot_odds_ratio_and_posterior_2panel(
         ax2.errorbar(
             x, y, yerr=yerr,
             fmt=f'-{marker}', color=color, lw=1.8, ms=6.5, capsize=3.5, elinewidth=1.3,
-            label=f'$v_c = {vc:g}\\ \\mu\\mathrm{{m/s}}$'
+            label=rf'$\tilde{{v}}_c = {vc:g}$'
         )
 
     ax2.set_xlabel(r"Magnetization Magnitude $|M|$", fontsize=12.5)
-    ax2.set_ylabel(r"Conditional Probability $P(|M| \mid v > v_c)$", fontsize=12.5)
-    ax2.set_title(r"Conditional Magnetization Distribution $P(|M| \mid v > v_c)$", fontsize=13.5, fontweight='bold')
+    ax2.set_ylabel(r"Conditional Probability $P(|M| \mid \tilde{v}_\parallel > \tilde{v}_c)$", fontsize=12.5)
+    ax2.set_title(r"Conditional Magnetization Distribution $P(|M| \mid \tilde{v}_\parallel > \tilde{v}_c)$", fontsize=13.5, fontweight='bold')
     ax2.set_xlim(-0.02, 1.02)
     ax2.set_ylim(-0.02, 0.9)
     ax2.grid(True, which='major', ls=':', alpha=0.6)
-    ax2.legend(title=r"Threshold $v_c$", fontsize=9.5, title_fontsize=10.5, loc='upper left', framealpha=0.9)
+    ax2.legend(title=r"Threshold $\tilde{v}_c$", fontsize=9.5, title_fontsize=10.5, loc='upper left', framealpha=0.9)
 
     plt.suptitle(
         rf"Cargo Motion Enrichment & Magnetization Distribution vs $|M|$ ({title_suffix})",
@@ -278,18 +333,14 @@ def plot_odds_ratio_and_posterior_2panel(
     )
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
-    png_path = output_dir / "odds_ratio_and_posterior_magnetization_2panel.png"
-    svg_path = output_dir / "odds_ratio_and_posterior_magnetization_2panel.svg"
-    plt.savefig(png_path, dpi=300, bbox_inches='tight')
-    plt.savefig(svg_path, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {png_path} and {svg_path}")
+    save_figure_to_all(fig, f"{filename_prefix}_2panel", out_dirs)
 
 
 def plot_single_odds_ratio(
     df_summary: pd.DataFrame,
     vc_list: List[float],
-    output_dir: Path,
+    out_dirs: List[Path],
+    filename: str = "odds_ratio_vs_magnetization_abs",
     title_suffix: str = "All Beads Pooled"
 ):
     """Odds Ratio 単体図"""
@@ -311,41 +362,35 @@ def plot_single_odds_ratio(
         ax.errorbar(
             x, y, yerr=yerr,
             fmt=f'-{marker}', color=color, lw=1.8, ms=6.5, capsize=3.5, elinewidth=1.3,
-            label=f'$v_c = {vc:g}\\ \\mu\\mathrm{{m/s}}$'
+            label=rf'$\tilde{{v}}_c = {vc:g}$'
         )
 
     ax.axhline(1.0, color='#666666', ls='--', lw=1.5, alpha=0.8, label='Baseline (= 1.0)')
-
     ax.set_xlabel(r"Magnetization Magnitude in Cargo Region $|M|$", fontsize=12.5)
-    ax.set_ylabel(r"$\mathrm{Odds\ Ratio} = \frac{P(v > v_c \mid |M|)}{P(v > v_c)}$", fontsize=13.5)
-    ax.set_title(rf"Odds Ratio $\frac{{P(v > v_c \mid |M|)}}{{P(v > v_c)}}$ vs Magnetization Magnitude\n({title_suffix})", fontsize=13.5, fontweight='bold', pad=12)
+    ax.set_ylabel(r"$\mathrm{Odds\ Ratio} = \frac{P(\tilde{v}_\parallel > \tilde{v}_c \mid |M|)}{P(\tilde{v}_\parallel > \tilde{v}_c)}$", fontsize=13.5)
+    ax.set_title(rf"Odds Ratio $\frac{{P(\tilde{{v}}_\parallel > \tilde{{v}}_c \mid |M|)}}{{P(\tilde{{v}}_\parallel > \tilde{{v}}_c)}}$ vs Magnetization Magnitude\n({title_suffix})", fontsize=13.5, fontweight='bold', pad=12)
     ax.set_xlim(-0.02, 1.02)
-    ax.set_ylim(0.0, 1.6)
+    ax.set_ylim(0.0, 2.0)
     ax.grid(True, which='major', ls=':', alpha=0.6)
-    ax.legend(title=r"Threshold $v_c$", fontsize=9.5, title_fontsize=10.5, loc='upper left', framealpha=0.9)
+    ax.legend(title=r"Threshold $\tilde{v}_c$", fontsize=9.5, title_fontsize=10.5, loc='upper left', framealpha=0.9)
 
     plt.tight_layout()
-    png_path = output_dir / "odds_ratio_vs_magnetization_abs.png"
-    svg_path = output_dir / "odds_ratio_vs_magnetization_abs.svg"
-    plt.savefig(png_path, dpi=300, bbox_inches='tight')
-    plt.savefig(svg_path, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {png_path} and {svg_path}")
+    save_figure_to_all(fig, filename, out_dirs)
 
 
 def plot_single_posterior(
     df_summary: pd.DataFrame,
     df_bg: pd.DataFrame,
     vc_list: List[float],
-    output_dir: Path,
+    out_dirs: List[Path],
+    filename: str = "posterior_magnetization_vs_vc",
     title_suffix: str = "All Beads Pooled"
 ):
-    """P(|M| | v > v_c) 単体図"""
+    """P(|M| | \tilde{v}_\parallel > \tilde{v}_c) 単体図"""
     fig, ax = plt.subplots(figsize=(8.0, 6.0))
     colors = get_vc_colors(vc_list)
     markers = ['o', 's', '^', 'd', 'v', 'p', 'h']
 
-    # 背景分布
     ax.plot(
         df_bg['m_mean'], df_bg['p_m'],
         'k--', lw=2.2, marker='x', ms=7, label=r'Background $P(|M|)$'
@@ -365,34 +410,29 @@ def plot_single_posterior(
         ax.errorbar(
             x, y, yerr=yerr,
             fmt=f'-{marker}', color=color, lw=1.8, ms=6.5, capsize=3.5, elinewidth=1.3,
-            label=f'$v_c = {vc:g}\\ \\mu\\mathrm{{m/s}}$'
+            label=rf'$\tilde{{v}}_c = {vc:g}$'
         )
 
     ax.set_xlabel(r"Magnetization Magnitude in Cargo Region $|M|$", fontsize=12.5)
-    ax.set_ylabel(r"Conditional Probability $P(|M| \mid v > v_c)$", fontsize=12.5)
-    ax.set_title(rf"Conditional Distribution $P(|M| \mid v > v_c)$ vs Magnetization Magnitude\n({title_suffix})", fontsize=13.5, fontweight='bold', pad=12)
+    ax.set_ylabel(r"Conditional Probability $P(|M| \mid \tilde{v}_\parallel > \tilde{v}_c)$", fontsize=12.5)
+    ax.set_title(rf"Conditional Distribution $P(|M| \mid \tilde{{v}}_\parallel > \tilde{{v}}_c)$ vs Magnetization Magnitude\n({title_suffix})", fontsize=13.5, fontweight='bold', pad=12)
     ax.set_xlim(-0.02, 1.02)
     ax.set_ylim(-0.02, 0.9)
     ax.grid(True, which='major', ls=':', alpha=0.6)
-    ax.legend(title=r"Threshold $v_c$", fontsize=9.5, title_fontsize=10.5, loc='upper left', framealpha=0.9)
+    ax.legend(title=r"Threshold $\tilde{v}_c$", fontsize=9.5, title_fontsize=10.5, loc='upper left', framealpha=0.9)
 
     plt.tight_layout()
-    png_path = output_dir / "posterior_magnetization_vs_vc.png"
-    svg_path = output_dir / "posterior_magnetization_vs_vc.svg"
-    plt.savefig(png_path, dpi=300, bbox_inches='tight')
-    plt.savefig(svg_path, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {png_path} and {svg_path}")
+    save_figure_to_all(fig, filename, out_dirs)
 
 
 def plot_odds_ratio_per_condition(
     df_all: pd.DataFrame,
     vc_list: List[float],
-    output_dir: Path,
+    out_dirs: List[Path],
     n_bins: int = 8
 ):
-    """粒子径別 (0.63, 1.18, 3.37 um) および 全体プール の Odds Ratio 2x2 パネルプロット"""
-    fig, axes = plt.subplots(2, 2, figsize=(14, 11), sharex=True, sharey=True)
+    """全6粒子径別 (0.63, 1.18, 3.37, 5.00, 7.24, 20.0 um) の Odds Ratio 2x3 パネルプロット（All Beads Pooled は除外）"""
+    fig, axes = plt.subplots(2, 3, figsize=(16, 9.5), sharex=True, sharey=True)
     axes = axes.flatten()
 
     colors = get_vc_colors(vc_list)
@@ -402,7 +442,9 @@ def plot_odds_ratio_per_condition(
         {"key": "beads06um", "title": r"0.63 $\mu\mathrm{m}$ Beads"},
         {"key": "beads1um",  "title": r"1.18 $\mu\mathrm{m}$ Beads"},
         {"key": "beads3um",  "title": r"3.37 $\mu\mathrm{m}$ Beads"},
-        {"key": "overall",   "title": "All Beads Pooled"},
+        {"key": "beads5um",  "title": r"5.00 $\mu\mathrm{m}$ Beads"},
+        {"key": "beads7um",  "title": r"7.24 $\mu\mathrm{m}$ Beads"},
+        {"key": "beads20um", "title": r"20.0 $\mu\mathrm{m}$ Beads"},
     ]
 
     for idx_panel, cond in enumerate(conditions):
@@ -410,13 +452,10 @@ def plot_odds_ratio_per_condition(
         key = cond["key"]
         title = cond["title"]
 
-        if key == "overall":
-            sub_df = df_all
-        else:
-            sub_df = df_all[df_all['bead_name'] == key]
+        sub_df = df_all[df_all['bead_name'] == key]
 
         if sub_df.empty:
-            ax.text(0.5, 0.5, f"No Data: {title}", ha='center', va='center', transform=ax.transAxes)
+            ax.text(0.5, 0.5, f"No Data:\n{title}", ha='center', va='center', transform=ax.transAxes, fontsize=12)
             continue
 
         df_summary, _ = compute_odds_ratio_and_posterior(sub_df, vc_list, n_bins=n_bins, min_count=3)
@@ -435,34 +474,89 @@ def plot_odds_ratio_per_condition(
             ax.errorbar(
                 x, y, yerr=yerr,
                 fmt=f'-{marker}', color=color, lw=1.6, ms=5.5, capsize=3.0, elinewidth=1.2,
-                label=f'$v_c = {vc:g}$' if idx_panel == 0 else ""
+                label=rf'$\tilde{{v}}_c = {vc:g}$' if idx_panel == 0 else ""
             )
 
         ax.axhline(1.0, color='#666666', ls='--', lw=1.4, alpha=0.8)
         ax.set_title(f"{title} ($N={len(sub_df):,}$)", fontsize=13, fontweight='bold')
         ax.grid(True, which='major', ls=':', alpha=0.6)
         ax.set_xlim(-0.02, 1.02)
-        ax.set_ylim(0.0, 1.8)
+        ax.set_ylim(0.0, 3.0)
 
-        if idx_panel in [0, 2]:
-            ax.set_ylabel(r"$\mathrm{Odds\ Ratio} = \frac{P(v > v_c \mid |M|)}{P(v > v_c)}$", fontsize=12)
-        if idx_panel in [2, 3]:
-            ax.set_xlabel(r"Magnetization Magnitude $|M|$", fontsize=12)
+        if idx_panel in [0, 3]:
+            ax.set_ylabel(r"$\mathrm{Odds\ Ratio} = \frac{P(\tilde{v}_\parallel > \tilde{v}_c \mid |M|)}{P(\tilde{v}_\parallel > \tilde{v}_c)}$", fontsize=11.5)
+        if idx_panel >= 3:
+            ax.set_xlabel(r"Magnetization Magnitude $|M|$", fontsize=11.5)
 
-    axes[0].legend(title=r"Threshold $v_c$ [$\mu\mathrm{m/s}$]", fontsize=9, title_fontsize=10, loc='upper left', framealpha=0.9)
+    axes[0].legend(title=r"Threshold $\tilde{v}_c$", fontsize=8.5, title_fontsize=9.5, loc='upper left', framealpha=0.9)
 
     plt.suptitle(
-        r"Odds Ratio $\frac{P(v > v_c \mid |M|)}{P(v > v_c)}$ across Bead Diameters",
+        r"Odds Ratio $\frac{P(\tilde{v}_\parallel > \tilde{v}_c \mid |M|)}{P(\tilde{v}_\parallel > \tilde{v}_c)}$ across All Bead Diameters ($0.63 - 20\ \mu\mathrm{m}$)",
         fontsize=14.5, fontweight='bold', y=0.99
     )
     plt.tight_layout(rect=[0, 0, 1, 0.97])
 
-    png_path = output_dir / "odds_ratio_per_condition.png"
-    svg_path = output_dir / "odds_ratio_per_condition.svg"
-    plt.savefig(png_path, dpi=300, bbox_inches='tight')
-    plt.savefig(svg_path, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {png_path} and {svg_path}")
+    save_figure_to_all(fig, "odds_ratio_per_condition", out_dirs)
+
+
+def plot_odds_ratio_overlay_across_diameters(
+    df_all: pd.DataFrame,
+    out_dirs: List[Path],
+    target_vc_list: List[float] = [0.1, 0.5, 0.8, 1.0],
+    n_bins: int = 8
+):
+    """代表的な速度閾値 (\tilde{v}_c = 0.1, 0.5, 0.8, 1.0) における粒子径間の Odds Ratio 重ね合わせ比較図"""
+    fig, axes = plt.subplots(1, len(target_vc_list), figsize=(5.5 * len(target_vc_list), 5.2), sharey=True)
+    if len(target_vc_list) == 1:
+        axes = [axes]
+
+    for idx_vc, vc in enumerate(target_vc_list):
+        ax = axes[idx_vc]
+
+        for b in BEADS_INFO:
+            b_name = b["name"]
+            sub_df = df_all[df_all['bead_name'] == b_name]
+            if sub_df.empty:
+                continue
+
+            df_summary, _ = compute_odds_ratio_and_posterior(sub_df, [vc], n_bins=n_bins, min_count=3)
+            sub = df_summary.dropna(subset=['odds_ratio'])
+            if sub.empty:
+                continue
+
+            ax.errorbar(
+                sub['m_mean'], sub['odds_ratio'], yerr=sub['odds_ratio_err'],
+                fmt=f'-{b["marker"]}', color=b['color'], lw=1.8, ms=6.5, capsize=3.0, elinewidth=1.2,
+                label=f'$d = {b["label"]}$'
+            )
+
+        # Small Beads Pooled 基準線
+        small_df = df_all[df_all['bead_name'].isin(['beads06um', 'beads1um', 'beads3um'])]
+        df_small, _ = compute_odds_ratio_and_posterior(small_df, [vc], n_bins=n_bins, min_count=5)
+        sub_sm = df_small.dropna(subset=['odds_ratio'])
+        if not sub_sm.empty:
+            ax.plot(
+                sub_sm['m_mean'], sub_sm['odds_ratio'],
+                'k--', lw=2.2, label='Small Pooled (0.6-3um)'
+            )
+
+        ax.axhline(1.0, color='#888888', ls=':', lw=1.5, alpha=0.8)
+        ax.set_title(rf"Threshold $\tilde{{v}}_c = {vc:g}$", fontsize=13, fontweight='bold')
+        ax.set_xlabel(r"Magnetization Magnitude $|M|$", fontsize=12)
+        if idx_vc == 0:
+            ax.set_ylabel(r"$\mathrm{Odds\ Ratio} = \frac{P(\tilde{v}_\parallel > \tilde{v}_c \mid |M|)}{P(\tilde{v}_\parallel > \tilde{v}_c)}$", fontsize=12.5)
+        ax.set_xlim(-0.02, 1.02)
+        ax.set_ylim(0.0, 3.0)
+        ax.grid(True, which='major', ls=':', alpha=0.6)
+        ax.legend(loc='upper left', fontsize=8.0, framealpha=0.9)
+
+    plt.suptitle(
+        r"Odds Ratio Comparison Across Bead Diameters ($0.63 - 20\ \mu\mathrm{m}$)",
+        fontsize=14.5, fontweight='bold', y=0.99
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    save_figure_to_all(fig, "odds_ratio_overlay_across_diameters", out_dirs)
 
 
 def main():
@@ -474,10 +568,16 @@ def main():
         help="Path to cargo_spin_velocity_points.csv"
     )
     parser.add_argument(
+        "--root-dir",
+        type=Path,
+        default=None,
+        help="Root directory (NAS-Ebanaru). If specified or detected, figures and CSVs will also be saved to <root_dir>/figure/cargo_spin_velocity"
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=CURRENT_DIR / "figure" / "cargo_spin_velocity",
-        help="Output directory"
+        help="Local output directory"
     )
     parser.add_argument(
         "--bins",
@@ -490,25 +590,52 @@ def main():
         type=float,
         nargs="+",
         default=DEFAULT_VC_LIST,
-        help="List of velocity thresholds v_c"
+        help="List of velocity thresholds v_tilde_c"
     )
     args = parser.parse_args()
 
-    output_dir = args.output_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # 出力先ディレクトリ群の設定 (ローカル + root_dir/NAS)
+    out_dirs = [args.output_dir]
+    root_dir = args.root_dir if args.root_dir else find_default_root()
+    if root_dir and root_dir.exists():
+        nas_out_dir = root_dir / "figure" / "cargo_spin_velocity"
+        if nas_out_dir not in out_dirs:
+            out_dirs.append(nas_out_dir)
+
+    for d in out_dirs:
+        d.mkdir(parents=True, exist_ok=True)
+
+    print("Output directories:")
+    for d in out_dirs:
+        print(f"  - {d}")
+
     apply_custom_style()
 
     # 1. データの読み込み
     df = load_points_data(args.points_csv)
 
-    # 2. 全体プールの計算
+    # 2. 全体プール (All Beads Pooled) の計算
     df_summary_overall, df_bg_overall = compute_odds_ratio_and_posterior(
         df, vc_list=args.vc, n_bins=args.bins, min_count=5
     )
     df_summary_overall['condition'] = 'overall_pooled'
 
-    # 粒子径別計算
-    all_summaries = [df_summary_overall]
+    # 3. 小型粒子プール (Small Beads Pooled: 0.63, 1.18, 3.37 um) の計算
+    small_df = df[df['bead_name'].isin(['beads06um', 'beads1um', 'beads3um'])].copy()
+    df_summary_small, df_bg_small = compute_odds_ratio_and_posterior(
+        small_df, vc_list=args.vc, n_bins=args.bins, min_count=5
+    )
+    df_summary_small['condition'] = 'small_beads_pooled'
+
+    # 4. 大型粒子プール (Large Beads Pooled: 5.00, 7.24, 20.0 um) の計算
+    large_df = df[df['bead_name'].isin(['beads5um', 'beads7um', 'beads20um'])].copy()
+    df_summary_large, df_bg_large = compute_odds_ratio_and_posterior(
+        large_df, vc_list=args.vc, n_bins=args.bins, min_count=5
+    )
+    df_summary_large['condition'] = 'large_beads_pooled'
+
+    # 5. 各粒子径別計算
+    all_summaries = [df_summary_overall, df_summary_small, df_summary_large]
     for b in BEADS_INFO:
         b_name = b["name"]
         sub_df = df[df['bead_name'] == b_name]
@@ -518,24 +645,103 @@ def main():
             all_summaries.append(df_b)
 
     df_summary_all = pd.concat(all_summaries, ignore_index=True)
-    summary_csv_path = output_dir / "odds_ratio_and_posterior_summary.csv"
-    df_summary_all.to_csv(summary_csv_path, index=False)
-    print(f"Saved summary CSV: {summary_csv_path}")
+    save_csv_to_all(df_summary_all, "odds_ratio_and_posterior_summary", out_dirs)
 
-    # 3. プロット生成
-    # (a) メイン2パネル図 (Odds Ratio & P(|M| | v > vc))
-    plot_odds_ratio_and_posterior_2panel(df_summary_overall, df_bg_overall, args.vc, output_dir, title_suffix="All Beads Pooled")
+    # 6. プロット生成
+    # (a) 全6粒子径別 Odds Ratio 2x3 パネル図 (0.63, 1.18, 3.37, 5, 7, 20 um) ※All Pooledは非表示
+    plot_odds_ratio_per_condition(df, args.vc, out_dirs, n_bins=args.bins)
 
-    # (b) Odds Ratio 単体図
-    plot_single_odds_ratio(df_summary_overall, args.vc, output_dir, title_suffix="All Beads Pooled")
+    # (b) Small Beads Pooled (0.6, 1, 3 um) 2パネル図
+    plot_odds_ratio_and_posterior_2panel(
+        df_summary_small, df_bg_small, args.vc, out_dirs,
+        filename_prefix="odds_ratio_and_posterior_small_beads_pooled",
+        title_suffix=rf"Small Beads Pooled ($0.63, 1.18, 3.37\ \mu\mathrm{{m}}$, $N={len(small_df):,}$)"
+    )
 
-    # (c) P(|M| | v > vc) 単体図
-    plot_single_posterior(df_summary_overall, df_bg_overall, args.vc, output_dir, title_suffix="All Beads Pooled")
+    # (c) Small Beads Pooled Odds Ratio 単体図
+    plot_single_odds_ratio(
+        df_summary_small, args.vc, out_dirs,
+        filename="odds_ratio_small_beads_pooled",
+        title_suffix=rf"Small Beads Pooled ($0.63, 1.18, 3.37\ \mu\mathrm{{m}}$, $N={len(small_df):,}$)"
+    )
 
-    # (d) 粒子径別 Odds Ratio 2x2 パネル図
-    plot_odds_ratio_per_condition(df, args.vc, output_dir, n_bins=args.bins)
+    # (d) Small Beads Pooled P(|M| | v_tilde > vc) 単体図
+    plot_single_posterior(
+        df_summary_small, df_bg_small, args.vc, out_dirs,
+        filename="posterior_magnetization_small_beads_pooled",
+        title_suffix=rf"Small Beads Pooled ($0.63, 1.18, 3.37\ \mu\mathrm{{m}}$, $N={len(small_df):,}$)"
+    )
 
-    print("\nOdds ratio and posterior magnetization plots created successfully!")
+    # (e) Large Beads Pooled (5, 7, 20 um) 2パネル図
+    plot_odds_ratio_and_posterior_2panel(
+        df_summary_large, df_bg_large, args.vc, out_dirs,
+        filename_prefix="odds_ratio_and_posterior_large_beads_pooled",
+        title_suffix=rf"Large Beads Pooled ($5.00, 7.24, 20.0\ \mu\mathrm{{m}}$, $N={len(large_df):,}$)"
+    )
+
+    # (f) Large Beads Pooled Odds Ratio 単体図
+    plot_single_odds_ratio(
+        df_summary_large, args.vc, out_dirs,
+        filename="odds_ratio_large_beads_pooled",
+        title_suffix=rf"Large Beads Pooled ($5.00, 7.24, 20.0\ \mu\mathrm{{m}}$, $N={len(large_df):,}$)"
+    )
+
+    # (g) Large Beads Pooled P(|M| | v_tilde > vc) 単体図
+    plot_single_posterior(
+        df_summary_large, df_bg_large, args.vc, out_dirs,
+        filename="posterior_magnetization_large_beads_pooled",
+        title_suffix=rf"Large Beads Pooled ($5.00, 7.24, 20.0\ \mu\mathrm{{m}}$, $N={len(large_df):,}$)"
+    )
+
+    # (h) Small vs Large Beads Pooled Odds Ratio 2パネル比較図
+    fig, (ax_s, ax_l) = plt.subplots(1, 2, figsize=(14, 5.8), sharey=True)
+    colors = get_vc_colors(args.vc)
+    markers = ['o', 's', '^', 'd', 'v', 'p', 'h']
+    for idx, vc in enumerate(args.vc):
+        sub_s = df_summary_small[df_summary_small['vc'] == vc].dropna(subset=['odds_ratio'])
+        if not sub_s.empty:
+            ax_s.errorbar(
+                sub_s['m_mean'], sub_s['odds_ratio'], yerr=sub_s['odds_ratio_err'],
+                fmt=f'-{markers[idx % len(markers)]}', color=colors[idx], lw=1.8, ms=6.5, capsize=3.5, elinewidth=1.3,
+                label=rf'$\tilde{{v}}_c = {vc:g}$'
+            )
+        sub_l = df_summary_large[df_summary_large['vc'] == vc].dropna(subset=['odds_ratio'])
+        if not sub_l.empty:
+            ax_l.errorbar(
+                sub_l['m_mean'], sub_l['odds_ratio'], yerr=sub_l['odds_ratio_err'],
+                fmt=f'-{markers[idx % len(markers)]}', color=colors[idx], lw=1.8, ms=6.5, capsize=3.5, elinewidth=1.3,
+                label=rf'$\tilde{{v}}_c = {vc:g}$'
+            )
+
+    for ax, title, n_pts in [(ax_s, "Small Beads Pooled (0.63, 1.18, 3.37 μm)", len(small_df)),
+                             (ax_l, "Large Beads Pooled (5.00, 7.24, 20.0 μm)", len(large_df))]:
+        ax.axhline(1.0, color='#666666', ls='--', lw=1.5, alpha=0.8, label='Baseline (= 1.0)')
+        ax.set_xlabel(r"Magnetization Magnitude $|M|$", fontsize=12.5)
+        ax.set_title(f"{title}\n($N={n_pts:,}$)", fontsize=12.5, fontweight='bold')
+        ax.set_xlim(-0.02, 1.02)
+        ax.set_ylim(0.0, 2.0)
+        ax.grid(True, which='major', ls=':', alpha=0.6)
+        ax.legend(title=r"Threshold $\tilde{v}_c$", fontsize=9.5, title_fontsize=10.5, loc='upper left', framealpha=0.9)
+
+    ax_s.set_ylabel(r"$\mathrm{Odds\ Ratio} = \frac{P(\tilde{v}_\parallel > \tilde{v}_c \mid |M|)}{P(\tilde{v}_\parallel > \tilde{v}_c)}$", fontsize=13.5)
+    plt.suptitle(
+        r"Odds Ratio Comparison: Small vs Large Cargo Particles vs Magnetization Magnitude $|M|$",
+        fontsize=14.5, fontweight='bold', y=0.99
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    save_figure_to_all(fig, "odds_ratio_small_vs_large_beads_pooled_2panel", out_dirs)
+
+    # (i) All Beads Pooled 2パネル図
+    plot_odds_ratio_and_posterior_2panel(
+        df_summary_overall, df_bg_overall, args.vc, out_dirs,
+        filename_prefix="odds_ratio_and_posterior_magnetization",
+        title_suffix=rf"All Beads Pooled ($0.63 - 20\ \mu\mathrm{{m}}$, $N={len(df):,}$)"
+    )
+
+    # (j) 粒子径間 Odds Ratio 重ね合わせ図 (vc = 0.1, 0.5, 0.8, 1.0)
+    plot_odds_ratio_overlay_across_diameters(df, out_dirs, target_vc_list=args.vc, n_bins=args.bins)
+
+    print("\nOdds ratio and posterior magnetization plots created successfully in all directories!")
 
 
 if __name__ == "__main__":

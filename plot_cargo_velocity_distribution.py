@@ -83,6 +83,27 @@ def apply_custom_style():
     plt.rcParams['mathtext.fontset'] = 'cm'
 
 
+def save_figure_to_all(fig: plt.Figure, basename: str, out_dirs: List[Path], dpi: int = 300):
+    """指定されたすべての出力ディレクトリに png と svg を保存する"""
+    for d in out_dirs:
+        d.mkdir(parents=True, exist_ok=True)
+        png_path = d / f"{basename}.png"
+        svg_path = d / f"{basename}.svg"
+        fig.savefig(png_path, dpi=dpi, bbox_inches='tight')
+        fig.savefig(svg_path, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved figure: {basename}.png / .svg -> {len(out_dirs)} dir(s)")
+
+
+def save_csv_to_all(df: pd.DataFrame, basename: str, out_dirs: List[Path]):
+    """指定されたすべての出力ディレクトリに CSV を保存する"""
+    for d in out_dirs:
+        d.mkdir(parents=True, exist_ok=True)
+        csv_path = d / f"{basename}.csv"
+        df.to_csv(csv_path, index=False)
+    print(f"Saved CSV: {basename}.csv -> {len(out_dirs)} dir(s)")
+
+
 def double_exponential_pdf(v: np.ndarray, alpha: float, vs: float, vf: float) -> np.ndarray:
     """
     確率密度関数 (Normalized PDF):
@@ -383,9 +404,103 @@ def plot_velocity_distributions_grid(
     print(f"Saved: {png_path} and {svg_path}")
 
 
+def plot_velocity_distributions_grid(
+    fit_results: Dict[str, dict],
+    out_dirs: List[Path],
+    semilog: bool = False
+):
+    """
+    全6粒子径 + 全体プール (7パネル) のグリッドプロット
+    """
+    fig, axes = plt.subplots(3, 3, figsize=(15, 12.5), sharex=False, sharey=False)
+    axes = axes.flatten()
+
+    scale_str = "semilog" if semilog else "linear"
+    v_dense = np.linspace(0, 2.0, 500)
+
+    plot_order = [b["name"] for b in BEADS_INFO] + ["overall_pooled"]
+
+    for i, b_key in enumerate(plot_order):
+        ax = axes[i]
+        res = fit_results.get(b_key, {})
+
+        if not res.get("success", False):
+            ax.text(0.5, 0.5, "Fit Failed or No Data", ha='center', va='center', transform=ax.transAxes)
+            continue
+
+        bin_centers = res["bin_centers"]
+        counts = res["counts"]
+        bin_edges = res["bin_edges"]
+        max_v = res["max_v"]
+        popt_pdf = res["popt_pdf"]
+
+        if b_key == "overall_pooled":
+            color = "#333333"
+            title = r"$\mathbf{All\ Beads\ Pooled}$"
+        else:
+            b_info = next(b for b in BEADS_INFO if b["name"] == b_key)
+            color = b_info["color"]
+            title = f"{b_info['label']} Beads"
+
+        # ヒストグラム
+        ax.bar(
+            bin_centers, counts, width=np.diff(bin_edges),
+            align='center', alpha=0.45, color=color, edgecolor=color,
+            label=f'Data ($N={res["n_points"]:,}$)'
+        )
+
+        # 2成分指数フィット曲線
+        if popt_pdf is not None:
+            alpha, vs, vf = popt_pdf
+            p_fit = double_exponential_pdf(v_dense, alpha, vs, vf)
+            p_slow = (1.0 - alpha) / vs * np.exp(-v_dense / vs)
+            p_fast = alpha / vf * np.exp(-v_dense / vf)
+
+            ax.plot(v_dense, p_fit, color='black', lw=2.0, label='Fit (Double Exp)')
+            ax.plot(v_dense, p_slow, color='#d62728', ls='--', lw=1.5, label=f'Slow ($v_s={vs:.2f}$)')
+            ax.plot(v_dense, p_fast, color='#1f77b4', ls=':', lw=1.8, label=f'Fast ($v_f={vf:.2f}$)')
+
+            param_box = (
+                f"$v_s = {vs:.3f}\\ \\mu\\mathrm{{m/s}}$\n"
+                f"$v_f = {vf:.3f}\\ \\mu\\mathrm{{m/s}}$\n"
+                f"$\\alpha = {alpha:.3f}$\n"
+                f"$R^2 = {res['r2_pdf']:.3f}$"
+            )
+            ax.text(
+                0.95, 0.95, param_box, transform=ax.transAxes,
+                va='top', ha='right', fontsize=9.0,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='#cccccc', alpha=0.9)
+            )
+
+        ax.set_title(title, fontsize=12, fontweight='bold')
+        ax.set_xlabel(r"Velocity $v$ [$\mu\mathrm{m/s}$]", fontsize=10.5)
+        ax.set_ylabel(r"Probability Density $P(v)$ [$(\mu\mathrm{m/s})^{-1}$]", fontsize=10.5)
+        ax.set_xlim(0, max_v)
+
+        if semilog:
+            ax.set_yscale('log')
+            y_min = max(1e-3, np.min(counts[counts > 0]) * 0.5) if np.any(counts > 0) else 1e-3
+            y_max = np.max(counts) * 2.5 if np.any(counts > 0) else 10.0
+            ax.set_ylim(y_min, y_max)
+        else:
+            ax.set_ylim(bottom=0)
+
+        ax.grid(True, which='both' if semilog else 'major', ls=':', alpha=0.6)
+        ax.legend(loc='lower left' if semilog else 'upper right', fontsize=8.5, framealpha=0.85)
+
+    plt.suptitle(
+        f"Cargo Particle Velocity Distribution & Double Exponential Fit ({'Semilog-y' if semilog else 'Linear'})\n"
+        r"$P(v) = (1-\alpha)\frac{1}{v_s}e^{-v/v_s} + \alpha\frac{1}{v_f}e^{-v/v_f} \quad (v_s < v_f)$",
+        fontsize=14.5, fontweight='bold', y=0.995
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    save_figure_to_all(fig, f"cargo_velocity_distribution_grid_{scale_str}", out_dirs)
+
+
 def plot_overall_pooled_distribution(
     fit_results: Dict[str, dict],
-    output_dir: Path
+    out_dirs: List[Path]
 ):
     """全粒子プール全体の速度分布とフィッティング (Linear & Semilog 2パネル)"""
     res = fit_results.get("overall_pooled", {})
@@ -455,17 +570,12 @@ def plot_overall_pooled_distribution(
     )
     plt.tight_layout(rect=[0, 0, 1, 0.95])
 
-    png_path = output_dir / "cargo_velocity_distribution_overall_pooled_2panel.png"
-    svg_path = output_dir / "cargo_velocity_distribution_overall_pooled_2panel.svg"
-    plt.savefig(png_path, dpi=300, bbox_inches='tight')
-    plt.savefig(svg_path, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {png_path} and {svg_path}")
+    save_figure_to_all(fig, "cargo_velocity_distribution_overall_pooled_2panel", out_dirs)
 
 
 def plot_velocity_distributions_overlay(
     fit_results: Dict[str, dict],
-    output_dir: Path,
+    out_dirs: List[Path],
     semilog: bool = False
 ):
     """全粒子径の速度分布とフィッティング曲線の重ね合わせプロット"""
@@ -517,17 +627,12 @@ def plot_velocity_distributions_overlay(
     ax.legend(loc='upper right', fontsize=10, framealpha=0.9)
 
     plt.tight_layout()
-    png_path = output_dir / f"cargo_velocity_distribution_overlay_{scale_str}.png"
-    svg_path = output_dir / f"cargo_velocity_distribution_overlay_{scale_str}.svg"
-    plt.savefig(png_path, dpi=300, bbox_inches='tight')
-    plt.savefig(svg_path, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {png_path} and {svg_path}")
+    save_figure_to_all(fig, f"cargo_velocity_distribution_overlay_{scale_str}", out_dirs)
 
 
 def plot_fit_parameters_vs_diameter(
     fit_results: Dict[str, dict],
-    output_dir: Path
+    out_dirs: List[Path]
 ):
     """粒子径に対するフィッティングパラメータ (vs, vf, \alpha) の依存性プロット"""
     diameters = []
@@ -605,15 +710,10 @@ def plot_fit_parameters_vs_diameter(
     )
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
-    png_path = output_dir / "cargo_velocity_fit_params_vs_diameter.png"
-    svg_path = output_dir / "cargo_velocity_fit_params_vs_diameter.svg"
-    plt.savefig(png_path, dpi=300, bbox_inches='tight')
-    plt.savefig(svg_path, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {png_path} and {svg_path}")
+    save_figure_to_all(fig, "cargo_velocity_fit_params_vs_diameter", out_dirs)
 
 
-def save_summary_csv(fit_results: Dict[str, dict], output_dir: Path):
+def save_summary_csv(fit_results: Dict[str, dict], out_dirs: List[Path]):
     """フィッティング結果および統計サマリーをCSVに保存"""
     records = []
     all_keys = [b["name"] for b in BEADS_INFO] + ["overall_pooled"]
@@ -660,27 +760,33 @@ def save_summary_csv(fit_results: Dict[str, dict], output_dir: Path):
         records.append(rec)
 
     df_summary = pd.DataFrame(records)
-    csv_path = output_dir / "cargo_velocity_distribution_fitting_summary.csv"
-    df_summary.to_csv(csv_path, index=False)
-    print(f"Saved summary CSV: {csv_path}")
+    save_csv_to_all(df_summary, "cargo_velocity_distribution_fitting_summary", out_dirs)
     return df_summary
 
 
 def main():
     parser = argparse.ArgumentParser(description="Cargo particle velocity distribution and double exponential fitting")
     parser.add_argument("--root-dir", type=Path, default=None, help="Root directory containing beads data")
-    parser.add_argument("--output-dir", type=Path, default=CURRENT_DIR / "figure" / "velocity_distribution", help="Output directory")
+    parser.add_argument("--output-dir", type=Path, default=CURRENT_DIR / "figure" / "velocity_distribution", help="Local output directory")
     parser.add_argument("--scale", type=float, default=0.11, help="Pixel scale (μm/px)")
     parser.add_argument("--frame-interval", type=float, default=4.0, help="Frame interval (s)")
     parser.add_argument("--bins", type=int, default=50, help="Number of histogram bins")
     args = parser.parse_args()
 
     root_dir = args.root_dir if args.root_dir else find_default_root()
-    output_dir = args.output_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
+    out_dirs = [args.output_dir]
+    if root_dir and root_dir.exists():
+        nas_out_dir = root_dir / "figure" / "velocity_distribution"
+        if nas_out_dir not in out_dirs:
+            out_dirs.append(nas_out_dir)
+
+    for d in out_dirs:
+        d.mkdir(parents=True, exist_ok=True)
 
     print(f"Using root directory: {root_dir}")
-    print(f"Using output directory: {output_dir}")
+    print("Output directories:")
+    for d in out_dirs:
+        print(f"  - {d}")
 
     apply_custom_style()
 
@@ -698,21 +804,21 @@ def main():
 
     # 3. プロット生成
     # (a) グリッドプロット (Linear & Semilog)
-    plot_velocity_distributions_grid(fit_results, output_dir, semilog=False)
-    plot_velocity_distributions_grid(fit_results, output_dir, semilog=True)
+    plot_velocity_distributions_grid(fit_results, out_dirs, semilog=False)
+    plot_velocity_distributions_grid(fit_results, out_dirs, semilog=True)
 
     # (b) 全体プール2パネルプロット
-    plot_overall_pooled_distribution(fit_results, output_dir)
+    plot_overall_pooled_distribution(fit_results, out_dirs)
 
     # (c) 重ね合わせプロット (Linear & Semilog)
-    plot_velocity_distributions_overlay(fit_results, output_dir, semilog=False)
-    plot_velocity_distributions_overlay(fit_results, output_dir, semilog=True)
+    plot_velocity_distributions_overlay(fit_results, out_dirs, semilog=False)
+    plot_velocity_distributions_overlay(fit_results, out_dirs, semilog=True)
 
     # (d) パラメータ依存性プロット
-    plot_fit_parameters_vs_diameter(fit_results, output_dir)
+    plot_fit_parameters_vs_diameter(fit_results, out_dirs)
 
     # 4. CSV サマリーの保存
-    df_summary = save_summary_csv(fit_results, output_dir)
+    df_summary = save_summary_csv(fit_results, out_dirs)
     print("\n--- Fitting Summary ---")
     print(df_summary[["bead_name", "diameter_um", "n_points", "mean_velocity_um_s", "pdf_alpha", "pdf_vs_um_s", "pdf_vf_um_s", "pdf_r2"]].to_string(index=False))
 
