@@ -17,12 +17,14 @@ plot_msd_lambda_vs_scaled_radius.py
       min_points = --min_points, xi in [--xi_min, --xi_max] um
 - 実験代表値 xi_exp は全 (i, t) の中央値（--xi_source global の場合は --xi_value を使用）
 
-【MSD(300 s) の算出（各実験ディレクトリ）】
+【MSD(300 s) および MSD 傾き (300-1000 s) の算出（各実験ディレクトリ）】
 - 軌跡: beads_tracks.csv (frame, particle, x, y)
 - libs.displacement.imsd による個別粒子 MSD（時間平均）を求め、MSD.py と同一条件で
   alpha (> --alpha_threshold, フィット範囲 --alpha_min_t .. --alpha_max_t s) の粒子のみを採用
   （全粒子が棄却された場合は未フィルタにフォールバックし、CSV に alpha_filtered=False を記録）
 - lag time = --msd_lag_s の値について粒子間アンサンブル平均をとる（誤差は粒子間 SEM）
+- 個別粒子 MSD に対し Delta t in [--slope_min_t, --slope_max_t] s (既定: 300-1000 s) で
+  log10(MSD) vs log10(Delta t) の線形回帰を行い、MSD の傾き (べき乗指数 alpha) を算出
 
 【lambda(100 s) の算出（各実験ディレクトリ）】
 - 変位 |dr(Delta t = 100 s)| を libs.displacement.calc_displacement_magnitudes で計算
@@ -41,9 +43,10 @@ plot_msd_lambda_vs_scaled_radius.py
 1. msd300_lambda100_vs_scaled_radius.png / .svg       : 2軸図（横軸 x = R_c/xi、左: MSD(300 s), 右: lambda(100 s)）
 2. msd300_lambda100_vs_scaled_radius_2panel.png / .svg: 2パネル版（参考）
 3. msd300_lambda100_vs_radius_rc.png / .svg           : 横軸 = R_c（linear）, 左軸 = MSD（黒, log）,
-                                                        右軸 = lambda（赤, linear）の 2軸図
-4. msd300_lambda100_vs_scaled_radius_points.csv       : 実験ごとの生データ
-5. msd300_lambda100_vs_scaled_radius_summary.csv      : 粒子径ごとの代表値（mean +/- SEM）
+                                                        右軸 = MSD slope 300-1000 s（赤, linear）の 2軸図
+4. msd300_slope300_1000_vs_radius_rc.png / .svg       : 同上の別名保存
+5. msd300_lambda100_vs_scaled_radius_points.csv       : 実験ごとの生データ
+6. msd300_lambda100_vs_scaled_radius_summary.csv      : 粒子径ごとの代表値（mean +/- SEM）
 """
 
 import argparse
@@ -214,6 +217,20 @@ def fit_experiment_xi(
     return out
 
 
+def calc_particle_slope(sub_df: pd.DataFrame, min_t: float = 300.0, max_t: float = 1000.0) -> float:
+    """
+    個別粒子 MSD (iMSD) に対して対数空間でべき乗則 MSD ~ t^alpha をフィッティングし、
+    指定範囲 [min_t, max_t] における傾き (べき乗指数 alpha) を算出する。
+    """
+    mask = (sub_df['lag time'] >= min_t) & (sub_df['lag time'] <= max_t) & (sub_df['MSD'] > 0)
+    if np.sum(mask) < 3:
+        return np.nan
+    dt = sub_df['lag time'][mask].to_numpy(dtype=float)
+    msd = sub_df['MSD'][mask].to_numpy(dtype=float)
+    slope, _ = np.polyfit(np.log10(dt), np.log10(msd), 1)
+    return float(slope)
+
+
 def compute_msd_at_lag(
     df_tracks: pd.DataFrame,
     lag_s: float = 300.0,
@@ -222,24 +239,31 @@ def compute_msd_at_lag(
     alpha_threshold: float = 0.5,
     alpha_min_t: float = 4.0,
     alpha_max_t: float = 300.0,
+    slope_min_t: float = 300.0,
+    slope_max_t: float = 1000.0,
 ) -> Dict[str, float]:
     """
-    1つの実験ディレクトリの MSD(Delta t = lag_s) [um^2] を、MSD.py と同一の手順で算出する。
+    1つの実験ディレクトリの MSD(Delta t = lag_s) [um^2] および
+    Delta t in [slope_min_t, slope_max_t] s (既定: 300-1000 s) における MSD 傾き (alpha) を算出する。
 
     - libs.displacement.imsd による個別粒子 MSD（時間平均）
     - MSD.calc_particle_alpha により alpha を算出し、alpha > alpha_threshold の粒子のみ採用
     - lag time = lag_s における粒子間アンサンブル平均（誤差は粒子間 SEM）
+    - 各個別粒子について [slope_min_t, slope_max_t] s の対数傾き (alpha) を算出し平均（誤差は SEM）
 
     Returns
     -------
     dict
         'msd_um2', 'msd_median_um2', 'msd_std_um2', 'msd_sem_um2',
-        'n_particles_msd', 'n_particles_all', 'msd_lag_s_actual', 'alpha_filtered'
+        'n_particles_msd', 'n_particles_all', 'msd_lag_s_actual', 'alpha_filtered',
+        'msd_slope', 'msd_slope_median', 'msd_slope_std', 'msd_slope_sem', 'n_particles_slope'
     """
     out = {
         'msd_um2': np.nan, 'msd_median_um2': np.nan, 'msd_std_um2': np.nan,
         'msd_sem_um2': np.nan, 'n_particles_msd': 0, 'n_particles_all': 0,
         'msd_lag_s_actual': np.nan, 'alpha_filtered': False,
+        'msd_slope': np.nan, 'msd_slope_median': np.nan,
+        'msd_slope_std': np.nan, 'msd_slope_sem': np.nan, 'n_particles_slope': 0,
     }
     if df_tracks is None or df_tracks.empty:
         return out
@@ -291,15 +315,28 @@ def compute_msd_at_lag(
     per_particle = sub.groupby('particle')['MSD'].mean().to_numpy(dtype=float)
     per_particle = per_particle[np.isfinite(per_particle) & (per_particle > 0)]
     n_pts = int(per_particle.size)
-    if n_pts == 0:
-        return out
+    if n_pts > 0:
+        out['msd_um2'] = float(np.mean(per_particle))
+        out['msd_median_um2'] = float(np.median(per_particle))
+        out['msd_std_um2'] = float(np.std(per_particle, ddof=1)) if n_pts > 1 else 0.0
+        out['msd_sem_um2'] = float(out['msd_std_um2'] / np.sqrt(n_pts)) if n_pts > 1 else 0.0
+        out['n_particles_msd'] = n_pts
+        out['msd_lag_s_actual'] = lag_use
 
-    out['msd_um2'] = float(np.mean(per_particle))
-    out['msd_median_um2'] = float(np.median(per_particle))
-    out['msd_std_um2'] = float(np.std(per_particle, ddof=1)) if n_pts > 1 else 0.0
-    out['msd_sem_um2'] = float(out['msd_std_um2'] / np.sqrt(n_pts)) if n_pts > 1 else 0.0
-    out['n_particles_msd'] = n_pts
-    out['msd_lag_s_actual'] = lag_use
+    # --- Delta t in [slope_min_t, slope_max_t] (既定: 300 .. 1000 s) における MSD 傾きの算出 ---
+    slopes = {
+        pid: calc_particle_slope(grp, slope_min_t, slope_max_t)
+        for pid, grp in imsd_df.groupby('particle')
+    }
+    slope_vals = np.array([v for v in slopes.values() if np.isfinite(v)], dtype=float)
+    n_slopes = int(slope_vals.size)
+    out['n_particles_slope'] = n_slopes
+    if n_slopes > 0:
+        out['msd_slope'] = float(np.mean(slope_vals))
+        out['msd_slope_median'] = float(np.median(slope_vals))
+        out['msd_slope_std'] = float(np.std(slope_vals, ddof=1)) if n_slopes > 1 else 0.0
+        out['msd_slope_sem'] = float(out['msd_slope_std'] / np.sqrt(n_slopes)) if n_slopes > 1 else 0.0
+
     return out
 
 
@@ -477,10 +514,12 @@ def summarize_by_condition(
 
         msd = np.where(finite_x, sub['msd_um2'].to_numpy(dtype=float), np.nan)
         lam = np.where(finite_x, sub['lambda_um'].to_numpy(dtype=float), np.nan)
+        slope = np.where(finite_x, sub['msd_slope'].to_numpy(dtype=float), np.nan) if 'msd_slope' in sub.columns else np.full_like(x, np.nan)
 
         x_mean, x_sem, n_x = _ms(x)
         msd_mean, msd_sem, n_msd = _ms(msd)
         lam_mean, lam_sem, n_lam = _ms(lam)
+        slope_mean, slope_sem, n_slope = _ms(slope)
 
         rec = {
             'bead_name': binfo['name'],
@@ -494,6 +533,9 @@ def summarize_by_condition(
             'msd_um2_mean': msd_mean,
             'msd_um2_sem': msd_sem,
             'n_experiments_msd': n_msd,
+            'msd_slope_mean': slope_mean,
+            'msd_slope_sem': slope_sem,
+            'n_experiments_slope': n_slope,
             'lambda_um_mean': lam_mean,
             'lambda_um_sem': lam_sem,
             'n_experiments_lambda': n_lam,
@@ -605,9 +647,19 @@ def plot_scaling_twin_axis(
     basename: str = 'msd300_lambda100_vs_scaled_radius',
     legend_title_left: Optional[str] = None,
     legend_title_right: Optional[str] = None,
+    y1_col: str = 'msd_um2',
+    y1_col_cond: str = 'msd_um2_mean',
+    y1_err_col: str = 'msd_um2_sem',
+    y1_label: Optional[str] = None,
+    y1_name: str = 'MSD',
+    y2_col: str = 'lambda_um',
+    y2_col_cond: str = 'lambda_um_mean',
+    y2_err_col: str = 'lambda_um_sem',
+    y2_label: Optional[str] = None,
+    y2_name: str = r"$\lambda$",
 ) -> Dict[str, float]:
     """
-    第1縦軸 (左) = MSD(msd_lag_s) [um^2]、第2縦軸 (右) = lambda(lambda_lag_s) [um] の
+    第1縦軸 (左) = y1（例: MSD(msd_lag_s) [um^2]）、第2縦軸 (右) = y2（例: lambda(lambda_lag_s) [um] または MSD slope）の
     2軸スケーリング図を作成する（横軸は既定で x = R_c / xi、x_col で変更可能）。
 
     Layer 1: 実験ごとの生データ（左軸は塗りつぶしマーカー、右軸は白抜きマーカー）
@@ -665,31 +717,31 @@ def plot_scaling_twin_axis(
 
         # --- Layer 1: 実験ごとの生データ ---
         if show_raw:
-            s_msd = sub[np.isfinite(sub[x_col]) & np.isfinite(sub['msd_um2'])]
+            s_msd = sub[np.isfinite(sub[x_col]) & np.isfinite(sub[y1_col])]
             if not s_msd.empty:
                 ax.scatter(
-                    s_msd['_x_jit'], s_msd['msd_um2'], s=34, marker=marker,
+                    s_msd['_x_jit'], s_msd[y1_col], s=34, marker=marker,
                     color=msd_c, alpha=0.45, edgecolors='none', zorder=2,
                 )
                 n_exp_raw += int(len(s_msd))
-            s_lam = sub[np.isfinite(sub[x_col]) & np.isfinite(sub['lambda_um'])]
+            s_lam = sub[np.isfinite(sub[x_col]) & np.isfinite(sub[y2_col])]
             if not s_lam.empty:
                 if lam_color_mode:
                     # 色分けモードでは右軸側は白抜きマーカーで区別する
                     ax2.scatter(
-                        s_lam['_x_jit'], s_lam['lambda_um'], s=40, marker=marker,
+                        s_lam['_x_jit'], s_lam[y2_col], s=40, marker=marker,
                         facecolors='none', edgecolors=lam_c, alpha=0.75,
                         linewidths=1.2, zorder=2,
                     )
                 else:
                     ax2.scatter(
-                        s_lam['_x_jit'], s_lam['lambda_um'], s=34, marker=marker,
+                        s_lam['_x_jit'], s_lam[y2_col], s=34, marker=marker,
                         color=lam_c, alpha=0.45, edgecolors='none', zorder=2,
                     )
 
         x_all.extend(sub[x_col].to_numpy(dtype=float))
-        msd_all.extend(sub['msd_um2'].to_numpy(dtype=float))
-        lam_all.extend(sub['lambda_um'].to_numpy(dtype=float))
+        msd_all.extend(sub[y1_col].to_numpy(dtype=float))
+        lam_all.extend(sub[y2_col].to_numpy(dtype=float))
 
         # --- Layer 2: 粒子径ごとの代表値 (Mean +/- SEM) ---
         if x_col_cond is None or x_col_cond not in df_cond.columns:
@@ -708,9 +760,9 @@ def plot_scaling_twin_axis(
             label = (rf"$2R_c = {dia:.2f}\,\mu\mathrm{{m}}$ "
                      rf"(${x_label_symbol} = {x_val:.2f}\,\mu\mathrm{{m}}$)")
 
-        msd_val = float(row['msd_um2_mean'])
+        msd_val = float(row[y1_col_cond]) if (y1_col_cond and y1_col_cond in row.index) else np.nan
         if np.isfinite(msd_val):
-            msd_err = _safe_sem(row['msd_um2_sem'])
+            msd_err = _safe_sem(row[y1_err_col]) if (y1_err_col and y1_err_col in row.index) else 0.0
             ax.errorbar(
                 x_val, msd_val,
                 xerr=x_err if x_err > 0 else None,
@@ -725,13 +777,13 @@ def plot_scaling_twin_axis(
                    markeredgewidth=1.1, markersize=9.5, label=label)
         )
 
-        lam_val = float(row['lambda_um_mean'])
+        lam_val = float(row[y2_col_cond]) if (y2_col_cond and y2_col_cond in row.index) else np.nan
         if lam_color_mode:
             lam_face, lam_edge = 'none', lam_c
         else:
             lam_face, lam_edge = lam_c, 'black'
         if np.isfinite(lam_val):
-            lam_err = _safe_sem(row['lambda_um_sem'])
+            lam_err = _safe_sem(row[y2_err_col]) if (y2_err_col and y2_err_col in row.index) else 0.0
             ax2.errorbar(
                 x_val, lam_val,
                 xerr=x_err if x_err > 0 else None,
@@ -761,16 +813,14 @@ def plot_scaling_twin_axis(
     if xlabel is None:
         xlabel = r"Scaled Cargo Radius $x = R_c / \xi$"
     ax.set_xlabel(xlabel, fontsize=12.5, fontweight='bold')
-    ax.set_ylabel(
-        rf"MSD $\langle \Delta r^2(\Delta t = {msd_lag_s:.0f}\,\mathrm{{s}}) \rangle$"
-        rf" [$\mu\mathrm{{m}}^2$]",
-        fontsize=12.5, fontweight='bold',
-    )
-    ax2.set_ylabel(
-        rf"Displacement Decay Length $\lambda(\Delta t = {lambda_lag_s:.0f}\,\mathrm{{s}})$"
-        rf" [$\mu\mathrm{{m}}$]",
-        fontsize=12.5, fontweight='bold',
-    )
+    if y1_label is None:
+        y1_label = (rf"MSD $\langle \Delta r^2(\Delta t = {msd_lag_s:.0f}\,\mathrm{{s}}) \rangle$"
+                    rf" [$\mu\mathrm{{m}}^2$]")
+    ax.set_ylabel(y1_label, fontsize=12.5, fontweight='bold')
+    if y2_label is None:
+        y2_label = (rf"Displacement Decay Length $\lambda(\Delta t = {lambda_lag_s:.0f}\,\mathrm{{s}})$"
+                    rf" [$\mu\mathrm{{m}}$]")
+    ax2.set_ylabel(y2_label, fontsize=12.5, fontweight='bold')
 
     # 縦軸（目盛・ラベル・スパイン）の色を系列色に合わせる
     ax.tick_params(axis='y', colors=msd_axis_color)
@@ -787,32 +837,32 @@ def plot_scaling_twin_axis(
     ax2.spines['top'].set_visible(False)
 
     if title is None:
-        title = (rf"MSD$(\Delta t = {msd_lag_s:.0f}\,\mathrm{{s}})$ and "
-                 rf"$\lambda(\Delta t = {lambda_lag_s:.0f}\,\mathrm{{s}})$ vs $x = R_c/\xi$")
+        title = (rf"{y1_name}$(\Delta t = {msd_lag_s:.0f}\,\mathrm{{s}})$ and "
+                 rf"{y2_name} vs $x = R_c/\xi$")
     ax.set_title(title, fontsize=13.5, fontweight='bold', pad=12)
     ax.grid(True, which='both', linestyle='--', alpha=0.35)
 
     # --- 統計量（横軸・縦軸とも対数変換可能な正値のみを使用） ---
     sp_msd, pr_msd, n_msd_pts = _corr_stats(x_all, msd_all)
     sp_lam, pr_lam, n_lam_pts = _corr_stats(x_all, lam_all)
-    sp_msd_c, _, n_cond = _corr_stats(df_cond[x_col_cond], df_cond['msd_um2_mean'])
-    sp_lam_c, _, _ = _corr_stats(df_cond[x_col_cond], df_cond['lambda_um_mean'])
+    sp_msd_c, _, n_cond = _corr_stats(df_cond[x_col_cond], df_cond[y1_col_cond]) if (x_col_cond in df_cond and y1_col_cond in df_cond) else (np.nan, np.nan, 0)
+    sp_lam_c, _, _ = _corr_stats(df_cond[x_col_cond], df_cond[y2_col_cond]) if (x_col_cond in df_cond and y2_col_cond in df_cond) else (np.nan, np.nan, 0)
 
     stats_text = (
-        rf"$N_{{\mathrm{{exp}}}} = {n_msd_pts}$ (MSD), {n_lam_pts} ($\lambda$)"
+        rf"$N_{{\mathrm{{exp}}}} = {n_msd_pts}$ ({y1_name}), {n_lam_pts} ({y2_name})"
         + (rf"; $N_{{\mathrm{{cond}}}} = {n_cond}$" if n_cond >= 3 else "") + "\n"
     )
     rho_msd_e = f"{sp_msd:+.2f}" if np.isfinite(sp_msd) else "n/a"
     rho_lam_e = f"{sp_lam:+.2f}" if np.isfinite(sp_lam) else "n/a"
     if n_cond >= 3:
         stats_text += (
-            rf"MSD: Spearman $\rho = {rho_msd_e}$ (exp), ${sp_msd_c:+.2f}$ (cond)" + "\n"
-            rf"$\lambda$: Spearman $\rho = {rho_lam_e}$ (exp), ${sp_lam_c:+.2f}$ (cond)"
+            rf"{y1_name}: Spearman $\rho = {rho_msd_e}$ (exp), ${sp_msd_c:+.2f}$ (cond)" + "\n"
+            rf"{y2_name}: Spearman $\rho = {rho_lam_e}$ (exp), ${sp_lam_c:+.2f}$ (cond)"
         )
     else:
         stats_text += (
-            rf"MSD: Spearman $\rho = {rho_msd_e}$ (exp)" + "\n"
-            rf"$\lambda$: Spearman $\rho = {rho_lam_e}$ (exp)"
+            rf"{y1_name}: Spearman $\rho = {rho_msd_e}$ (exp)" + "\n"
+            rf"{y2_name}: Spearman $\rho = {rho_lam_e}$ (exp)"
         )
     ax.text(
         0.03, 0.97, stats_text, transform=ax.transAxes, fontsize=8.8,
@@ -821,7 +871,7 @@ def plot_scaling_twin_axis(
         zorder=8,
     )
 
-    # --- 凡例（左軸: MSD、右軸: lambda） ---
+    # --- 凡例（左軸: MSD、右軸: lambda / slope） ---
     if show_raw:
         msd_handles.insert(0, Line2D(
             [], [], marker='o', linestyle='none',
@@ -833,7 +883,7 @@ def plot_scaling_twin_axis(
             handles=msd_handles, loc='upper right', fontsize=8.2, frameon=True,
             framealpha=0.92, labelspacing=0.30,
             title=(legend_title_left if legend_title_left is not None
-                   else rf"MSD$(\Delta t = {msd_lag_s:.0f}\,\mathrm{{s}})$"),
+                   else rf"{y1_name}$(\Delta t = {msd_lag_s:.0f}\,\mathrm{{s}})$"),
             title_fontsize=9.0,
         )
         if not msd_color_mode:
@@ -848,7 +898,7 @@ def plot_scaling_twin_axis(
             handles=lam_handles, loc='lower left', fontsize=8.2, frameon=True,
             framealpha=0.92, labelspacing=0.30,
             title=(legend_title_right if legend_title_right is not None
-                   else rf"$\lambda(\Delta t = {lambda_lag_s:.0f}\,\mathrm{{s}})$"),
+                   else rf"{y2_name}"),
             title_fontsize=9.0,
         )
         if not lam_color_mode:
@@ -1025,9 +1075,13 @@ def parse_args():
     parser.add_argument('--alpha_threshold', type=float, default=0.5,
                         help="MSD.py と同じ alpha フィルタ閾値（<= 0 で無効化, default: 0.5）.")
     parser.add_argument('--alpha_min_t', type=float, default=4.0,
-                        help="alpha フィット範囲の下限 [s] (default: 4).")
+                        help="alpha フィルタのフィット範囲下限 [s] (default: 4).")
     parser.add_argument('--alpha_max_t', type=float, default=300.0,
-                        help="alpha フィット範囲の上限 [s] (default: 300).")
+                        help="alpha フィルタのフィット範囲上限 [s] (default: 300).")
+    parser.add_argument('--slope_min_t', type=float, default=300.0,
+                        help="MSD 傾き (べき乗指数) フィット範囲の下限 [s] (default: 300).")
+    parser.add_argument('--slope_max_t', type=float, default=1000.0,
+                        help="MSD 傾き (べき乗指数) フィット範囲の上限 [s] (default: 1000).")
     parser.add_argument('--min_r_factor', type=float, default=1.1,
                         help="xi フィットの下限 min_r = min_r_factor * R_c (default: 1.1).")
     parser.add_argument('--max_r', type=float, default=25.0,
@@ -1112,18 +1166,19 @@ def main():
     print("=" * 78)
     print(f"Data Root Directory : {root_dir}")
     print("Output Directories  : " + ", ".join(str(d) for d in out_dirs))
-    print(f"xi     : source = {args.xi_source}"
+    print(f"xi         : source = {args.xi_source}"
           + (f" (xi = {args.xi_value} um)" if args.xi_source == 'global' else "")
           + f", fit r in [{args.min_r_factor} * R_c, {args.max_r}] um,"
             f" C(r) >= {args.min_corr_threshold}, min_points = {args.min_points},"
             f" xi in [{args.xi_min}, {args.xi_max}] um")
-    print(f"MSD    : Delta t = {args.msd_lag_s} s, alpha > {args.alpha_threshold} "
+    print(f"MSD        : Delta t = {args.msd_lag_s} s, alpha > {args.alpha_threshold} "
           f"({args.alpha_min_t}-{args.alpha_max_t} s), scale = {args.scale} um/px, "
           f"frame interval = {args.frame_interval} s")
-    print(f"lambda : Delta t = {args.lambda_lag_s} s (component = {args.component}), "
+    print(f"MSD slope  : Delta t in [{args.slope_min_t}, {args.slope_max_t}] s")
+    print(f"lambda     : Delta t = {args.lambda_lag_s} s (component = {args.component}), "
           f"{args.bins} bins over [0, {args.bin_max}] um, fit_mode = {args.fit_mode}")
     print()
-    print("Extracting per-experiment xi, MSD and lambda ...")
+    print("Extracting per-experiment xi, MSD, MSD slope and lambda ...")
 
     df_points, df_cond = collect_experiment_records(
         root_dir=root_dir,
@@ -1136,6 +1191,8 @@ def main():
         alpha_threshold=args.alpha_threshold,
         alpha_min_t=args.alpha_min_t,
         alpha_max_t=args.alpha_max_t,
+        slope_min_t=args.slope_min_t,
+        slope_max_t=args.slope_max_t,
         min_r_factor=args.min_r_factor,
         max_r=args.max_r,
         min_corr_threshold=args.min_corr_threshold,
@@ -1163,6 +1220,7 @@ def main():
         'xi_mean_um', 'xi_std_um', 'xi_sem_um', 'n_xi_valid', 'n_xi_total', 'rc_over_xi',
         'msd_um2', 'msd_sem_um2', 'msd_median_um2', 'msd_std_um2', 'n_particles_msd',
         'n_particles_all', 'msd_lag_s_actual', 'alpha_filtered',
+        'msd_slope', 'msd_slope_sem', 'msd_slope_median', 'msd_slope_std', 'n_particles_slope',
         'lambda_um', 'lambda_err_um', 'lambda_r2_log', 'lambda_fit_ratio', 'lambda_rejected',
         'mean_disp_um', 'n_displacements', 'tau_frames',
     ]
@@ -1173,7 +1231,7 @@ def main():
     save_csv_to_all(df_points, 'msd300_lambda100_vs_scaled_radius_points', out_dirs)
     save_csv_to_all(df_cond, 'msd300_lambda100_vs_scaled_radius_summary', out_dirs)
 
-    # --- 作図 ---
+    # --- 作図 1: スケーリング 2軸図 (MSD 300 s vs lambda 100 s vs x = R_c / xi) ---
     stats_dict = plot_scaling_twin_axis(
         df_points, df_cond, beads_info, out_dirs,
         xscale=args.xscale, yscale=args.yscale,
@@ -1181,6 +1239,7 @@ def main():
         show_raw=not args.no_raw,
         title=args.title,
     )
+    # --- 作図 2: スケーリング 2パネル図 ---
     plot_scaling_two_panel(
         df_points, df_cond, beads_info, out_dirs,
         xscale=args.xscale, yscale=args.yscale,
@@ -1188,7 +1247,7 @@ def main():
         show_raw=not args.no_raw,
     )
 
-    # --- 参考図: 横軸 = R_c（linear）, 左軸 = MSD（黒, log）, 右軸 = lambda（赤, linear） ---
+    # --- 作図 3: 横軸 = R_c（linear）, 左軸 = MSD（黒, log）, 右軸 = MSD slope 300-1000 s（赤, linear） ---
     plot_scaling_twin_axis(
         df_points, df_cond, beads_info, out_dirs,
         xscale='linear', msd_yscale='log', lambda_yscale='linear',
@@ -1200,11 +1259,39 @@ def main():
         msd_color='black', lambda_color='#d62728',
         x_jitter=0.06,
         basename='msd300_lambda100_vs_radius_rc',
+        y1_col='msd_um2', y1_col_cond='msd_um2_mean', y1_err_col='msd_um2_sem',
+        y1_name='MSD',
+        y2_col='msd_slope', y2_col_cond='msd_slope_mean', y2_err_col='msd_slope_sem',
+        y2_name=rf"MSD slope $\alpha_{{{args.slope_min_t:.0f}-{args.slope_max_t:.0f}}}$",
+        y2_label=rf"MSD Slope $\alpha$ ($\Delta t = {args.slope_min_t:.0f}\mathrm{{-}}{args.slope_max_t:.0f}\,\mathrm{{s}}$)",
         title=(rf"MSD$(\Delta t = {args.msd_lag_s:.0f}\,\mathrm{{s}})$ and "
-               rf"$\lambda(\Delta t = {args.lambda_lag_s:.0f}\,\mathrm{{s}})$ "
+               rf"MSD Slope $\alpha(\Delta t = {args.slope_min_t:.0f}\mathrm{{-}}{args.slope_max_t:.0f}\,\mathrm{{s}})$ "
                rf"vs Cargo Radius $R_c$"),
         legend_title_left=rf"MSD$(\Delta t = {args.msd_lag_s:.0f}\,\mathrm{{s}})$ [black axis]",
-        legend_title_right=rf"$\lambda(\Delta t = {args.lambda_lag_s:.0f}\,\mathrm{{s}})$ [red axis]",
+        legend_title_right=rf"MSD slope $\alpha(\Delta t = {args.slope_min_t:.0f}\mathrm{{-}}{args.slope_max_t:.0f}\,\mathrm{{s}})$ [red axis]",
+    )
+    # 同内容をわかりやすい別名 basename でも保存
+    plot_scaling_twin_axis(
+        df_points, df_cond, beads_info, out_dirs,
+        xscale='linear', msd_yscale='log', lambda_yscale='linear',
+        msd_lag_s=args.msd_lag_s, lambda_lag_s=args.lambda_lag_s,
+        show_raw=not args.no_raw,
+        x_col='radius_um', x_col_cond='radius_um', x_err_col=None,
+        xlabel=r"Cargo Radius $R_c$ [$\mu\mathrm{m}$]",
+        x_label_symbol='R_c',
+        msd_color='black', lambda_color='#d62728',
+        x_jitter=0.06,
+        basename='msd300_slope300_1000_vs_radius_rc',
+        y1_col='msd_um2', y1_col_cond='msd_um2_mean', y1_err_col='msd_um2_sem',
+        y1_name='MSD',
+        y2_col='msd_slope', y2_col_cond='msd_slope_mean', y2_err_col='msd_slope_sem',
+        y2_name=rf"MSD slope $\alpha_{{{args.slope_min_t:.0f}-{args.slope_max_t:.0f}}}$",
+        y2_label=rf"MSD Slope $\alpha$ ($\Delta t = {args.slope_min_t:.0f}\mathrm{{-}}{args.slope_max_t:.0f}\,\mathrm{{s}}$)",
+        title=(rf"MSD$(\Delta t = {args.msd_lag_s:.0f}\,\mathrm{{s}})$ and "
+               rf"MSD Slope $\alpha(\Delta t = {args.slope_min_t:.0f}\mathrm{{-}}{args.slope_max_t:.0f}\,\mathrm{{s}})$ "
+               rf"vs Cargo Radius $R_c$"),
+        legend_title_left=rf"MSD$(\Delta t = {args.msd_lag_s:.0f}\,\mathrm{{s}})$ [black axis]",
+        legend_title_right=rf"MSD slope $\alpha(\Delta t = {args.slope_min_t:.0f}\mathrm{{-}}{args.slope_max_t:.0f}\,\mathrm{{s}})$ [red axis]",
     )
 
     # --- ログ（代表値一覧・相関） ---
@@ -1214,7 +1301,8 @@ def main():
     print("=" * 78)
     show_cols = [
         'bead_name', 'diameter_um', 'n_experiments', 'rc_over_xi_mean', 'rc_over_xi_sem',
-        'msd_um2_mean', 'msd_um2_sem', 'lambda_um_mean', 'lambda_um_sem', 'lambda_pooled_um',
+        'msd_um2_mean', 'msd_um2_sem', 'msd_slope_mean', 'msd_slope_sem',
+        'lambda_um_mean', 'lambda_um_sem', 'lambda_pooled_um',
     ]
     print(df_cond[[c for c in show_cols if c in df_cond.columns]].to_string(index=False))
     print()
@@ -1253,6 +1341,8 @@ def collect_experiment_records(
     alpha_threshold: float = 0.5,
     alpha_min_t: float = 4.0,
     alpha_max_t: float = 300.0,
+    slope_min_t: float = 300.0,
+    slope_max_t: float = 1000.0,
     min_r_factor: float = 1.1,
     max_r: float = 25.0,
     min_corr_threshold: float = 0.05,
@@ -1272,7 +1362,7 @@ def collect_experiment_records(
     verbose: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    全実験ディレクトリについて (xi_exp, MSD(Delta t = msd_lag_s), lambda(Delta t = lambda_lag_s)) を抽出する。
+    全実験ディレクトリについて (xi_exp, MSD(Delta t = msd_lag_s), MSD slope(slope_min_t..slope_max_t), lambda(Delta t = lambda_lag_s)) を抽出する。
 
     Returns
     -------
@@ -1316,6 +1406,7 @@ def collect_experiment_records(
             msd_res = compute_msd_at_lag(
                 df_tracks, lag_s=msd_lag_s, scale=scale, frame_interval=frame_interval,
                 alpha_threshold=alpha_threshold, alpha_min_t=alpha_min_t, alpha_max_t=alpha_max_t,
+                slope_min_t=slope_min_t, slope_max_t=slope_max_t,
             )
             lam_res, disp_arr = compute_lambda_at_lag(
                 df_tracks, lag_s=lambda_lag_s, scale=scale, frame_interval=frame_interval,
@@ -1343,11 +1434,14 @@ def collect_experiment_records(
             records.append(rec)
 
             if verbose:
+                slope_str = f"{msd_res['msd_slope']:.2f}" if np.isfinite(msd_res['msd_slope']) else "nan"
                 print(f"  {bname:10s} / {edir.name:18s} : "
                       f"x = {rc_over_xi:6.3f} (xi = {xi_use:5.2f} um, "
                       f"{xi_res['n_xi_valid']:5d}/{xi_res['n_xi_total']:5d} valid), "
                       f"MSD({msd_lag_s:.0f} s) = {msd_res['msd_um2']:8.3f} um^2 "
                       f"(N_p = {msd_res['n_particles_msd']}), "
+                      f"MSD slope({slope_min_t:.0f}-{slope_max_t:.0f} s) = {slope_str} "
+                      f"(N_p = {msd_res['n_particles_slope']}), "
                       f"lambda({lambda_lag_s:.0f} s) = {lam_res['lambda_um']:6.2f} um "
                       f"(N_disp = {lam_res['n_displacements']})")
 

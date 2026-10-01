@@ -420,6 +420,7 @@ def process_experiment_ising(
     flow_cache_name: Optional[str] = None,
     block_sample_max: int = 300,
     progress: bool = True,
+    shape: str = 'circle',
 ) -> Optional[dict]:
     """
     1 つの実験ディレクトリの GFP_flows.h5 を読み、フレームごとにイジングスピン
@@ -601,7 +602,8 @@ def process_experiment_ising(
                 # --- ポーラーオーダー P(R)（フレームごとに 1 回だけ計算して共有） ---
                 polar_blocks = ising.block_polar_orders(
                     ux, uy, valid, w, step=step,
-                    min_valid_fraction=min_valid_fraction)
+                    min_valid_fraction=min_valid_fraction,
+                    shape=shape)
                 p_flat = (polar_blocks[np.isfinite(polar_blocks)]
                           if polar_blocks.size else np.empty(0, dtype=np.float64))
                 if p_flat.size == 0:
@@ -612,7 +614,8 @@ def process_experiment_ising(
                     acc = accs[name]
                     m_blocks = ising.block_magnetizations(
                         sigmas[name], valid, w, step=step,
-                        min_valid_fraction=min_valid_fraction)
+                        min_valid_fraction=min_valid_fraction,
+                        shape=shape)
                     m_flat = (m_blocks[np.isfinite(m_blocks)]
                               if m_blocks.size else np.empty(0, dtype=np.float64))
                     if m_flat.size == 0:
@@ -1826,6 +1829,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="--window_sizes auto の等比分割数")
     parser.add_argument('--window_overlap', type=float, default=0.0,
                         help="ブロックの重なり率（0 = 非重複タイル, 0.5 = 50%% 重複）")
+    parser.add_argument('--shape', type=str, default='circle', choices=['circle', 'square'],
+                        help="ドメイン形状（circle = 円形領域・FFT畳み込み, square = 正方形領域・積分画像）")
 
     parser.add_argument('--director', type=str, default='global', choices=['global', 'local'],
                         help="n の与え方（global = フレームごとの大域ネマチック主軸, "
@@ -1958,6 +1963,7 @@ def main():
                 flow_cache_name=cache_name,
                 block_sample_max=args.block_sample_max,
                 progress=not args.no_progress,
+                shape=args.shape,
             )
             if res is None:
                 continue

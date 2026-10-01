@@ -10,16 +10,16 @@ plot_ising_scaling_master_curve.py
 1. 光学フロー場 u(x, y, t) とネマチックディレクター n からイジングスピン
        sigma(x, y, t) = sign( u(x, y, t) . n )
    を定義。
-2. 任意のウィンドウサイズ R（正方形ブロック / 局所領域）内におけるイジングスピン平均値
-       M(R) = (1 / N_R) sum_{i in window} sigma_i
-   およびその2乗 M^2(R)、アンサンブル平均 <M^2(R)> を計算。
+2. 任意のウィンドウ半径 R（円形ドメイン / 円板）内におけるイジングスピン平均値
+       M(R) = (1 / N_R) sum_{i in disk} sigma_i
+   およびその2乗 M^2(R)、アンサンブル平均 <M^2(R)> を FFT 畳み込みにより計算。
 3. 空間配向相関 C(r) を指数減衰 C(r) = a * exp(-r / xi) でフィッティングして得られた相関長 xi を取得。
 4. 無次元スケーリング変数 x = R / xi を定義し、横軸 x = R / xi、縦軸 <M^2> のグラフを作成。
 5. 多数の (R, xi, exp, block) から大量のデータ点を集約し、x を適切な幅のビン（Bin）に分割して
    ビン平均値 <M^2> および標準誤差 (SEM) / 中央値・四分位数 (IQR) をプロット。
-6. 2次元指数相関場における理論マスターカーブ
-       <M^2(x)> = 4 * int_0^1 (1 - u) du int_0^1 (1 - v) dv exp(-x * sqrt(u^2 + v^2))
-   を理論線として重ねて描画。
+6. 2次元円形領域における指数相関場の理論マスターカーブ
+       <M^2(x)> = (2 / x^2) * { 1 + 2 * [I_0(2x) - L_0(2x)] - (3 / x) * [I_1(2x) - L_1(2x)] }
+   （I_n: 第1種変形ベッセル関数, L_n: 変形ストルーブ関数）を理論線として重ねて描画。
 
 【出力ファイル（figure/ising_scaling/）】
 - ising_scaling_master_curve_2panel.png / .svg  : Linear & Log-Log の2パネル比較図
@@ -43,7 +43,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
-from scipy import integrate
+from scipy import integrate, signal
+import scipy.special as sp
 from tqdm import tqdm
 
 # 親ディレクトリのパス設定
@@ -68,40 +69,48 @@ BEAD_LOOKUP = mt_ori.BEAD_LOOKUP
 
 
 # =============================================================================
-# 理論マスターカーブ
+# 理論マスターカーブ（2次元円形領域における厳密解）
 # =============================================================================
 
-_THEORY_GRID_X = np.logspace(-3, 3, 200)
+_THEORY_GRID_X = np.logspace(-3, 3, 300)
 _THEORY_GRID_M2 = None
 
 
-def _calc_theoretical_m2_square(x_val: float) -> float:
+def _calc_theoretical_m2_disk(x_val: float) -> float:
     """
-    2次元正方形領域（一辺 R）における指数相関場 C(r) = exp(-r/xi) の
-    磁化2乗平均 <M^2>(x) (x = R / xi) の厳密な幾何二重積分:
-        <M^2(x)> = 4 * int_0^1 (1 - u) du int_0^1 (1 - v) dv exp(-x * sqrt(u^2 + v^2))
+    2次元円形領域（半径 R）における指数相関場 C(r) = exp(-r/xi) の
+    磁化2乗平均 <M^2>(x) (x = R / xi) の厳密解:
+        <M^2(x)> = (2 / x^2) * { 1 + 2 * [I_0(2x) - L_0(2x)] - (3 / x) * [I_1(2x) - L_1(2x)] }
     """
-    if x_val < 1e-4:
-        # Taylor 展開: <M^2> = 1 - (2/3)*x + ...
-        return float(1.0 - (2.0 / 3.0) * x_val)
-    if x_val > 500.0:
-        # 大スケール漸近解: 2*pi / x^2
-        return float(2.0 * np.pi / (x_val ** 2))
+    x = float(x_val)
+    if x <= 0:
+        return 1.0
+    if x < 1e-4:
+        # Taylor 展開: <M^2> = 1 - (128 / (45 * pi)) * x + ...
+        return float(1.0 - (128.0 / (45.0 * np.pi)) * x)
+    if x > 15.0:
+        # 大スケール (x > 15) では Bessel/Struve 関数の指数増大によるオーバーフローを防ぐため、
+        # 厳密な弦長分布積分による高精度評価を行う
+        val, _ = integrate.quad(
+            lambda w: (16.0 / np.pi) * w * (np.arccos(w) - w * np.sqrt(np.maximum(0.0, 1.0 - w**2))) * np.exp(-2.0 * x * w),
+            0.0, 1.0, limit=100
+        )
+        return float(val)
 
-    def integrand(v, u, x):
-        return 4.0 * (1.0 - u) * (1.0 - v) * np.exp(-x * np.hypot(u, v))
-
-    val, _ = integrate.dblquad(integrand, 0.0, 1.0, lambda u: 0.0, lambda u: 1.0, args=(x_val,))
-    return float(val)
+    z = 2.0 * x
+    term0 = sp.i0(z) - sp.modstruve(0, z)
+    term1 = sp.i1(z) - sp.modstruve(1, z)
+    val = (2.0 / (x**2)) * (1.0 + 2.0 * term0 - (3.0 / x) * term1)
+    return float(np.clip(val, 0.0, 1.0))
 
 
 def theoretical_master_curve(x_array: np.ndarray) -> np.ndarray:
     """
-    理論普遍関数 <M^2>(x) をルックアップテーブル補間で高速かつ高精度に評価する。
+    円形領域における理論普遍関数 <M^2>(x) をルックアップテーブル補間で高速かつ高精度に評価する。
     """
     global _THEORY_GRID_M2
     if _THEORY_GRID_M2 is None:
-        _THEORY_GRID_M2 = np.array([_calc_theoretical_m2_square(x) for x in _THEORY_GRID_X])
+        _THEORY_GRID_M2 = np.array([_calc_theoretical_m2_disk(x) for x in _THEORY_GRID_X])
 
     xs = np.asarray(x_array, dtype=float)
     # 対数空間で補間
@@ -225,6 +234,10 @@ def extract_experiment_m2_scaling(
         if len(windows_grid) == 0:
             return None
 
+        # 窓サイズごとの円形カーネル事前生成
+        kernels = {w_g: ising.create_disk_kernel(w_g) for w_g in windows_grid}
+        n_disks = {w_g: float(np.sum(kernels[w_g])) for w_g in windows_grid}
+
         # 窓サイズごとの集計配列
         # R_grid -> list of frame-level squared_mean, and pooled block M^2
         window_stats = {w: {'sum_m2': 0.0, 'sum_abs_m': 0.0, 'sum_m': 0.0,
@@ -264,23 +277,30 @@ def extract_experiment_m2_scaling(
             sigma = np.sign(dot)
             sigma[~valid] = 0.0
 
-            cum_sigma = ising.integral_image(sigma)
-            cum_valid = ising.integral_image(valid.astype(np.float64))
+            s_in = np.where(valid, sigma, 0.0)
+            v_in = valid.astype(np.float64)
 
             for w_g in windows_grid:
-                ys = np.arange(0, out_shape[0] - w_g + 1, w_g)
-                xs = np.arange(0, out_shape[1] - w_g + 1, w_g)
+                k = kernels[w_g]
+                n_disk = n_disks[w_g]
+
+                s_conv = signal.fftconvolve(s_in, k, mode='same')
+                v_conv = signal.fftconvolve(v_in, k, mode='same')
+
+                step = max(1, int(round(w_g)))
+                ys = np.arange(0, out_shape[0], step)
+                xs = np.arange(0, out_shape[1], step)
                 if len(ys) == 0 or len(xs) == 0:
                     continue
 
-                tot_s = ising._block_reduce(cum_sigma, ys, xs, w_g)
-                tot_v = ising._block_reduce(cum_valid, ys, xs, w_g)
+                sub_s = s_conv[np.ix_(ys, xs)]
+                sub_v = v_conv[np.ix_(ys, xs)]
 
-                valid_mask = tot_v >= (float(min_valid_fraction) * (w_g * w_g))
+                valid_mask = (sub_v > 0.0) & (sub_v >= (float(min_valid_fraction) * n_disk))
                 if not np.any(valid_mask):
                     continue
 
-                m_block = tot_s[valid_mask] / tot_v[valid_mask]
+                m_block = sub_s[valid_mask] / sub_v[valid_mask]
                 m2_block = m_block ** 2
                 abs_m_block = np.abs(m_block)
 

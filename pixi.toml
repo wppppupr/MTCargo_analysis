@@ -71,6 +71,8 @@ hmm_polar = "python hmm_polar_order_analysis.py"
 hmm_polar_small = "python hmm_polar_order_analysis.py --beads beads06um beads1um beads3um"
 hmm_acf = "python plot_hmm_acf.py"
 diffusion_scaling = "python plot_diffusion_scaling_master_curve.py"
+cargo_dim_vel = "python plot_cargo_dimensionless_velocity_distribution.py"
+conditional_log_vel = "python plot_conditional_log_velocity_vs_magnetization.py"
 
 
 

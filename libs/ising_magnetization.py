@@ -55,12 +55,19 @@ libs/ising_magnetization.py
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+from scipy import signal
 
 __all__ = [
     'integral_image',
+    'create_disk_kernel',
     'default_window_sizes',
     'ising_spin_field',
     'unit_flow_components',
+    'disk_magnetizations',
+    'disk_magnetization_stats',
+    'disk_polar_orders',
+    'disk_polar_stats',
+    'disk_order_pairs',
     'block_magnetizations',
     'block_magnetization_stats',
     'block_polar_orders',
@@ -84,6 +91,22 @@ __all__ = [
 # =============================================================================
 # 基本ユーティリティ
 # =============================================================================
+
+def create_disk_kernel(radius: float) -> np.ndarray:
+    """
+    半径 radius [grid unit] の 2 次元円形マスクカーネル（float64）を返す。
+    radius <= 0.5 のときは 1x1 の [[1.0]] を返す。
+    """
+    r = float(radius)
+    if r <= 0.5:
+        return np.ones((1, 1), dtype=np.float64)
+    r_int = int(np.ceil(r))
+    y, x = np.ogrid[-r_int:r_int + 1, -r_int:r_int + 1]
+    mask = (x * x + y * y) <= (r * r)
+    k = np.zeros((2 * r_int + 1, 2 * r_int + 1), dtype=np.float64)
+    k[mask] = 1.0
+    return k
+
 
 def integral_image(a: np.ndarray) -> np.ndarray:
     """
@@ -264,6 +287,133 @@ def _valid_block_mask(den: np.ndarray, window: int, min_valid_fraction: float) -
     return (den > 0.0) & (den >= float(min_valid_fraction) * float(int(window) ** 2))
 
 
+def disk_polar_orders(
+    ux: np.ndarray,
+    uy: np.ndarray,
+    valid: np.ndarray,
+    radius: float,
+    step: Optional[int] = None,
+    min_valid_fraction: float = 0.5,
+) -> np.ndarray:
+    """
+    単位ベクトル場を半径 radius 画素の円形領域で FFT 畳み込みし、局所ポーラーオーダー
+        P = | sum_{i in disk} u_hat_i | / N_R
+    を返す。
+    """
+    ux = np.asarray(ux, dtype=np.float64)
+    uy = np.asarray(uy, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
+    if ux.shape != uy.shape or ux.shape != valid.shape:
+        raise ValueError("ux, uy, valid must share the shape, got "
+                         f"{ux.shape}, {uy.shape}, {valid.shape}")
+
+    rows, cols = ux.shape
+    r = float(radius)
+    if r < 0.5 or r > min(rows, cols) / 2.0:
+        return np.empty((0, 0), dtype=np.float64)
+
+    kernel = create_disk_kernel(r)
+    n_disk = float(np.sum(kernel))
+
+    vx = np.where(valid, ux, 0.0)
+    vy = np.where(valid, uy, 0.0)
+    vf = valid.astype(np.float64)
+
+    cx = signal.fftconvolve(vx, kernel, mode='same')
+    cy = signal.fftconvolve(vy, kernel, mode='same')
+    cv = signal.fftconvolve(vf, kernel, mode='same')
+
+    st = int(step) if step is not None else max(1, int(round(r)))
+    ys = np.arange(0, rows, st)
+    xs = np.arange(0, cols, st)
+
+    sx = cx[np.ix_(ys, xs)]
+    sy = cy[np.ix_(ys, xs)]
+    den = cv[np.ix_(ys, xs)]
+
+    ok = (den > 0.0) & (den >= float(min_valid_fraction) * n_disk)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        p = np.where(ok, np.hypot(sx, sy) / np.where(den > 0.0, den, 1.0), np.nan)
+    return p
+
+
+def disk_polar_stats(
+    ux: np.ndarray,
+    uy: np.ndarray,
+    valid: np.ndarray,
+    radius: float,
+    step: Optional[int] = None,
+    min_valid_fraction: float = 0.5,
+) -> Dict[str, float]:
+    """
+    円形領域ポーラーオーダーの統計量（有効ブロック上の平均）を返す。
+    """
+    p = disk_polar_orders(ux, uy, valid, radius, step=step,
+                          min_valid_fraction=min_valid_fraction)
+    flat = p[np.isfinite(p)] if p.size else np.empty(0, dtype=np.float64)
+    if flat.size == 0:
+        return {'polar_mean': float('nan'), 'n_blocks': 0}
+    return {'polar_mean': float(np.mean(flat)), 'n_blocks': int(flat.size)}
+
+
+def disk_order_pairs(
+    sigma: np.ndarray,
+    ux: np.ndarray,
+    uy: np.ndarray,
+    valid: np.ndarray,
+    radius: float,
+    step: Optional[int] = None,
+    min_valid_fraction: float = 0.5,
+) -> Dict[str, object]:
+    """
+    半径 radius 画素の円形領域で FFT 畳み込みし、イジング磁化とポーラーオーダーのペアを同時に計算する。
+    """
+    sigma = np.asarray(sigma, dtype=np.float64)
+    ux = np.asarray(ux, dtype=np.float64)
+    uy = np.asarray(uy, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
+    if not (sigma.shape == ux.shape == uy.shape == valid.shape):
+        raise ValueError("sigma, ux, uy, valid must share the shape, got "
+                         f"{sigma.shape}, {ux.shape}, {uy.shape}, {valid.shape}")
+
+    rows, cols = sigma.shape
+    r = float(radius)
+    empty = np.empty((0, 0), dtype=np.float64)
+    if r < 0.5 or r > min(rows, cols) / 2.0:
+        return {'signed_m': empty, 'abs_m': empty, 'polar': empty, 'n_blocks': 0}
+
+    kernel = create_disk_kernel(r)
+    n_disk = float(np.sum(kernel))
+
+    sf = np.where(valid, sigma, 0.0)
+    vx = np.where(valid, ux, 0.0)
+    vy = np.where(valid, uy, 0.0)
+    vf = valid.astype(np.float64)
+
+    cs = signal.fftconvolve(sf, kernel, mode='same')
+    cx = signal.fftconvolve(vx, kernel, mode='same')
+    cy = signal.fftconvolve(vy, kernel, mode='same')
+    cv = signal.fftconvolve(vf, kernel, mode='same')
+
+    st = int(step) if step is not None else max(1, int(round(r)))
+    ys = np.arange(0, rows, st)
+    xs = np.arange(0, cols, st)
+
+    num = cs[np.ix_(ys, xs)]
+    sx = cx[np.ix_(ys, xs)]
+    sy = cy[np.ix_(ys, xs)]
+    den = cv[np.ix_(ys, xs)]
+
+    ok = (den > 0.0) & (den >= float(min_valid_fraction) * n_disk)
+    safe_den = np.where(den > 0.0, den, 1.0)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        signed_m = np.where(ok, num / safe_den, np.nan)
+        abs_m = np.where(ok, np.abs(num) / safe_den, np.nan)
+        polar = np.where(ok, np.hypot(sx, sy) / safe_den, np.nan)
+    return {'signed_m': signed_m, 'abs_m': abs_m, 'polar': polar,
+            'n_blocks': int(np.count_nonzero(ok))}
+
+
 def block_polar_orders(
     ux: np.ndarray,
     uy: np.ndarray,
@@ -271,33 +421,17 @@ def block_polar_orders(
     window: int,
     step: Optional[int] = None,
     min_valid_fraction: float = 0.5,
+    shape: str = 'square',
 ) -> np.ndarray:
     """
-    単位ベクトル場を一辺 window 画素のブロックに区切り、ブロックポーラーオーダー
-
-        P_b = | (1 / N_R^{(b)}) * sum_{i in block b} u_hat_i |
-
-    を返す（N_R^{(b)} はブロック内の有効画素数）。ブロック磁化 block_magnetizations と
-    まったく同じブロック格子・同じ有効判定を使うので、要素ごとに対応する。
-
-    Parameters
-    ----------
-    ux, uy : ndarray, shape (H, W)
-        unit_flow_components() の出力（無効画素は 0）。
-    valid : ndarray of bool, shape (H, W)
-        有効画素マスク。
-    window : int
-        ブロックの一辺（画素 = 間引き格子上の単位）。
-    step : int, optional
-        ブロック中心の間隔。None なら window（= 非重複タイル）。
-    min_valid_fraction : float
-        ブロックを有効とみなすのに必要な有効画素の割合（既定 0.5）。
-
-    Returns
-    -------
-    ndarray, shape (n_y, n_x)
-        各ブロックのポーラーオーダー（無効ブロックは NaN）。窓が画像より大きい場合は (0, 0)。
+    領域内のブロックポーラーオーダー P(R) を計算する。
+    shape='circle' では FFT 畳み込みによる半径 window 画素の円形領域、
+    shape='square'（既定）では積分画像による一辺 window 画素の正方形領域。
     """
+    if shape == 'circle':
+        return disk_polar_orders(ux, uy, valid, radius=float(window),
+                                 step=step, min_valid_fraction=min_valid_fraction)
+
     ux = np.asarray(ux, dtype=np.float64)
     uy = np.asarray(uy, dtype=np.float64)
     valid = np.asarray(valid, dtype=bool)
@@ -333,18 +467,13 @@ def block_polar_stats(
     window: int,
     step: Optional[int] = None,
     min_valid_fraction: float = 0.5,
+    shape: str = 'square',
 ) -> Dict[str, float]:
     """
     ブロックポーラーオーダーの統計量（有効ブロック上の平均）を返す。
-
-    Returns
-    -------
-    dict
-        polar_mean : <P_b>_b（= <P(R)>）
-        n_blocks   : 有効ブロック数（int）
     """
     p = block_polar_orders(ux, uy, valid, window, step=step,
-                           min_valid_fraction=min_valid_fraction)
+                           min_valid_fraction=min_valid_fraction, shape=shape)
     flat = p[np.isfinite(p)] if p.size else np.empty(0, dtype=np.float64)
     if flat.size == 0:
         return {'polar_mean': float('nan'), 'n_blocks': 0}
@@ -359,24 +488,15 @@ def block_order_pairs(
     window: int,
     step: Optional[int] = None,
     min_valid_fraction: float = 0.5,
+    shape: str = 'square',
 ) -> Dict[str, object]:
     """
     同一のブロック格子で、イジング磁化とポーラーオーダーのペアを同時に計算する。
-
-    ブロックごとに
-
-        signed_m = (1 / N_R) * sum sigma_i      （符号付き磁化）
-        abs_m    = |signed_m|
-        polar    = | (1 / N_R) * sum u_hat_i |  （ポーラーオーダー）
-
-    を返す（無効ブロックは NaN）。散布図・相関解析の 1 サンプル = 1 ブロックに対応する。
-
-    Returns
-    -------
-    dict
-        signed_m / abs_m / polar : ndarray, shape (n_y, n_x)
-        n_blocks                 : 有効ブロック数（int）
     """
+    if shape == 'circle':
+        return disk_order_pairs(sigma, ux, uy, valid, radius=float(window),
+                                step=step, min_valid_fraction=min_valid_fraction)
+
     sigma = np.asarray(sigma, dtype=np.float64)
     ux = np.asarray(ux, dtype=np.float64)
     uy = np.asarray(uy, dtype=np.float64)
@@ -421,16 +541,10 @@ def polar_order_curve(
     windows: Sequence[int],
     overlap: float = 0.0,
     min_valid_fraction: float = 0.5,
+    shape: str = 'square',
 ) -> Dict[str, np.ndarray]:
     """
     複数の窓サイズに対する <P(R)> を 1 フレーム分まとめて計算する。
-
-    magnetization_curve() と完全に対応する（窓サイズ・間隔・有効判定が同一）。
-
-    Returns
-    -------
-    dict of ndarray
-        window / polar_mean / n_blocks
     """
     wins = np.atleast_1d(np.asarray(windows, dtype=int))
     n_w = int(wins.size)
@@ -446,7 +560,7 @@ def polar_order_curve(
     for i, w in enumerate(wins):
         step = int(max(1, round(float(w) * (1.0 - ov))))
         stats = block_polar_stats(ux, uy, valid, int(w), step=step,
-                                  min_valid_fraction=min_valid_fraction)
+                                  min_valid_fraction=min_valid_fraction, shape=shape)
         out['polar_mean'][i] = stats['polar_mean']
         out['n_blocks'][i] = stats['n_blocks']
     return out
@@ -456,38 +570,91 @@ def polar_order_curve(
 # ブロック磁化 M_Ising(R)
 # =============================================================================
 
+def disk_magnetizations(
+    sigma: np.ndarray,
+    valid: np.ndarray,
+    radius: float,
+    step: Optional[int] = None,
+    min_valid_fraction: float = 0.5,
+) -> np.ndarray:
+    """
+    スピン場を半径 radius 画素の円形領域で FFT 畳み込みし、円形ドメイン磁化
+        m = (1 / N_R) * sum_{i in disk} sigma_i
+    を返す。
+    """
+    sigma = np.asarray(sigma, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
+    if sigma.shape != valid.shape:
+        raise ValueError(f"sigma and valid must share the shape, got {sigma.shape} and {valid.shape}")
+
+    rows, cols = sigma.shape
+    r = float(radius)
+    if r < 0.5 or r > min(rows, cols) / 2.0:
+        return np.empty((0, 0), dtype=np.float64)
+
+    kernel = create_disk_kernel(r)
+    n_disk = float(np.sum(kernel))
+
+    sf = np.where(valid, sigma, 0.0)
+    vf = valid.astype(np.float64)
+
+    cs = signal.fftconvolve(sf, kernel, mode='same')
+    cv = signal.fftconvolve(vf, kernel, mode='same')
+
+    st = int(step) if step is not None else max(1, int(round(r)))
+    ys = np.arange(0, rows, st)
+    xs = np.arange(0, cols, st)
+
+    num = cs[np.ix_(ys, xs)]
+    den = cv[np.ix_(ys, xs)]
+
+    ok = (den > 0.0) & (den >= float(min_valid_fraction) * n_disk)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        m = np.where(ok, num / np.where(den > 0.0, den, 1.0), np.nan)
+    return m
+
+
+def disk_magnetization_stats(
+    sigma: np.ndarray,
+    valid: np.ndarray,
+    radius: float,
+    step: Optional[int] = None,
+    min_valid_fraction: float = 0.5,
+) -> Dict[str, float]:
+    """
+    円形領域磁化の統計量（有効ブロック上の平均）を返す。
+    """
+    m = disk_magnetizations(sigma, valid, radius, step=step,
+                            min_valid_fraction=min_valid_fraction)
+    flat = m[np.isfinite(m)] if m.size else np.empty(0, dtype=np.float64)
+    if flat.size == 0:
+        return {'abs_mean': float('nan'), 'signed_mean': float('nan'),
+                'squared_mean': float('nan'), 'n_blocks': 0}
+    return {
+        'abs_mean': float(np.mean(np.abs(flat))),
+        'signed_mean': float(np.mean(flat)),
+        'squared_mean': float(np.mean(flat ** 2)),
+        'n_blocks': int(flat.size),
+    }
+
+
 def block_magnetizations(
     sigma: np.ndarray,
     valid: np.ndarray,
     window: int,
     step: Optional[int] = None,
     min_valid_fraction: float = 0.5,
+    shape: str = 'square',
 ) -> np.ndarray:
     """
-    スピン場を一辺 window 画素のブロックに区切り、ブロック磁化
-
-        m_b = (1 / N_R^{(b)}) * sum_{i in block b} sigma_i
-
-    を返す（和は有効画素のみ、N_R^{(b)} はブロック内の有効画素数）。
-
-    Parameters
-    ----------
-    sigma : ndarray, shape (H, W)
-        イジングスピン（無効画素は 0）。
-    valid : ndarray of bool, shape (H, W)
-        有効画素マスク。
-    window : int
-        ブロックの一辺（画素 = 間引き格子上の単位）。
-    step : int, optional
-        ブロック中心の間隔。None なら window（= 非重複タイル）。
-    min_valid_fraction : float
-        ブロックを有効とみなすのに必要な有効画素の割合（既定 0.5）。
-
-    Returns
-    -------
-    ndarray, shape (n_y, n_x)
-        各ブロックの磁化。窓が画像より大きい場合は shape (0, 0)。
+    スピン場からブロック磁化 M_Ising(R) を計算する。
+    shape='circle' では FFT 畳み込みによる半径 window 画素の円形領域、
+    shape='square'（既定）では積分画像による一辺 window 画素の正方形領域。
     """
+    if shape == 'circle':
+        return disk_magnetizations(sigma, valid, radius=float(window),
+                                   step=step, min_valid_fraction=min_valid_fraction)
+
     sigma = np.asarray(sigma, dtype=np.float64)
     valid = np.asarray(valid, dtype=bool)
     if sigma.shape != valid.shape:
@@ -520,20 +687,13 @@ def block_magnetization_stats(
     window: int,
     step: Optional[int] = None,
     min_valid_fraction: float = 0.5,
+    shape: str = 'square',
 ) -> Dict[str, float]:
     """
     ブロック磁化の統計量（有効ブロック上の平均）を返す。
-
-    Returns
-    -------
-    dict
-        abs_mean      : <|m_b|>_b        （= M_Ising(R) の絶対値平均）
-        signed_mean   : <m_b>_b
-        squared_mean  : <m_b^2>_b
-        n_blocks      : 有効ブロック数（int）
     """
     m = block_magnetizations(sigma, valid, window, step=step,
-                             min_valid_fraction=min_valid_fraction)
+                             min_valid_fraction=min_valid_fraction, shape=shape)
     flat = m[np.isfinite(m)] if m.size else np.empty(0, dtype=np.float64)
     if flat.size == 0:
         return {'abs_mean': float('nan'), 'signed_mean': float('nan'),
@@ -552,25 +712,10 @@ def magnetization_curve(
     windows: Sequence[int],
     overlap: float = 0.0,
     min_valid_fraction: float = 0.5,
+    shape: str = 'square',
 ) -> Dict[str, np.ndarray]:
     """
     複数の窓サイズに対する <|M_Ising(R)|> を 1 フレーム分まとめて計算する。
-
-    Parameters
-    ----------
-    sigma, valid : ndarray
-        ising_spin_field() の出力。
-    windows : sequence of int
-        窓サイズ列（間引き格子上の一辺）。
-    overlap : float
-        隣接ブロックの重なり率（0 = 非重複タイル, 0.5 = 50% 重複）。
-    min_valid_fraction : float
-        ブロックを有効とみなすのに必要な有効画素の割合。
-
-    Returns
-    -------
-    dict of ndarray
-        window / abs_mean / signed_mean / squared_mean / n_blocks
     """
     wins = np.atleast_1d(np.asarray(windows, dtype=int))
     n_w = int(wins.size)
@@ -588,7 +733,7 @@ def magnetization_curve(
     for i, w in enumerate(wins):
         step = int(max(1, round(float(w) * (1.0 - ov))))
         stats = block_magnetization_stats(sigma, valid, int(w), step=step,
-                                         min_valid_fraction=min_valid_fraction)
+                                          min_valid_fraction=min_valid_fraction, shape=shape)
         out['abs_mean'][i] = stats['abs_mean']
         out['signed_mean'][i] = stats['signed_mean']
         out['squared_mean'][i] = stats['squared_mean']

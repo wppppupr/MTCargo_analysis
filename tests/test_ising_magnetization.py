@@ -1022,5 +1022,70 @@ class TestMainEndToEnd(unittest.TestCase):
         np.testing.assert_allclose(df_sum['delta_relative_pooled'], 0.0, atol=1e-3)
 
 
+class TestCircularDiskConvolutionAndTheory(unittest.TestCase):
+
+    def test_disk_kernel_creation(self):
+        k1 = ising.create_disk_kernel(0.5)
+        self.assertEqual(k1.shape, (1, 1))
+        self.assertEqual(k1[0, 0], 1.0)
+
+        k2 = ising.create_disk_kernel(2.0)
+        self.assertEqual(k2.shape, (5, 5))
+        # 半径 2 の円板内画素数: 1 + 4 + 4 + 4 = 13 画素
+        self.assertEqual(int(np.sum(k2)), 13)
+
+    def test_disk_magnetizations_uniform(self):
+        sigma = np.ones((64, 64))
+        valid = np.ones((64, 64), dtype=bool)
+        m = ising.disk_magnetizations(sigma, valid, radius=4.0, step=4)
+        m_fin = m[np.isfinite(m)]
+        self.assertGreater(m_fin.size, 0)
+        np.testing.assert_allclose(m_fin, 1.0)
+
+        st = ising.disk_magnetization_stats(sigma, valid, radius=4.0, step=4)
+        self.assertAlmostEqual(st['abs_mean'], 1.0)
+        self.assertAlmostEqual(st['squared_mean'], 1.0)
+
+    def test_disk_polar_orders_uniform(self):
+        ux = np.ones((64, 64))
+        uy = np.zeros((64, 64))
+        valid = np.ones((64, 64), dtype=bool)
+        p = ising.disk_polar_orders(ux, uy, valid, radius=4.0, step=4)
+        p_fin = p[np.isfinite(p)]
+        self.assertGreater(p_fin.size, 0)
+        np.testing.assert_allclose(p_fin, 1.0)
+
+    def test_disk_order_pairs_antiparallel(self):
+        # 上半分 +1, 下半分 -1
+        sigma = np.ones((64, 64))
+        sigma[32:, :] = -1.0
+        ux = np.zeros((64, 64))
+        ux[:32, :] = 1.0
+        ux[32:, :] = -1.0
+        uy = np.zeros((64, 64))
+        valid = np.ones((64, 64), dtype=bool)
+        pairs = ising.disk_order_pairs(sigma, ux, uy, valid, radius=4.0, step=4)
+        self.assertGreater(pairs['n_blocks'], 0)
+        np.testing.assert_allclose(pairs['abs_m'], pairs['polar'], atol=1e-12)
+
+    def test_theoretical_master_curve_disk(self):
+        import plot_ising_scaling_master_curve as psmc
+        # x -> 0 で 1
+        self.assertAlmostEqual(float(psmc.theoretical_master_curve(np.array([1e-4]))[0]), 1.0, delta=0.01)
+        # x = 1.0 で約 0.4413
+        val_1 = float(psmc.theoretical_master_curve(np.array([1.0]))[0])
+        self.assertAlmostEqual(val_1, 0.44134, places=3)
+        # x = 2.0 で約 0.2282
+        val_2 = float(psmc.theoretical_master_curve(np.array([2.0]))[0])
+        self.assertAlmostEqual(val_2, 0.22823, places=3)
+        # 単調減少性
+        xs = np.logspace(-2, 2, 20)
+        ys = psmc.theoretical_master_curve(xs)
+        self.assertTrue(np.all(np.diff(ys) < 0))
+        # 大スケール漸近解 ~ 2 / x^2
+        val_large = float(psmc.theoretical_master_curve(np.array([50.0]))[0])
+        self.assertAlmostEqual(val_large * (50.0 ** 2), 2.0, delta=0.1)
+
+
 if __name__ == '__main__':
     unittest.main()

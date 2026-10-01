@@ -41,8 +41,8 @@ BEADS_INFO = [
     {"name": "beads06um", "diameter_um": 0.63, "marker": "^", "color": style_colors[0]},
     {"name": "beads1um",  "diameter_um": 1.18, "marker": "o", "color": style_colors[1]},
     {"name": "beads3um",  "diameter_um": 3.37, "marker": "d", "color": style_colors[2]},
-    {"name": "beads5um",  "diameter_um": 5.00, "marker": 10,  "color": style_colors[3]},
-    {"name": "beads7um",  "diameter_um": 7.24, "marker": 11,  "color": style_colors[4]},
+    {"name": "beads5um",  "diameter_um": 5.00, "marker": 'p',  "color": style_colors[3]},
+    {"name": "beads7um",  "diameter_um": 7.24, "marker": 'h',  "color": style_colors[4]},
     {"name": "beads20um", "diameter_um": 20.0, "marker": "s", "color": style_colors[5]},
 ]
 
