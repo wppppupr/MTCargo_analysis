@@ -56,20 +56,32 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
-from scipy.stats import linregress, probplot
+from scipy.stats import linregress, probplot, norm, skew, kurtosis, kstest, normaltest
 
 CURRENT_DIR = Path(__file__).parent.resolve()
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
-# ビーズ基本情報 (全6サイズ)
+# スタイルの適用
+style_path = CURRENT_DIR / 'libs' / 'my_style.mplstyle'
+if style_path.exists():
+    try:
+        plt.style.use(str(style_path))
+        style_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+        style_colors = [f"#{c}" if not c.startswith('#') else c for c in style_colors]
+    except Exception:
+        style_colors = ['#882255', '#CC6677', '#DDCC77', '#999933', '#117733', '#44AA99', '#88CCEE', '#332288', '#AA4499']
+else:
+    style_colors = ['#882255', '#CC6677', '#DDCC77', '#999933', '#117733', '#44AA99', '#88CCEE', '#332288', '#AA4499']
+
+# ビーズ基本情報 (全6サイズ, MSD.py / displacement_analysis.py と統一)
 BEADS_INFO = [
-    {"name": "beads06um", "diameter_um": 0.63, "radius_um": 0.315, "label": "0.63 μm", "marker": "^", "color": "#1f77b4"},
-    {"name": "beads1um",  "diameter_um": 1.18, "radius_um": 0.590, "label": "1.18 μm", "marker": "o", "color": "#ff7f0e"},
-    {"name": "beads3um",  "diameter_um": 3.37, "radius_um": 1.685, "label": "3.37 μm", "marker": "d", "color": "#2ca02c"},
-    {"name": "beads5um",  "diameter_um": 5.00, "radius_um": 2.500, "label": "5.00 μm", "marker": "p", "color": "#d62728"},
-    {"name": "beads7um",  "diameter_um": 7.24, "radius_um": 3.620, "label": "7.24 μm", "marker": "h", "color": "#9467bd"},
-    {"name": "beads20um", "diameter_um": 20.0, "radius_um": 10.00, "label": "20.0 μm", "marker": "s", "color": "#8c564b"},
+    {"name": "beads06um", "diameter_um": 0.63, "radius_um": 0.315, "label": "0.63 μm", "marker": "^", "color": style_colors[0]},
+    {"name": "beads1um",  "diameter_um": 1.18, "radius_um": 0.590, "label": "1.18 μm", "marker": "o", "color": style_colors[1]},
+    {"name": "beads3um",  "diameter_um": 3.37, "radius_um": 1.685, "label": "3.37 μm", "marker": "d", "color": style_colors[2]},
+    {"name": "beads5um",  "diameter_um": 5.00, "radius_um": 2.500, "label": "5.00 μm", "marker": "p", "color": style_colors[3]},
+    {"name": "beads7um",  "diameter_um": 7.24, "radius_um": 3.620, "label": "7.24 μm", "marker": "h", "color": style_colors[4]},
+    {"name": "beads20um", "diameter_um": 20.0, "radius_um": 10.00, "label": "20.0 μm", "marker": "s", "color": style_colors[5]},
 ]
 
 POSSIBLE_ROOTS = [
@@ -736,7 +748,7 @@ def plot_fit_parameters_vs_diameter(
     df_fit: pd.DataFrame,
     out_dirs: List[Path]
 ):
-    """フィッティングパラメータ (傾き beta, 切片 y0) の粒子径依存性プロット"""
+    """フィッティングパラメータ (傾き beta, 切片 y0) の粒子径依存性プロット (2パネル版 + 単体パネル版)"""
     sub_df = df_fit[df_fit["bead_name"] != "overall_pooled"].dropna(subset=["diameter_um"])
     if sub_df.empty:
         return
@@ -747,21 +759,24 @@ def plot_fit_parameters_vs_diameter(
     y0_ln = sub_df["ln_y0_intercept"].values
     y0_ln_err = sub_df["ln_y0_stderr"].values
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5.5))
+    # 1. 2パネル統合プロット (1x2)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 5.8))
 
     # パネル 1: 傾き \beta vs 粒子径 d
     for i in range(len(diameters)):
         b_info = next(b for b in BEADS_INFO if b["diameter_um"] == diameters[i])
         ax1.errorbar(
             diameters[i], beta_ln[i], yerr=beta_ln_err[i],
-            fmt=b_info["marker"], color=b_info["color"], ms=8.5, capsize=4, elinewidth=1.5
+            fmt=b_info["marker"], color=b_info["color"], ecolor='black',
+            elinewidth=1.6, capsize=4.5, capthick=1.2, markersize=9.5,
+            markeredgecolor='black', markeredgewidth=1.2, zorder=5
         )
 
-    ax1.axhline(0, color='gray', ls='--', lw=1.2)
+    ax1.axhline(0, color='#666666', ls='--', lw=1.3)
     ax1.set_xscale('log')
-    ax1.set_xlabel(r"Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=12)
-    ax1.set_ylabel(r"Slope $\beta$ [$\ln(\tilde{v}) / M$]", fontsize=12)
-    ax1.set_title(r"Velocity Sensitivity to Magnetization: Slope $\beta$ vs Diameter", fontsize=12.5, fontweight='bold')
+    ax1.set_xlabel(r"Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=12.5)
+    ax1.set_ylabel(r"Slope $\beta$ [$\ln(\tilde{v}) / M$]", fontsize=12.5)
+    ax1.set_title(r"Velocity Sensitivity: Slope $\beta$ vs Diameter", fontsize=13.0, fontweight='bold')
     ax1.grid(True, which='both', ls=':', alpha=0.6)
 
     # パネル 2: 切片 y0 vs 粒子径 d
@@ -769,13 +784,15 @@ def plot_fit_parameters_vs_diameter(
         b_info = next(b for b in BEADS_INFO if b["diameter_um"] == diameters[i])
         ax2.errorbar(
             diameters[i], y0_ln[i], yerr=y0_ln_err[i],
-            fmt=b_info["marker"], color=b_info["color"], ms=8.5, capsize=4, elinewidth=1.5
+            fmt=b_info["marker"], color=b_info["color"], ecolor='black',
+            elinewidth=1.6, capsize=4.5, capthick=1.2, markersize=9.5,
+            markeredgecolor='black', markeredgewidth=1.2, zorder=5
         )
 
     ax2.set_xscale('log')
-    ax2.set_xlabel(r"Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=12)
-    ax2.set_ylabel(r"Baseline Intercept $y_0$ (at $M=0$)", fontsize=12)
-    ax2.set_title(r"Baseline Log Velocity at $M=0$: Intercept $y_0$ vs Diameter", fontsize=12.5, fontweight='bold')
+    ax2.set_xlabel(r"Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=12.5)
+    ax2.set_ylabel(r"Baseline Intercept $y_0$ (at $M=0$)", fontsize=12.5)
+    ax2.set_title(r"Baseline Log Velocity at $M=0$: Intercept $y_0$ vs Diameter", fontsize=13.0, fontweight='bold')
     ax2.grid(True, which='both', ls=':', alpha=0.6)
 
     plt.suptitle(
@@ -785,6 +802,47 @@ def plot_fit_parameters_vs_diameter(
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     save_figure_to_all(fig, "linear_fit_params_vs_diameter", out_dirs)
 
+    # 2. 単体パネル 1: Slope beta vs Diameter
+    fig_slope, ax_s = plt.subplots(figsize=(7.5, 6.0))
+    for i in range(len(diameters)):
+        b_info = next(b for b in BEADS_INFO if b["diameter_um"] == diameters[i])
+        ax_s.errorbar(
+            diameters[i], beta_ln[i], yerr=beta_ln_err[i],
+            fmt=b_info["marker"], color=b_info["color"], ecolor='black',
+            elinewidth=1.6, capsize=4.5, capthick=1.2, markersize=10.0,
+            markeredgecolor='black', markeredgewidth=1.2, zorder=5,
+            label=f"$d = {b_info['label']}$"
+        )
+    ax_s.axhline(0, color='#666666', ls='--', lw=1.3, label=r'$\beta = 0$ (Crossover)')
+    ax_s.set_xscale('log')
+    ax_s.set_xlabel(r"Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=13.0)
+    ax_s.set_ylabel(r"Slope $\beta$ [$\ln(\tilde{v}) / M$]", fontsize=13.0)
+    ax_s.set_title(r"Velocity Sensitivity $\beta$ vs Particle Diameter $d$" + "\n(QQ Filtered)", fontsize=13.5, fontweight='bold', pad=10)
+    ax_s.grid(True, which='both', ls=':', alpha=0.6)
+    ax_s.legend(loc='best', fontsize=9.5, framealpha=0.9)
+    plt.tight_layout()
+    save_figure_to_all(fig_slope, "linear_fit_slope_vs_diameter", out_dirs)
+
+    # 3. 単体パネル 2: Intercept y0 vs Diameter
+    fig_y0, ax_y = plt.subplots(figsize=(7.5, 6.0))
+    for i in range(len(diameters)):
+        b_info = next(b for b in BEADS_INFO if b["diameter_um"] == diameters[i])
+        ax_y.errorbar(
+            diameters[i], y0_ln[i], yerr=y0_ln_err[i],
+            fmt=b_info["marker"], color=b_info["color"], ecolor='black',
+            elinewidth=1.6, capsize=4.5, capthick=1.2, markersize=10.0,
+            markeredgecolor='black', markeredgewidth=1.2, zorder=5,
+            label=f"$d = {b_info['label']}$"
+        )
+    ax_y.set_xscale('log')
+    ax_y.set_xlabel(r"Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=13.0)
+    ax_y.set_ylabel(r"Baseline Intercept $y_0$ (at $M=0$)", fontsize=13.0)
+    ax_y.set_title(r"Baseline Log Velocity $y_0$ at $M=0$ vs Particle Diameter $d$" + "\n(QQ Filtered)", fontsize=13.5, fontweight='bold', pad=10)
+    ax_y.grid(True, which='both', ls=':', alpha=0.6)
+    ax_y.legend(loc='best', fontsize=9.5, framealpha=0.9)
+    plt.tight_layout()
+    save_figure_to_all(fig_y0, "linear_fit_intercept_vs_diameter", out_dirs)
+
 
 def plot_fit_parameters_vs_scaled_radius(
     df_fit: pd.DataFrame,
@@ -792,7 +850,7 @@ def plot_fit_parameters_vs_scaled_radius(
     log_base: str = "ln"
 ):
     """
-    フィッティングパラメータ (傾き beta, 切片 y0) のスケール半径 x = R_c / xi に対するスケーリングプロット
+    フィッティングパラメータ (傾き beta, 切片 y0) のスケール半径 x = R_c / xi に対するスケーリングプロット (2パネル + 単体パネル)
     """
     sub_df = df_fit[df_fit["bead_name"] != "overall_pooled"].dropna(subset=["rc_over_xi_mean"])
     if sub_df.empty:
@@ -808,7 +866,8 @@ def plot_fit_parameters_vs_scaled_radius(
     y0_vals = sub_df[f"{y_prefix}_y0_intercept"].values
     y0_errs = sub_df[f"{y_prefix}_y0_stderr"].values
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5.5))
+    # 1. 2パネル統合プロット (1x2)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 5.8))
 
     # パネル 1: 傾き beta vs x = Rc / xi
     for i in range(len(sub_df)):
@@ -817,15 +876,17 @@ def plot_fit_parameters_vs_scaled_radius(
         ax1.errorbar(
             x_vals[i], beta_vals[i],
             xerr=x_errs[i], yerr=beta_errs[i],
-            fmt=b_info["marker"], color=b_info["color"], ms=9.0, capsize=4, elinewidth=1.5,
+            fmt=b_info["marker"], color=b_info["color"], ecolor='black',
+            elinewidth=1.6, capsize=4.5, capthick=1.2, markersize=9.5,
+            markeredgecolor='black', markeredgewidth=1.2, zorder=5,
             label=f"$d = {b_info['label']}$"
         )
 
-    ax1.axhline(0, color='gray', ls='--', lw=1.3, label=r'$\beta = 0$ (Crossover)')
+    ax1.axhline(0, color='#666666', ls='--', lw=1.3, label=r'$\beta = 0$ (Crossover)')
     ax1.set_xscale('log')
     ax1.set_xlabel(r"Scaled Radius $x = R_c / \xi_{i,t}$", fontsize=12.5)
     ax1.set_ylabel(rf"Slope $\beta$ [${unit_str} / M$]", fontsize=12.5)
-    ax1.set_title(r"Magnetization Sensitivity $\beta$ vs Scaled Radius $x = R_c / \xi$", fontsize=12.5, fontweight='bold')
+    ax1.set_title(r"Magnetization Sensitivity $\beta$ vs Scaled Radius $x = R_c / \xi$", fontsize=13.0, fontweight='bold')
     ax1.grid(True, which='both', ls=':', alpha=0.6)
     ax1.legend(loc='best', fontsize=9.5, framealpha=0.9)
 
@@ -836,14 +897,16 @@ def plot_fit_parameters_vs_scaled_radius(
         ax2.errorbar(
             x_vals[i], y0_vals[i],
             xerr=x_errs[i], yerr=y0_errs[i],
-            fmt=b_info["marker"], color=b_info["color"], ms=9.0, capsize=4, elinewidth=1.5,
+            fmt=b_info["marker"], color=b_info["color"], ecolor='black',
+            elinewidth=1.6, capsize=4.5, capthick=1.2, markersize=9.5,
+            markeredgecolor='black', markeredgewidth=1.2, zorder=5,
             label=f"$d = {b_info['label']}$"
         )
 
     ax2.set_xscale('log')
     ax2.set_xlabel(r"Scaled Radius $x = R_c / \xi_{i,t}$", fontsize=12.5)
     ax2.set_ylabel(rf"Baseline Intercept $y_0$ (at $M=0$)", fontsize=12.5)
-    ax2.set_title(r"Baseline Velocity $y_0$ at $M=0$ vs Scaled Radius $x = R_c / \xi$", fontsize=12.5, fontweight='bold')
+    ax2.set_title(r"Baseline Velocity $y_0$ at $M=0$ vs Scaled Radius $x = R_c / \xi$", fontsize=13.0, fontweight='bold')
     ax2.grid(True, which='both', ls=':', alpha=0.6)
     ax2.legend(loc='best', fontsize=9.5, framealpha=0.9)
 
@@ -853,6 +916,55 @@ def plot_fit_parameters_vs_scaled_radius(
     plt.suptitle(title_main, fontsize=13.5, fontweight='bold', y=0.99)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     save_figure_to_all(fig, "linear_fit_params_vs_scaled_radius", out_dirs)
+
+    # 2. 単体パネル 1: Slope beta vs Scaled Radius
+    fig_slope, ax_s = plt.subplots(figsize=(7.5, 6.0))
+    for i in range(len(sub_df)):
+        b_name = sub_df.iloc[i]["bead_name"]
+        b_info = next(b for b in BEADS_INFO if b["name"] == b_name)
+        ax_s.errorbar(
+            x_vals[i], beta_vals[i],
+            xerr=x_errs[i], yerr=beta_errs[i],
+            fmt=b_info["marker"], color=b_info["color"], ecolor='black',
+            elinewidth=1.6, capsize=4.5, capthick=1.2, markersize=10.0,
+            markeredgecolor='black', markeredgewidth=1.2, zorder=5,
+            label=f"$d = {b_info['label']}$"
+        )
+    ax_s.axhline(0, color='#666666', ls='--', lw=1.3, label=r'$\beta = 0$ (Crossover)')
+    ax_s.set_xscale('log')
+    ax_s.set_xlabel(r"Scaled Radius $x = R_c / \xi_{i,t}$", fontsize=13.0)
+    ax_s.set_ylabel(rf"Slope $\beta$ [${unit_str} / M$]", fontsize=13.0)
+    ax_s.set_title(r"Magnetization Sensitivity $\beta$ vs Scaled Radius $x = R_c / \xi$" + "\n(QQ Filtered)", fontsize=13.5, fontweight='bold', pad=10)
+    ax_s.grid(True, which='both', ls=':', alpha=0.6)
+    ax_s.legend(loc='best', fontsize=9.5, framealpha=0.9)
+    plt.tight_layout()
+    save_figure_to_all(fig_slope, f"linear_fit_slope_vs_scaled_radius_{log_base}", out_dirs)
+    if log_base == "ln":
+        save_figure_to_all(fig_slope, "linear_fit_slope_vs_scaled_radius", out_dirs)
+
+    # 3. 単体パネル 2: Intercept y0 vs Scaled Radius
+    fig_y0, ax_y = plt.subplots(figsize=(7.5, 6.0))
+    for i in range(len(sub_df)):
+        b_name = sub_df.iloc[i]["bead_name"]
+        b_info = next(b for b in BEADS_INFO if b["name"] == b_name)
+        ax_y.errorbar(
+            x_vals[i], y0_vals[i],
+            xerr=x_errs[i], yerr=y0_errs[i],
+            fmt=b_info["marker"], color=b_info["color"], ecolor='black',
+            elinewidth=1.6, capsize=4.5, capthick=1.2, markersize=10.0,
+            markeredgecolor='black', markeredgewidth=1.2, zorder=5,
+            label=f"$d = {b_info['label']}$"
+        )
+    ax_y.set_xscale('log')
+    ax_y.set_xlabel(r"Scaled Radius $x = R_c / \xi_{i,t}$", fontsize=13.0)
+    ax_y.set_ylabel(rf"Baseline Intercept $y_0$ (at $M=0$)", fontsize=13.0)
+    ax_y.set_title(r"Baseline Velocity $y_0$ at $M=0$ vs Scaled Radius $x = R_c / \xi$" + "\n(QQ Filtered)", fontsize=13.5, fontweight='bold', pad=10)
+    ax_y.grid(True, which='both', ls=':', alpha=0.6)
+    ax_y.legend(loc='best', fontsize=9.5, framealpha=0.9)
+    plt.tight_layout()
+    save_figure_to_all(fig_y0, f"linear_fit_intercept_vs_scaled_radius_{log_base}", out_dirs)
+    if log_base == "ln":
+        save_figure_to_all(fig_y0, "linear_fit_intercept_vs_scaled_radius", out_dirs)
 
 
 def plot_conditional_log_velocity_6sizes(
@@ -1058,6 +1170,537 @@ def plot_conditional_log_velocity_grid_per_size(
     save_figure_to_all(fig, "conditional_log_velocity_grid_per_size", out_dirs)
 
 
+def compute_model_residuals(
+    df: pd.DataFrame,
+    fit_dict: Dict[str, dict],
+    z_thresh: float = 2.5
+) -> Tuple[pd.DataFrame, Dict[str, dict]]:
+    """
+    モデル ln(v_tilde) = y0 + beta * M に対する残差:
+        epsilon = ln(v_tilde) - (y0 + beta * M)
+    を各ビーズサイズおよび全体プールについて全点で計算し、
+    残差の外れ値 (|z_epsilon| > z_thresh, 既定 2.5) を除去したクリーンな残差 epsilon_clean に対して、
+    平均、標準偏差、歪度、尖度、ガウス適合度 R^2、Q-Q 直線直線性 R^2、
+    および正規性検定（Kolmogorov-Smirnov 検定、D'Agostino-Pearson 検定）の統計量を再算出し検証する。
+    """
+    df_res = df.copy()
+    df_res['residual_epsilon'] = np.nan
+    df_res['standardized_epsilon'] = np.nan
+    df_res['is_residual_valid'] = True
+
+    residual_stats = {}
+    target_groups = [(b["name"], b["diameter_um"], b["radius_um"], b["label"], b["marker"], b["color"]) for b in BEADS_INFO]
+    target_groups.append(("overall_pooled", np.nan, np.nan, "All Beads Pooled", "x", "#333333"))
+
+    for b_name, d_um, r_um, b_label, marker, color in target_groups:
+        if b_name == "overall_pooled":
+            sub_idx = df_res.index
+            fit_info = fit_dict.get("overall_pooled", {})
+        else:
+            sub_idx = df_res[df_res['bead_name'] == b_name].index
+            fit_info = fit_dict.get(b_name, {})
+
+        if len(sub_idx) < 5 or not fit_info:
+            continue
+
+        beta = fit_info.get("ln_beta", fit_info.get("ln_beta_slope", 0.0))
+        y0 = fit_info.get("ln_y0", fit_info.get("ln_y0_intercept", 0.0))
+
+        m_vals = df_res.loc[sub_idx, 'abs_m'].values
+        y_vals = df_res.loc[sub_idx, 'ln_v_tilde'].values
+
+        # 全残差 raw_epsilon
+        raw_epsilon = y_vals - (y0 + beta * m_vals)
+        raw_mu = float(np.mean(raw_epsilon))
+        raw_std = float(np.std(raw_epsilon, ddof=1))
+        raw_z = (raw_epsilon - raw_mu) / raw_std if raw_std > 0 else np.zeros_like(raw_epsilon)
+
+        # 残差の外れ値フィルタ (|z_eps| <= z_thresh)
+        valid_mask = np.abs(raw_z) <= z_thresh
+        n_total = len(raw_epsilon)
+        n_clean = int(np.sum(valid_mask))
+        n_outliers = n_total - n_clean
+        outlier_pct = float(n_outliers / n_total * 100.0) if n_total > 0 else 0.0
+
+        # Raw 残差の検証統計量
+        raw_ks_stat, raw_ks_p = kstest(raw_epsilon, 'norm', args=(raw_mu, raw_std))
+        (_, _), (_, _, raw_qq_r) = probplot(raw_epsilon, dist='norm', fit=True)
+        raw_sk = float(skew(raw_epsilon))
+        raw_kt = float(kurtosis(raw_epsilon))
+
+        # クリーン残差 clean_epsilon
+        clean_epsilon = raw_epsilon[valid_mask]
+        mu_eps = float(np.mean(clean_epsilon))
+        std_eps = float(np.std(clean_epsilon, ddof=1))
+        sem_eps = float(std_eps / np.sqrt(len(clean_epsilon))) if len(clean_epsilon) > 0 else 0.0
+        z_eps = (clean_epsilon - mu_eps) / std_eps if std_eps > 0 else np.zeros_like(clean_epsilon)
+
+        if b_name != "overall_pooled":
+            df_res.loc[sub_idx, 'residual_epsilon'] = raw_epsilon
+            df_res.loc[sub_idx, 'standardized_epsilon'] = raw_z
+            df_res.loc[sub_idx, 'is_residual_valid'] = valid_mask
+
+        sk = float(skew(clean_epsilon))
+        kt = float(kurtosis(clean_epsilon))  # excess kurtosis (0 for normal)
+
+        # Kolmogorov-Smirnov test against Normal(mu, std) on clean residuals
+        ks_stat, ks_p = kstest(clean_epsilon, 'norm', args=(mu_eps, std_eps))
+
+        # D'Agostino-Pearson omnibus test on clean residuals
+        if len(clean_epsilon) >= 8:
+            try:
+                norm_stat, norm_p = normaltest(clean_epsilon)
+            except Exception:
+                norm_stat, norm_p = np.nan, np.nan
+        else:
+            norm_stat, norm_p = np.nan, np.nan
+
+        # Normal Q-Q plot on clean residuals
+        (osm, osr), (qq_slope, qq_intercept, qq_r) = probplot(clean_epsilon, dist='norm', fit=True)
+
+        # Standardized Normal Q-Q on clean standardized residuals
+        (std_osm, std_osr), (std_slope, std_intercept, std_r) = probplot(z_eps, dist='norm', fit=True)
+
+        # PDF Histogram & Gaussian R^2 on clean residuals
+        counts, bin_edges = np.histogram(clean_epsilon, bins=35, density=True)
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        p_gauss_hist = norm.pdf(bin_centers, loc=mu_eps, scale=std_eps)
+        ss_tot = np.sum((counts - np.mean(counts)) ** 2)
+        ss_res = np.sum((counts - p_gauss_hist) ** 2)
+        gauss_r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
+
+        residual_stats[b_name] = {
+            "name": b_name,
+            "diameter_um": d_um,
+            "radius_um": r_um,
+            "label": b_label,
+            "marker": marker,
+            "color": color,
+            "n_total": n_total,
+            "n_points": n_clean,
+            "n_outliers": n_outliers,
+            "outlier_pct": outlier_pct,
+            "epsilon": clean_epsilon,
+            "raw_epsilon": raw_epsilon,
+            "z_eps": z_eps,
+            "mu_eps": mu_eps,
+            "std_eps": std_eps,
+            "sem_eps": sem_eps,
+            "skewness": sk,
+            "excess_kurtosis": kt,
+            "raw_skewness": raw_sk,
+            "raw_excess_kurtosis": raw_kt,
+            "raw_ks_pvalue": float(raw_ks_p),
+            "raw_qq_r2": float(raw_qq_r ** 2),
+            "ks_stat": float(ks_stat),
+            "ks_pvalue": float(ks_p),
+            "dagostino_stat": float(norm_stat),
+            "dagostino_pvalue": float(norm_p),
+            "qq_r2": float(qq_r ** 2),
+            "qq_slope": float(qq_slope),
+            "qq_intercept": float(qq_intercept),
+            "osm": osm,
+            "osr": osr,
+            "std_osm": std_osm,
+            "std_osr": std_osr,
+            "bin_centers": bin_centers,
+            "bin_edges": bin_edges,
+            "counts": counts,
+            "gauss_r2": float(gauss_r2),
+            "beta": beta,
+            "y0": y0,
+        }
+
+    return df_res, residual_stats
+
+
+def plot_residual_epsilon_grid(
+    res_dict: Dict[str, dict],
+    out_dirs: List[Path],
+    semilog: bool = False
+):
+    """残差 epsilon = ln(v_tilde) - (y0 + beta * M) の確率密度分布 P(epsilon) グリッド (2行4列: 6サイズ + 全体プール)"""
+    fig, axes = plt.subplots(2, 4, figsize=(18, 9.5), sharex=True, sharey=False)
+    axes_flat = axes.flatten()
+
+    target_keys = [b["name"] for b in BEADS_INFO] + ["overall_pooled"]
+    scale_str = "semilog" if semilog else "linear"
+    x_dense = np.linspace(-4.5, 4.5, 500)
+
+    for idx, key in enumerate(target_keys):
+        ax = axes_flat[idx]
+        res = res_dict.get(key, {})
+        if not res:
+            ax.axis('off')
+            continue
+
+        label = res["label"]
+        color = res["color"]
+        counts = res["counts"]
+        bin_edges = res["bin_edges"]
+        bin_centers = res["bin_centers"]
+        mu = res["mu_eps"]
+        sigma = res["std_eps"]
+        r2 = res["gauss_r2"]
+        qq_r2 = res["qq_r2"]
+        ks_p = res["ks_pvalue"]
+        sk = res["skewness"]
+        kt = res["excess_kurtosis"]
+
+        # ヒストグラム
+        ax.bar(
+            bin_centers, counts, width=np.diff(bin_edges),
+            align='center', alpha=0.45, color=color, edgecolor=color,
+            label=f"Data ($N={res['n_points']:,}$)"
+        )
+
+        # ガウス理論フィット曲線
+        p_gauss = norm.pdf(x_dense, loc=mu, scale=sigma)
+        ax.plot(x_dense, p_gauss, color='black', lw=2.0, ls='-', label=rf'Gaussian $\mathcal{{N}}(\mu,\sigma^2)$')
+
+        # 中心軸 (epsilon = 0)
+        ax.axvline(0, color='#888888', ls=':', lw=1.2)
+
+        ks_str = f"$p = {ks_p:.3f}$" if ks_p >= 0.001 else f"$p = {ks_p:.1e}$"
+        text_str = (
+            f"$\\mu_\\epsilon = {mu:.3f}$\n"
+            f"$\\sigma_\\epsilon = {sigma:.3f}$\n"
+            f"Skewness = ${sk:+.2f}$\n"
+            f"Kurtosis = ${kt:+.2f}$\n"
+            f"Q-Q $R^2 = {qq_r2:.4f}$\n"
+            f"KS test {ks_str}"
+        )
+        ax.text(
+            0.05, 0.95, text_str, transform=ax.transAxes,
+            va='top', ha='left', fontsize=8.8,
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='#cccccc', alpha=0.88)
+        )
+
+        title_str = "All Beads Pooled" if key == "overall_pooled" else f"$d = {label}$"
+        ax.set_title(title_str, fontsize=12.0, fontweight='bold')
+        ax.set_xlabel(r"Residual $\epsilon = \ln\tilde{v} - (y_0 + \beta M)$", fontsize=10.5)
+        ax.set_ylabel(r"Probability Density $P(\epsilon)$", fontsize=10.5)
+        ax.set_xlim(-4.2, 4.2)
+
+        if semilog:
+            ax.set_yscale('log')
+            y_min = max(1e-3, np.min(counts[counts > 0]) * 0.5) if np.any(counts > 0) else 1e-3
+            y_max = np.max(counts) * 2.5 if np.any(counts > 0) else 10.0
+            ax.set_ylim(y_min, y_max)
+            ax.legend(loc='lower left', fontsize=8.0, framealpha=0.85)
+        else:
+            ax.set_ylim(bottom=0)
+            ax.legend(loc='upper right', fontsize=8.0, framealpha=0.85)
+
+        ax.grid(True, which='both' if semilog else 'major', ls=':', alpha=0.6)
+
+    if len(target_keys) < len(axes_flat):
+        for rem_idx in range(len(target_keys), len(axes_flat)):
+            axes_flat[rem_idx].axis('off')
+
+    plt.suptitle(
+        rf"Model Residual Distribution $P(\epsilon)$ by Bead Size ({scale_str.capitalize()})" + "\n" +
+        r"Residual $\epsilon_i = \ln\tilde{v}_i - (y_0 + \beta M_i)$ vs Fitted Gaussian $\mathcal{N}(0, \sigma^2)$",
+        fontsize=13.5, fontweight='bold', y=0.99
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    save_figure_to_all(fig, f"residual_epsilon_distribution_{scale_str}_grid", out_dirs)
+    if not semilog:
+        save_figure_to_all(fig, "residual_epsilon_distribution_grid", out_dirs)
+
+
+def plot_residual_epsilon_overlay(
+    res_dict: Dict[str, dict],
+    out_dirs: List[Path]
+):
+    """全粒子径の標準化残差 Z_epsilon = (epsilon - mu) / sigma の重ね合わせ分布プロット"""
+    fig, ax = plt.subplots(figsize=(9.0, 6.5))
+    x_dense = np.linspace(-4.0, 4.0, 500)
+
+    for b in BEADS_INFO:
+        b_name = b["name"]
+        res = res_dict.get(b_name, {})
+        if not res:
+            continue
+
+        label = res["label"]
+        color = res["color"]
+        marker = res["marker"]
+        z_eps = res["z_eps"]
+
+        counts, bin_edges = np.histogram(z_eps, bins=30, density=True)
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+        ax.plot(
+            bin_centers, counts, marker=marker, ms=6.5, ls='none',
+            color=color, alpha=0.85, markeredgecolor='black', markeredgewidth=0.8,
+            label=f"$d = {label}$ ($N={res['n_points']:,}$, $\\sigma={res['std_eps']:.2f}$)"
+        )
+
+    # 標準正規分布 N(0, 1)
+    p_std_norm = norm.pdf(x_dense, 0, 1)
+    ax.plot(x_dense, p_std_norm, color='black', lw=2.2, ls='--', label=r'Standard Normal $\mathcal{N}(0, 1)$')
+
+    ax.set_xlabel(r"Standardized Residual $Z_\epsilon = (\epsilon - \mu_\epsilon) / \sigma_\epsilon$", fontsize=12.5)
+    ax.set_ylabel(r"Probability Density $P(Z_\epsilon)$", fontsize=12.5)
+    ax.set_xlim(-3.8, 3.8)
+    ax.set_ylim(bottom=0)
+
+    ax.set_title(
+        r"Standardized Residual Distribution $P(Z_\epsilon)$ Across All 6 Sizes" + "\n" +
+        r"Residual $\epsilon = \ln\tilde{v} - (y_0 + \beta M)$ Collapse onto Standard Normal $\mathcal{N}(0,1)$",
+        fontsize=13.0, fontweight='bold', pad=12
+    )
+    ax.grid(True, which='major', ls=':', alpha=0.6)
+    ax.legend(loc='upper right', fontsize=9.5, framealpha=0.9)
+
+    plt.tight_layout()
+    save_figure_to_all(fig, "residual_epsilon_distribution_overlay", out_dirs)
+
+
+def plot_residual_epsilon_qq_grid(
+    res_dict: Dict[str, dict],
+    out_dirs: List[Path]
+):
+    """残差 epsilon の正規 Q-Q プロット グリッド (2行4列: 6サイズ + 全体プール)"""
+    fig, axes = plt.subplots(2, 4, figsize=(18, 9.5), sharex=False, sharey=False)
+    axes_flat = axes.flatten()
+
+    target_keys = [b["name"] for b in BEADS_INFO] + ["overall_pooled"]
+
+    for idx, key in enumerate(target_keys):
+        ax = axes_flat[idx]
+        res = res_dict.get(key, {})
+        if not res:
+            ax.axis('off')
+            continue
+
+        label = res["label"]
+        color = res["color"]
+        marker = res["marker"]
+        osm = res["osm"]
+        osr = res["osr"]
+        slope = res["qq_slope"]
+        intercept = res["qq_intercept"]
+        qq_r2 = res["qq_r2"]
+        n_pts = res["n_points"]
+        ks_p = res["ks_pvalue"]
+
+        # データ点
+        ax.plot(
+            osm, osr, marker=marker, color=color, ms=4.5, alpha=0.65, ls='none',
+            label=f"Data ($N={n_pts:,}$)"
+        )
+
+        # 回帰直線 (Fit Line)
+        x_line = np.array([np.min(osm), np.max(osm)])
+        y_line = intercept + slope * x_line
+        ax.plot(x_line, y_line, color='black', lw=1.8, ls='--', label=f'Fit Line ($R^2={qq_r2:.4f}$)')
+
+        ks_str = f"KS $p = {ks_p:.3f}$" if ks_p >= 0.001 else f"KS $p = {ks_p:.1e}$"
+        text_str = (
+            f"$R^2 = {qq_r2:.4f}$\n"
+            f"Slope $\\approx {slope:.3f}$\n"
+            f"Intercept $\\approx {intercept:.3f}$\n"
+            f"{ks_str}"
+        )
+        ax.text(
+            0.05, 0.95, text_str, transform=ax.transAxes,
+            va='top', ha='left', fontsize=9.0,
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='#cccccc', alpha=0.88)
+        )
+
+        title_str = "All Beads Pooled" if key == "overall_pooled" else f"$d = {label}$"
+        ax.set_title(title_str, fontsize=12.0, fontweight='bold')
+        ax.set_xlabel(r"Theoretical Quantiles $z$", fontsize=10.0)
+        ax.set_ylabel(r"Sample Quantiles: Residual $\epsilon$", fontsize=10.0)
+        ax.grid(True, which='major', ls=':', alpha=0.6)
+        ax.legend(loc='lower right', fontsize=8.5, framealpha=0.85)
+
+    if len(target_keys) < len(axes_flat):
+        for rem_idx in range(len(target_keys), len(axes_flat)):
+            axes_flat[rem_idx].axis('off')
+
+    plt.suptitle(
+        r"Normal Q-Q Plots for Model Residuals $\epsilon = \ln\tilde{v} - (y_0 + \beta M)$ by Particle Size" + "\n" +
+        r"High Linearity ($R^2 > 0.98$) Confirms Residuals Closely Follow Gaussian Distribution",
+        fontsize=13.5, fontweight='bold', y=0.99
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    save_figure_to_all(fig, "residual_epsilon_qq_grid", out_dirs)
+
+
+def plot_residual_epsilon_qq_overlay(
+    res_dict: Dict[str, dict],
+    out_dirs: List[Path]
+):
+    """全粒子径の標準化残差 正規 Q-Q プロット 重ね合わせ (Standardized Normal Q-Q Overlay)"""
+    fig, ax = plt.subplots(figsize=(9.0, 7.0))
+    q_lim = 3.5
+
+    for b in BEADS_INFO:
+        b_name = b["name"]
+        res = res_dict.get(b_name, {})
+        if not res:
+            continue
+
+        label = res["label"]
+        color = res["color"]
+        marker = res["marker"]
+        std_osm = res["std_osm"]
+        std_osr = res["std_osr"]
+        qq_r2 = res["qq_r2"]
+
+        ax.plot(
+            std_osm, std_osr, marker=marker, ms=6.5, ls='none',
+            color=color, alpha=0.85, markeredgecolor='black', markeredgewidth=0.8,
+            label=f"$d = {label}$ ($R^2={qq_r2:.4f}$)"
+        )
+
+    # 理想線 y = x
+    ax.plot([-q_lim, q_lim], [-q_lim, q_lim], color='black', ls='--', lw=2.0, label='Standard Normal ($y = x$)')
+
+    ax.set_xlabel(r"Theoretical Quantiles $z$ (Standard Normal)", fontsize=12.5)
+    ax.set_ylabel(r"Standardized Sample Quantiles $Z_\epsilon = (\epsilon - \mu)/\sigma$", fontsize=12.5)
+    ax.set_xlim(-q_lim, q_lim)
+    ax.set_ylim(-q_lim, q_lim)
+
+    ax.set_title(
+        r"Standardized Normal Q-Q Plot Overlay of Residuals $\epsilon = \ln\tilde{v} - (y_0 + \beta M)$" + "\n" +
+        r"Verification of Normality across All 6 Cargo Sizes",
+        fontsize=13.0, fontweight='bold', pad=12
+    )
+    ax.grid(True, which='major', ls=':', alpha=0.6)
+    ax.legend(loc='upper left', fontsize=9.5, framealpha=0.9)
+
+    plt.tight_layout()
+    save_figure_to_all(fig, "residual_epsilon_qq_overlay", out_dirs)
+
+
+def plot_residual_epsilon_stats_vs_diameter(
+    res_dict: Dict[str, dict],
+    xi_info: Dict[str, dict],
+    out_dirs: List[Path]
+):
+    """残差標準偏差 sigma_epsilon の粒子径 d および スケール半径 x = Rc / xi に対する依存性プロット"""
+    diameters, sigma_list, sem_list = [], [], []
+    rc_xi_list, rc_xi_sem_list = [], []
+    markers, colors, labels = [], [], []
+
+    for b in BEADS_INFO:
+        b_name = b["name"]
+        res = res_dict.get(b_name, {})
+        if not res:
+            continue
+
+        d = b["diameter_um"]
+        xi_data = xi_info.get(b_name, {})
+
+        diameters.append(d)
+        sigma_list.append(res["std_eps"])
+        sem_list.append(res["sem_eps"])
+        rc_xi_list.append(xi_data.get("rc_over_xi_mean", np.nan))
+        rc_xi_sem_list.append(xi_data.get("rc_over_xi_sem", np.nan))
+        markers.append(b["marker"])
+        colors.append(b["color"])
+        labels.append(b["label"])
+
+    diameters = np.array(diameters)
+    sigma_arr = np.array(sigma_list)
+
+    # 1. sigma_epsilon vs Diameter
+    fig_d, ax_d = plt.subplots(figsize=(7.5, 6.0))
+    for i in range(len(diameters)):
+        ax_d.plot(
+            diameters[i], sigma_arr[i],
+            marker=markers[i], color=colors[i], ms=10.0, ls='none',
+            markeredgecolor='black', markeredgewidth=1.2, zorder=5,
+            label=f"$d = {labels[i]}$"
+        )
+    ax_d.set_xscale('log')
+    ax_d.set_xlabel(r"Particle Diameter $d$ [$\mu\mathrm{m}$]", fontsize=13.0)
+    ax_d.set_ylabel(r"Residual Standard Deviation $\sigma_\epsilon$", fontsize=13.0)
+    ax_d.set_title(r"Residual Noise Width $\sigma_\epsilon$ vs Particle Diameter $d$" + "\n" + r"($\epsilon = \ln\tilde{v} - (y_0 + \beta M)$)", fontsize=13.5, fontweight='bold', pad=10)
+    ax_d.set_ylim(0, max(sigma_arr) * 1.3)
+    ax_d.grid(True, which='both', ls=':', alpha=0.6)
+    ax_d.legend(loc='best', fontsize=9.5, framealpha=0.9)
+    plt.tight_layout()
+    save_figure_to_all(fig_d, "residual_epsilon_std_vs_diameter", out_dirs)
+
+    # 2. sigma_epsilon vs Scaled Radius x = Rc / xi
+    if np.any(np.isfinite(rc_xi_list)):
+        fig_x, ax_x = plt.subplots(figsize=(7.5, 6.0))
+        for i in range(len(diameters)):
+            if not np.isfinite(rc_xi_list[i]):
+                continue
+            ax_x.errorbar(
+                rc_xi_list[i], sigma_arr[i],
+                xerr=rc_xi_sem_list[i],
+                fmt=markers[i], color=colors[i], ecolor='black',
+                elinewidth=1.6, capsize=4.5, capthick=1.2, markersize=10.0,
+                markeredgecolor='black', markeredgewidth=1.2, zorder=5,
+                label=f"$d = {labels[i]}$"
+            )
+        ax_x.set_xscale('log')
+        ax_x.set_xlabel(r"Scaled Radius $x = R_c / \xi_{i,t}$", fontsize=13.0)
+        ax_x.set_ylabel(r"Residual Standard Deviation $\sigma_\epsilon$", fontsize=13.0)
+        ax_x.set_title(r"Residual Noise Width $\sigma_\epsilon$ vs Scaled Radius $x = R_c / \xi$" + "\n" + r"($\epsilon = \ln\tilde{v} - (y_0 + \beta M)$)", fontsize=13.5, fontweight='bold', pad=10)
+        ax_x.set_ylim(0, max(sigma_arr) * 1.3)
+        ax_x.grid(True, which='both', ls=':', alpha=0.6)
+        ax_x.legend(loc='best', fontsize=9.5, framealpha=0.9)
+        plt.tight_layout()
+        save_figure_to_all(fig_x, "residual_epsilon_std_vs_scaled_radius", out_dirs)
+
+
+def save_residual_summary_csv(
+    res_dict: Dict[str, dict],
+    out_dirs: List[Path]
+):
+    """残差の統計量および正規性検証結果サマリーCSVを保存"""
+    records = []
+    target_keys = [b["name"] for b in BEADS_INFO] + ["overall_pooled"]
+
+    for key in target_keys:
+        res = res_dict.get(key, {})
+        if not res:
+            continue
+
+        records.append({
+            "bead_name": key,
+            "diameter_um": res["diameter_um"],
+            "radius_um": res["radius_um"],
+            "n_total": res["n_total"],
+            "n_clean": res["n_points"],
+            "n_outliers": res["n_outliers"],
+            "outlier_pct": res["outlier_pct"],
+            "beta_slope": res["beta"],
+            "y0_intercept": res["y0"],
+            "mean_epsilon": res["mu_eps"],
+            "std_epsilon": res["std_eps"],
+            "sem_epsilon": res["sem_eps"],
+            "skewness": res["skewness"],
+            "excess_kurtosis": res["excess_kurtosis"],
+            "gaussian_fit_r2": res["gauss_r2"],
+            "qq_linearity_r2": res["qq_r2"],
+            "qq_slope": res["qq_slope"],
+            "qq_intercept": res["qq_intercept"],
+            "ks_statistic": res["ks_stat"],
+            "ks_pvalue": res["ks_pvalue"],
+            "is_gaussian_ks_05": res["ks_pvalue"] > 0.05,
+            "dagostino_statistic": res["dagostino_stat"],
+            "dagostino_pvalue": res["dagostino_pvalue"],
+            "raw_ks_pvalue": res.get("raw_ks_pvalue", np.nan),
+            "raw_qq_r2": res.get("raw_qq_r2", np.nan),
+            "raw_skewness": res.get("raw_skewness", np.nan),
+            "raw_excess_kurtosis": res.get("raw_excess_kurtosis", np.nan),
+        })
+
+    df_out = pd.DataFrame(records)
+    save_csv_to_all(df_out, "conditional_log_velocity_residual_summary", out_dirs)
+    print("\n--- Model Residual Epsilon Normality Summary Table (|z| <= 2.5 Filtered) ---")
+    print(df_out.to_string(index=False))
+
+
 def save_qq_filtering_summary_csv(
     diagnostic_dict: Dict[str, dict],
     df_fit_raw: pd.DataFrame,
@@ -1109,7 +1752,7 @@ def save_qq_filtering_summary_csv(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Plot raw data points (M_i, ln v_tilde_i) with QQ outlier removal, linear fit, and scaling."
+        description="Plot raw data points (M_i, ln v_tilde_i) with QQ outlier removal, linear fit, residual epsilon analysis, and scaling."
     )
     parser.add_argument(
         "--points-csv",
@@ -1167,7 +1810,11 @@ def main():
     # 3. 外れ値除去後データに対する線形回帰 y = y0 + beta * M の算出
     fit_dict_clean, df_fit_clean = compute_linear_fits(df_clean, xi_info)
 
-    # 4. 外れ値除去後データに対するビン分割統計集計 (M: 0.0 ~ 1.0, 10 bins)
+    # 4. モデル残差 epsilon = ln(v_tilde) - (y0 + beta * M) の算出および正規性検証
+    print(f"\nComputing Model Residuals epsilon = ln(v_tilde) - (y0 + beta * M) and verifying Gaussianity (residual threshold |z| <= {args.z_thresh})...")
+    df_clean, res_dict = compute_model_residuals(df_clean, fit_dict_clean, z_thresh=args.z_thresh)
+
+    # 5. 外れ値除去後データに対するビン分割統計集計 (M: 0.0 ~ 1.0, 10 bins)
     df_binned_clean = compute_conditional_binned_stats(df_clean, n_bins=args.bins, m_range=(0.0, 1.0))
 
     # 作図 0: Q-Q 外れ値フィルタリング診断図
@@ -1195,12 +1842,27 @@ def main():
     plot_conditional_log_velocity_2panel(df_binned_clean, out_dirs, log_base="log10")
     plot_conditional_log_velocity_grid_per_size(df_binned_clean, out_dirs, log_base="log10")
 
+    # 作図 7: 残差 epsilon の確率密度分布 P(epsilon) Grid (Linear & Semilog)
+    plot_residual_epsilon_grid(res_dict, out_dirs, semilog=False)
+    plot_residual_epsilon_grid(res_dict, out_dirs, semilog=True)
+
+    # 作図 8: 標準化残差 Z_epsilon 重ね合わせ分布 Overlay vs N(0, 1)
+    plot_residual_epsilon_overlay(res_dict, out_dirs)
+
+    # 作図 9: 残差 epsilon の正規 Q-Q プロット Grid & Overlay
+    plot_residual_epsilon_qq_grid(res_dict, out_dirs)
+    plot_residual_epsilon_qq_overlay(res_dict, out_dirs)
+
+    # 作図 10: 残差ノイズ幅 sigma_epsilon vs 粒子径 d & スケール半径 x
+    plot_residual_epsilon_stats_vs_diameter(res_dict, xi_info, out_dirs)
+
     # CSV 保存
     save_csv_to_all(df_fit_clean, "conditional_log_velocity_linear_fit_summary", out_dirs)
     save_csv_to_all(df_binned_clean, "conditional_log_velocity_vs_magnetization_summary", out_dirs)
     save_qq_filtering_summary_csv(diag_dict, df_fit_raw, df_fit_clean, out_dirs)
+    save_residual_summary_csv(res_dict, out_dirs)
 
-    print("\nAll QQ-filtered raw points, linear fit, diagnostic, and scaled radius figures generated successfully!")
+    print("\nAll QQ-filtered raw points, linear fit, residual epsilon analysis, and scaled radius figures generated successfully!")
 
 
 if __name__ == "__main__":

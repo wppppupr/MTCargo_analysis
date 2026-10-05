@@ -124,3 +124,5 @@
 - **[plot_msd_lambda_vs_scaled_radius.py](file:///home/sasaki/MTCargo_analysis/plot_msd_lambda_vs_scaled_radius.py)**: MSD($\Delta t = 300\,\mathrm{s}$)（第1軸, 黒）と変位 PDF の指数減衰長 $\lambda(\Delta t = 100\,\mathrm{s})$（第2軸, 赤）の 2軸図。横軸は $x = R_c/\xi$（実験ごとの $\xi_{i,t}$ 中央値を使用）版と `Cargo Radius $R_c$`（linear）版を出力（出力先: `figure/scaling`, `figure`, `<root_dir>/figure/scaling`）
 
 - **[libs/effective_diffusion.py](file:///home/sasaki/MTCargo_analysis/libs/effective_diffusion.py)**: Green-Kubo 積分および RTP 理論モデル有効拡散解析
+- **[plot_cargo_alignment_and_turning_fluctuation.py](file:///home/sasaki/MTCargo_analysis/plot_cargo_alignment_and_turning_fluctuation.py)**: 貨物進行方向と微小管流速ベクトルの条件付きアライメント $\langle \cos \phi \mid M \rangle$ vs $M$（$\phi \equiv \theta_{\mathrm{cargo}} - \theta_{\mathrm{MT}}$）および方向転換角の揺らぎ $\langle (\Delta \theta)^2 \mid M \rangle$ vs $M$（軌道曲率・ふらつき抑制テスト）の条件別・全体プール集計と作図（出力先: `figure/cargo_alignment_turning`, `<root_dir>/figure/cargo_alignment_turning`）
+

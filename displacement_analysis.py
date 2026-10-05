@@ -254,17 +254,74 @@ def get_component_label(component, signed=False):
     return f'Displacement {component} [$\\mu\\mathrm{{m}}$]', f'PDF $P({component})$'
 
 
+def get_reference_curves(exp_disp_list_all, x_eval, component='norm', signed=False):
+    """
+    ヘビーテール（非ガウス性・指数減衰テール）を視覚的に比較するための
+    控えめな参考線（Gaussian と Exponential）を計算する。
+    
+    - 2次元ノルム (|Δr|): 
+        Rayleigh分布 (2D Gaussian): P(r) = (r / sigma^2) * exp(-r^2 / (2*sigma^2))
+        指数分布 (2D exponential-like): P(r) = (1 / lambda) * exp(-r / lambda)
+    - 1次元成分 (Δx, Δr_par, Δr_perp 等):
+        1D Gaussian: P(x) = (1 / (sqrt(2*pi)*sigma)) * exp(-0.5 * (x / sigma)^2)
+        1D Laplace/指数分布: P(x) = (1 / (2*b)) * exp(-|x| / b) または (1/b) * exp(-x/b)
+    """
+    if not exp_disp_list_all:
+        return None, None
+    all_data = np.concatenate(exp_disp_list_all)
+    all_data = all_data[np.isfinite(all_data)]
+    if len(all_data) < 10:
+        return None, None
+        
+    comp = component.lower()
+    is_2d = comp in ['norm', '2d', 'magnitude', 'r']
+    
+    if is_2d:
+        # 2D ノルム: <r^2> = 2 * sigma^2 -> sigma^2 = <r^2> / 2
+        msd = np.mean(all_data**2)
+        sigma2 = max(msd / 2.0, 1e-6)
+        y_gauss = (x_eval / sigma2) * np.exp(- (x_eval**2) / (2.0 * sigma2))
+        
+        # 指数分布: <r> = lambda
+        mean_r = max(np.mean(all_data), 1e-6)
+        y_exp = (1.0 / mean_r) * np.exp(- x_eval / mean_r)
+    else:
+        if signed:
+            # 符号付き 1D
+            var = max(np.var(all_data), 1e-6)
+            sigma = np.sqrt(var)
+            y_gauss = (1.0 / (np.sqrt(2.0 * np.pi) * sigma)) * np.exp(- 0.5 * ((x_eval - np.mean(all_data)) / sigma)**2)
+            
+            b = max(np.mean(np.abs(all_data - np.mean(all_data))), 1e-6)
+            y_exp = (1.0 / (2.0 * b)) * np.exp(- np.abs(x_eval) / b)
+        else:
+            # 絶対値 1D (ハーフノーマル & 指数)
+            msd = np.mean(all_data**2)
+            sigma = max(np.sqrt(msd), 1e-6)
+            y_gauss = (np.sqrt(2.0 / np.pi) / sigma) * np.exp(- 0.5 * (x_eval / sigma)**2)
+            
+            mean_r = max(np.mean(all_data), 1e-6)
+            y_exp = (1.0 / mean_r) * np.exp(- x_eval / mean_r)
+            
+    return y_gauss, y_exp
+
+
 def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, out_path, 
                           xscale='linear', yscale='log', bins=50, error_style='band', xlim=(0, 50),
-                          fit_exp=True, fit_mode='log', fit_rmin=None, fit_rmax=None):
+                          ylim=None, fit_exp=True, fit_mode='log', fit_rmin=None, fit_rmax=None,
+                          show_reference=True):
     """
     全ビーズサイズを1つの図で比較する変位PDFプロットを作成・保存する。
     実験ごとの標準偏差エラーバー／エラーバンドおよび指数関数フィッティングを描画。
+    ヘビーテール確認用のガウシアン・指数参考線（薄いグレー）をオーバーレイ。
     """
     fig, ax = plt.subplots(figsize=(7.5, 5.5))
     tau_sec = tau * frame_interval
     xlabel, ylabel = get_component_label(component, signed)
     fit_results = {}
+    all_exp_disps = []
+    min_positive_pdf = []
+    max_pdf_vals = []
 
     for item in BEADS_INFO:
         b_name = item["name"]
@@ -272,11 +329,16 @@ def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, ou
             continue
 
         exp_list = beads_data[b_name]["per_exp"]
+        all_exp_disps.extend(exp_list)
         bin_range = xlim if xlim is not None else None
         centers, mean_pdf, std_pdf, edges = calc_ensemble_pdf(exp_list, bins=bins, bin_range=bin_range, density=True)
         
         valid = (mean_pdf > 0) & (centers > 0) if (xscale == 'log' or yscale == 'log') else (mean_pdf >= 0)
         
+        if np.any(valid):
+            min_positive_pdf.append(np.min(mean_pdf[valid]))
+            max_pdf_vals.append(np.max(mean_pdf[valid]))
+
         n_exps = len(exp_list)
         label_text = f'{item["diameter_um"]:.2f} $\\mu\\mathrm{{m}}$ ($N={n_exps}$)'
 
@@ -340,12 +402,35 @@ def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, ou
                 alpha=0.6
             )
 
+    # 4. 参考線 (Gaussian & Exponential) の描画（主張しすぎない細いグレー線）
+    if show_reference and len(all_exp_disps) > 0:
+        x_min_eval = xlim[0] if (xlim is not None and xlim[0] > 0) else (1e-2 if xscale == 'log' else 0.0)
+        x_max_eval = xlim[1] if xlim is not None else 50.0
+        x_eval = np.linspace(x_min_eval, x_max_eval, 300)
+        y_gauss, y_exp = get_reference_curves(all_exp_disps, x_eval, component=component, signed=signed)
+        if y_gauss is not None and y_exp is not None:
+            ax.plot(x_eval, y_gauss, color='gray', linestyle=':', linewidth=1.2, alpha=0.55, label='Gaussian ref.')
+            ax.plot(x_eval, y_exp, color='black', linestyle='-.', linewidth=1.0, alpha=0.45, label='Exponential ref.')
+
     ax.set_xscale(xscale)
     ax.set_yscale(yscale)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     if xlim is not None:
         ax.set_xlim(xlim)
+
+    # y軸範囲の設定 (ガウシアンの急激な減衰で過大にスケールが広がらないよう制御)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    elif yscale == 'log':
+        if len(min_positive_pdf) > 0 and len(max_pdf_vals) > 0:
+            y_min_data = max(np.min(min_positive_pdf), 1e-8)
+            y_max_data = np.max(max_pdf_vals)
+            # データ最小値の約 0.3倍 〜 最大値の約 2.5倍に自動調整
+            y_bottom = 10.0 ** (np.floor(np.log10(y_min_data * 0.3)))
+            y_top = 10.0 ** (np.ceil(np.log10(y_max_data * 2.5)))
+            ax.set_ylim(bottom=y_bottom, top=y_top)
+
     ax.set_title(f'Displacement PDF & Exponential Fits ($\Delta t = {tau_sec:.1f}\\mathrm{{s}}$, $\\tau = {tau}$ frames)')
     ax.legend(frameon=True, fontsize=8)
     ax.grid(True, which="both", ls="--", alpha=0.3)
@@ -359,7 +444,8 @@ def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, ou
 
 def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_path, 
                        xscale='linear', yscale='log', bins=40, error_style='band', xlim=(0, 50),
-                       fit_exp=True, fit_mode='log', fit_rmin=None, fit_rmax=None):
+                       ylim=None, fit_exp=True, fit_mode='log', fit_rmin=None, fit_rmax=None,
+                       show_reference=True):
     """
     複数のラグタイム tau をグリッド状に並べたサマリープロットを作成・保存する。
     """
@@ -380,6 +466,9 @@ def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_path
         ax = axes[r, c]
         tau_sec = tau * frame_interval
         beads_data = all_tau_data[tau]
+        all_exp_disps = []
+        min_positive_pdf = []
+        max_pdf_vals = []
 
         for item in BEADS_INFO:
             b_name = item["name"]
@@ -387,9 +476,14 @@ def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_path
                 continue
 
             exp_list = beads_data[b_name]["per_exp"]
+            all_exp_disps.extend(exp_list)
             bin_range = xlim if xlim is not None else None
             centers, mean_pdf, std_pdf, _ = calc_ensemble_pdf(exp_list, bins=bins, bin_range=bin_range, density=True)
             valid = (mean_pdf > 0) & (centers > 0) if (xscale == 'log' or yscale == 'log') else (mean_pdf >= 0)
+
+            if np.any(valid):
+                min_positive_pdf.append(np.min(mean_pdf[valid]))
+                max_pdf_vals.append(np.max(mean_pdf[valid]))
 
             label_text = f'{item["diameter_um"]:.2f} $\\mu\\mathrm{{m}}$'
             fit_res = None
@@ -448,12 +542,34 @@ def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_path
                     alpha=0.6
                 )
 
+        # 参考線 (Gaussian & Exponential) の描画（主張しすぎない細いグレー線）
+        if show_reference and len(all_exp_disps) > 0:
+            x_min_eval = xlim[0] if (xlim is not None and xlim[0] > 0) else (1e-2 if xscale == 'log' else 0.0)
+            x_max_eval = xlim[1] if xlim is not None else 50.0
+            x_eval = np.linspace(x_min_eval, x_max_eval, 300)
+            y_gauss, y_exp = get_reference_curves(all_exp_disps, x_eval, component=component, signed=signed)
+            if y_gauss is not None and y_exp is not None:
+                ax.plot(x_eval, y_gauss, color='gray', linestyle=':', linewidth=1.1, alpha=0.55, label='Gauss ref.' if idx == 0 else None)
+                ax.plot(x_eval, y_exp, color='black', linestyle='-.', linewidth=0.9, alpha=0.45, label='Exp ref.' if idx == 0 else None)
+
         ax.set_xscale(xscale)
         ax.set_yscale(yscale)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         if xlim is not None:
             ax.set_xlim(xlim)
+
+        # y軸範囲の設定
+        if ylim is not None:
+            ax.set_ylim(ylim)
+        elif yscale == 'log':
+            if len(min_positive_pdf) > 0 and len(max_pdf_vals) > 0:
+                y_min_data = max(np.min(min_positive_pdf), 1e-8)
+                y_max_data = np.max(max_pdf_vals)
+                y_bottom = 10.0 ** (np.floor(np.log10(y_min_data * 0.3)))
+                y_top = 10.0 ** (np.ceil(np.log10(y_max_data * 2.5)))
+                ax.set_ylim(bottom=y_bottom, top=y_top)
+
         ax.set_title(f'$\Delta t = {tau_sec:.1f}\\mathrm{{s}}$ ($\Delta t = {tau}\\mathrm{{ frames}}$)')
         ax.grid(True, which="both", ls="--", alpha=0.3)
         if idx == 0:
@@ -804,8 +920,14 @@ def main():
                         help="Maximum r value for fitting exponential tail (default: None).")
     parser.add_argument('--error_style', type=str, default='band', choices=['band', 'bar', 'both', 'none'],
                         help="Error representation across experiments: 'band' (shaded fill_between like MSD.py, default), 'bar' (error bars), 'both', or 'none'.")
+    parser.add_argument('--show_reference', action='store_true', default=True,
+                        help="Show subtle Gaussian and Exponential reference guide lines on PDF plots to highlight heavy tails (default: True).")
+    parser.add_argument('--no_reference', dest='show_reference', action='store_false',
+                        help="Disable Gaussian and Exponential reference lines.")
     parser.add_argument('--xlim', type=float, nargs=2, default=[0.0, 50.0],
                         help="X-axis limits [min, max] (default: 0 50).")
+    parser.add_argument('--ylim', type=float, nargs=2, default=None,
+                        help="Y-axis limits [min, max] (default: auto-adjusted to experimental PDF data range).")
     parser.add_argument('--out_dir', type=str, default=None,
                         help="Output directory to save plots and CSVs. Defaults to root_dir/figure.")
     args = parser.parse_args()
@@ -867,6 +989,7 @@ def main():
     stats_records = []
     all_comp_tau_data = {}
     xlim_tuple = tuple(args.xlim) if args.xlim is not None else None
+    ylim_tuple = tuple(args.ylim) if args.ylim is not None else None
 
     for comp in components_to_run:
         print(f"\n---> Processing Component: '{comp}' (signed={args.signed})", flush=True)
@@ -954,10 +1077,12 @@ def main():
                     bins=args.bins,
                     error_style=args.error_style,
                     xlim=xlim_tuple,
+                    ylim=ylim_tuple,
                     fit_exp=args.fit_exp,
                     fit_mode=args.fit_mode,
                     fit_rmin=args.fit_rmin,
-                    fit_rmax=args.fit_rmax
+                    fit_rmax=args.fit_rmax,
+                    show_reference=args.show_reference
                 )
                 plot_pdf_across_beads(
                     beads_data,
@@ -971,10 +1096,12 @@ def main():
                     bins=args.bins,
                     error_style=args.error_style,
                     xlim=xlim_tuple,
+                    ylim=ylim_tuple,
                     fit_exp=args.fit_exp,
                     fit_mode=args.fit_mode,
                     fit_rmin=args.fit_rmin,
-                    fit_rmax=args.fit_rmax
+                    fit_rmax=args.fit_rmax,
+                    show_reference=args.show_reference
                 )
 
         all_comp_tau_data[comp] = plot_tau_data
@@ -993,10 +1120,12 @@ def main():
                 bins=args.bins,
                 error_style=args.error_style,
                 xlim=xlim_tuple,
+                ylim=ylim_tuple,
                 fit_exp=args.fit_exp,
                 fit_mode=args.fit_mode,
                 fit_rmin=args.fit_rmin,
-                fit_rmax=args.fit_rmax
+                fit_rmax=args.fit_rmax,
+                show_reference=args.show_reference
             )
             plot_multitau_grid(
                 plot_tau_data,
@@ -1009,10 +1138,12 @@ def main():
                 bins=args.bins,
                 error_style=args.error_style,
                 xlim=xlim_tuple,
+                ylim=ylim_tuple,
                 fit_exp=args.fit_exp,
                 fit_mode=args.fit_mode,
                 fit_rmin=args.fit_rmin,
-                fit_rmax=args.fit_rmax
+                fit_rmax=args.fit_rmax,
+                show_reference=args.show_reference
             )
 
     # 統計サマリーの CSV 保存
