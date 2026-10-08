@@ -197,14 +197,26 @@ def collect_displacements(exp_dirs, tau, scale=0.11, component='norm', signed=Fa
 
 def calc_ensemble_pdf(exp_disp_list, bins=50, bin_range=None, density=True):
     """
-    実験ごとの変位データリストから、実験間平均PDFと標準偏差 (std) を算出する。
+    実験ごとの変位データリストから、実験間アンサンブル統計量
+    （平均値 mean, 中央値 median, 四分位範囲 IQR q25/q75, 10%/90%タイル, 標準偏差 std）を算出する。
     """
+    empty_res = {
+        'centers': np.array([]),
+        'mean': np.array([]),
+        'median': np.array([]),
+        'q25': np.array([]),
+        'q75': np.array([]),
+        'q10': np.array([]),
+        'q90': np.array([]),
+        'std': np.array([]),
+        'edges': np.array([])
+    }
     if not exp_disp_list:
-        return np.array([]), np.array([]), np.array([]), np.array([])
+        return empty_res
 
     all_data = np.concatenate(exp_disp_list)
     if len(all_data) == 0:
-        return np.array([]), np.array([]), np.array([]), np.array([])
+        return empty_res
 
     if bin_range is None:
         bin_range = (float(np.nanmin(all_data)), float(np.nanmax(all_data)))
@@ -214,14 +226,33 @@ def calc_ensemble_pdf(exp_disp_list, bins=50, bin_range=None, density=True):
 
     pdf_matrix = []
     for exp_disp in exp_disp_list:
-        counts, _ = np.histogram(exp_disp, bins=bin_edges, density=density)
-        pdf_matrix.append(counts)
+        if len(exp_disp) > 0:
+            counts, _ = np.histogram(exp_disp, bins=bin_edges, density=density)
+            pdf_matrix.append(counts)
+
+    if not pdf_matrix:
+        return empty_res
 
     pdf_matrix = np.array(pdf_matrix)  # shape: (n_exp, n_bins)
     mean_pdf = np.nanmean(pdf_matrix, axis=0)
-    std_pdf = np.nanstd(pdf_matrix, axis=0, ddof=1) if len(exp_disp_list) > 1 else np.zeros_like(mean_pdf)
+    median_pdf = np.nanmedian(pdf_matrix, axis=0)
+    q25_pdf = np.nanpercentile(pdf_matrix, 25, axis=0) if len(pdf_matrix) > 1 else mean_pdf.copy()
+    q75_pdf = np.nanpercentile(pdf_matrix, 75, axis=0) if len(pdf_matrix) > 1 else mean_pdf.copy()
+    q10_pdf = np.nanpercentile(pdf_matrix, 10, axis=0) if len(pdf_matrix) > 1 else mean_pdf.copy()
+    q90_pdf = np.nanpercentile(pdf_matrix, 90, axis=0) if len(pdf_matrix) > 1 else mean_pdf.copy()
+    std_pdf = np.nanstd(pdf_matrix, axis=0, ddof=1) if len(pdf_matrix) > 1 else np.zeros_like(mean_pdf)
 
-    return bin_centers, mean_pdf, std_pdf, bin_edges
+    return {
+        'centers': bin_centers,
+        'mean': mean_pdf,
+        'median': median_pdf,
+        'q25': q25_pdf,
+        'q75': q75_pdf,
+        'q10': q10_pdf,
+        'q90': q90_pdf,
+        'std': std_pdf,
+        'edges': bin_edges
+    }
 
 
 def get_component_label(component, signed=False):
@@ -230,27 +261,27 @@ def get_component_label(component, signed=False):
     """
     comp = component.lower()
     if comp in ['norm', '2d', 'magnitude', 'r']:
-        return r'Displacement magnitude $|\Delta \mathbf{r}|$ [$\mu\mathrm{m}$]', r'$P(|\Delta \mathbf{r}|)$'
+        return r'Displacement magnitude $|\Delta \mathbf{r}|$ [$\mu\mathrm{m}$]', r'PDF $P(|\Delta \mathbf{r}|)$'
     elif comp == 'x':
         if signed:
-            return r'Displacement $\Delta x$ [$\mu\mathrm{m}$]', r'$P(\Delta x)$'
-        return r'Absolute displacement $|\Delta x|$ [$\mu\mathrm{m}$]', r'$P(|\Delta x|)$'
+            return r'Displacement $\Delta x$ [$\mu\mathrm{m}$]', r'PDF $P(\Delta x)$'
+        return r'Absolute displacement $|\Delta x|$ [$\mu\mathrm{m}$]', r'PDF $P(|\Delta x|)$'
     elif comp == 'y':
         if signed:
-            return r'Displacement $\Delta y$ [$\mu\mathrm{m}$]', r'$P(\Delta y)$'
-        return r'Absolute displacement $|\Delta y|$ [$\mu\mathrm{m}$]', r'$P(|\Delta y|)$'
+            return r'Displacement $\Delta y$ [$\mu\mathrm{m}$]', r'PDF $P(\Delta y)$'
+        return r'Absolute displacement $|\Delta y|$ [$\mu\mathrm{m}$]', r'PDF $P(|\Delta y|)$'
     elif comp == 'both_xy':
         if signed:
-            return r'Displacement $\Delta x, \Delta y$ [$\mu\mathrm{m}$]', r'$P(\Delta x, \Delta y)$'
-        return r'Absolute displacement $|\Delta x|, |\Delta y|$ [$\mu\mathrm{m}$]', r'$P(|\Delta x|, |\Delta y|)$'
+            return r'Displacement $\Delta x, \Delta y$ [$\mu\mathrm{m}$]', r'PDF $P(\Delta x, \Delta y)$'
+        return r'Absolute displacement $|\Delta x|, |\Delta y|$ [$\mu\mathrm{m}$]', r'PDF $P(|\Delta x|, |\Delta y|)$'
     elif comp in ['parallel', 'par']:
         if signed:
-            return r'Parallel displacement $\Delta r_\parallel$ [$\mu\mathrm{m}$]', r'$P(\Delta r_\parallel)$'
-        return r'Parallel abs. displacement $|\Delta r_\parallel|$ [$\mu\mathrm{m}$]', r'$P(|\Delta r_\parallel|)$'
+            return r'Parallel displacement $\Delta r_\parallel$ [$\mu\mathrm{m}$]', r'PDF $P(\Delta r_\parallel)$'
+        return r'Parallel abs. displacement $|\Delta r_\parallel|$ [$\mu\mathrm{m}$]', r'PDF $P(|\Delta r_\parallel|)$'
     elif comp in ['perpendicular', 'perp']:
         if signed:
-            return r'Perpendicular displacement $\Delta r_\perp$ [$\mu\mathrm{m}$]', r'$P(\Delta r_\perp)$'
-        return r'Perpendicular abs. displacement $|\Delta r_\perp|$ [$\mu\mathrm{m}$]', r'$P(|\Delta r_\perp|)$'
+            return r'Perpendicular displacement $\Delta r_\perp$ [$\mu\mathrm{m}$]', r'PDF $P(\Delta r_\perp)$'
+        return r'Perpendicular abs. displacement $|\Delta r_\perp|$ [$\mu\mathrm{m}$]', r'PDF $P(|\Delta r_\perp|)$'
     return f'Displacement {component} [$\\mu\\mathrm{{m}}$]', f'PDF $P({component})$'
 
 
@@ -258,13 +289,6 @@ def get_reference_curves(exp_disp_list_all, x_eval, component='norm', signed=Fal
     """
     ヘビーテール（非ガウス性・指数減衰テール）を視覚的に比較するための
     控えめな参考線（Gaussian と Exponential）を計算する。
-    
-    - 2次元ノルム (|Δr|): 
-        Rayleigh分布 (2D Gaussian): P(r) = (r / sigma^2) * exp(-r^2 / (2*sigma^2))
-        指数分布 (2D exponential-like): P(r) = (1 / lambda) * exp(-r / lambda)
-    - 1次元成分 (Δx, Δr_par, Δr_perp 等):
-        1D Gaussian: P(x) = (1 / (sqrt(2*pi)*sigma)) * exp(-0.5 * (x / sigma)^2)
-        1D Laplace/指数分布: P(x) = (1 / (2*b)) * exp(-|x| / b) または (1/b) * exp(-x/b)
     """
     if not exp_disp_list_all:
         return None, None
@@ -306,16 +330,38 @@ def get_reference_curves(exp_disp_list_all, x_eval, component='norm', signed=Fal
     return y_gauss, y_exp
 
 
-def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, out_path, 
+def save_figure_to_all(fig, basename: str, out_dirs: list):
+    """Save matplotlib Figure as both .svg and .png to all valid output directories."""
+    for d in out_dirs:
+        try:
+            d = Path(d)
+            d.mkdir(parents=True, exist_ok=True)
+            fig.savefig(d / f"{basename}.svg", bbox_inches='tight')
+            fig.savefig(d / f"{basename}.png", bbox_inches='tight')
+        except Exception as e:
+            print(f"Warning: Failed to save {basename} to {d}: {e}", flush=True)
+
+
+def save_csv_to_all(df: pd.DataFrame, filename: str, out_dirs: list):
+    """Save DataFrame as CSV to all valid output directories."""
+    for d in out_dirs:
+        try:
+            d = Path(d)
+            d.mkdir(parents=True, exist_ok=True)
+            safe_save_csv(df, d / filename)
+        except Exception as e:
+            print(f"Warning: Failed to save {filename} to {d}: {e}", flush=True)
+
+
+def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, out_dirs, 
                           xscale='linear', yscale='log', bins=50, error_style='band', xlim=(0, 50),
                           ylim=None, fit_exp=True, fit_mode='log', fit_rmin=None, fit_rmax=None,
                           show_reference=True):
     """
     全ビーズサイズを1つの図で比較する変位PDFプロットを作成・保存する。
-    実験ごとの標準偏差エラーバー／エラーバンドおよび指数関数フィッティングを描画。
-    ヘビーテール確認用のガウシアン・指数参考線（薄いグレー）をオーバーレイ。
+    MSD.py に準拠した見た目（代表値: アンサンブル平均、エラー帯: 25-75% IQR & 10-90% タイル帯）を採用。
     """
-    fig, ax = plt.subplots(figsize=(7.5, 5.5))
+    fig, ax = plt.subplots(figsize=(8.5, 6.2))
     tau_sec = tau * frame_interval
     xlabel, ylabel = get_component_label(component, signed)
     fit_results = {}
@@ -331,18 +377,27 @@ def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, ou
         exp_list = beads_data[b_name]["per_exp"]
         all_exp_disps.extend(exp_list)
         bin_range = xlim if xlim is not None else None
-        centers, mean_pdf, std_pdf, edges = calc_ensemble_pdf(exp_list, bins=bins, bin_range=bin_range, density=True)
+        pdf_res = calc_ensemble_pdf(exp_list, bins=bins, bin_range=bin_range, density=True)
+        centers = pdf_res['centers']
+        mean_pdf = pdf_res['mean']
+        q25 = pdf_res['q25']
+        q75 = pdf_res['q75']
+        q10 = pdf_res['q10']
+        q90 = pdf_res['q90']
+        std_pdf = pdf_res['std']
         
         valid = (mean_pdf > 0) & (centers > 0) if (xscale == 'log' or yscale == 'log') else (mean_pdf >= 0)
-        
-        if np.any(valid):
-            min_positive_pdf.append(np.min(mean_pdf[valid]))
-            max_pdf_vals.append(np.max(mean_pdf[valid]))
+        if not np.any(valid):
+            continue
+
+        min_positive_pdf.append(np.min(mean_pdf[valid]))
+        max_pdf_vals.append(np.max(mean_pdf[valid]))
 
         n_exps = len(exp_list)
-        label_text = f'{item["diameter_um"]:.2f} $\\mu\\mathrm{{m}}$ ($N={n_exps}$)'
+        d_um = item["diameter_um"]
+        label_text = f'{d_um:.2f} $\\mu\\mathrm{{m}}$ ($N={n_exps}$)'
 
-        # 指数関数フィッティング P(r) = A * exp(-r / lambda) （デフォルトで対数空間 ln P(r) でフィット）
+        # 指数関数フィッティング P(r) = A * exp(-r / lambda)
         fit_res = None
         if fit_exp and np.sum(valid) >= 3:
             fit_res = dpm.fit_exponential_pdf(
@@ -355,62 +410,80 @@ def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, ou
             )
             if fit_res is not None:
                 fit_results[b_name] = fit_res
-                label_text = f'{item["diameter_um"]:.2f} $\\mu\\mathrm{{m}}$ ($\lambda={fit_res["lambda"]:.2f}\\,\\mu\\mathrm{{m}}$, $R^2={fit_res["r_squared"]:.2f}$)'
+                label_text = f'{d_um:.2f} $\\mu\\mathrm{{m}}$ ($\\lambda={fit_res["lambda"]:.2f}\\,\\mu\\mathrm{{m}}$, $R^2={fit_res["r_squared"]:.2f}$)'
 
-        # 1. 平均曲線のプロット
+        color = item["color"]
+        marker = item["marker"]
+
+        # 1. 10% - 90% タイル帯 (淡色)
+        if error_style in ['band', 'both']:
+            ax.fill_between(
+                centers[valid],
+                np.clip(q10[valid], 1e-6 if yscale == 'log' else 0, None),
+                q90[valid],
+                color=color,
+                alpha=0.08,
+                edgecolor='none'
+            )
+            # 2. 25% - 75% 四分位範囲 (IQR) 帯 (中間色)
+            ax.fill_between(
+                centers[valid],
+                np.clip(q25[valid], 1e-6 if yscale == 'log' else 0, None),
+                q75[valid],
+                color=color,
+                alpha=0.22,
+                edgecolor='none'
+            )
+
+        # 3. エラーバー (bar スタイル指定時: IQR 非対称エラーバー)
+        if error_style in ['bar', 'both']:
+            yerr_low = np.clip(mean_pdf[valid] - q25[valid], 0, None)
+            yerr_high = np.clip(q75[valid] - mean_pdf[valid], 0, None)
+            ax.errorbar(
+                centers[valid],
+                mean_pdf[valid],
+                yerr=[yerr_low, yerr_high],
+                fmt='none',
+                ecolor=color,
+                elinewidth=1.2,
+                capsize=3,
+                capthick=1.0,
+                alpha=0.75
+            )
+
+        # 4. 主データ点: 実線/マーカー
         ax.plot(
             centers[valid],
             mean_pdf[valid],
-            marker=item["marker"],
-            color=item["color"],
+            marker=marker,
+            linestyle='-' if not fit_exp else 'none',
+            linewidth=2.0,
+            markersize=7.5,
             label=label_text,
-            markersize=6,
-            alpha=0.9,
-            linestyle='none' if fit_exp else '-'
+            color=color,
+            alpha=0.9
         )
 
-        # 2. 指数フィッティング曲線の描画（破線）
+        # 5. 指数フィッティング曲線の描画（破線）
         if fit_res is not None:
             ax.plot(
                 fit_res['fit_x'],
                 fit_res['fit_y'],
                 linestyle='--',
-                color=item["color"],
+                color=color,
                 alpha=0.85,
-                linewidth=1.5
+                linewidth=1.8
             )
 
-        # 3. 実験間標準偏差エラーバー / エラーバンド（MSDと同様）
-        if error_style in ['band', 'both']:
-            ax.fill_between(
-                centers[valid],
-                np.clip(mean_pdf[valid] - std_pdf[valid], 1e-6 if yscale == 'log' else 0, None),
-                mean_pdf[valid] + std_pdf[valid],
-                edgecolor=item["color"],
-                facecolor=mcolors.to_rgba(item["color"], alpha=0.2),
-                linewidth=0.5
-            )
-        if error_style in ['bar', 'both']:
-            ax.errorbar(
-                centers[valid],
-                mean_pdf[valid],
-                yerr=std_pdf[valid],
-                fmt='none',
-                ecolor=item["color"],
-                elinewidth=1.0,
-                capsize=2,
-                alpha=0.6
-            )
-
-    # 4. 参考線 (Gaussian & Exponential) の描画（主張しすぎない細いグレー線）
+    # 6. 参考線 (Gaussian & Exponential) の描画（控えめなグレー線）
     if show_reference and len(all_exp_disps) > 0:
         x_min_eval = xlim[0] if (xlim is not None and xlim[0] > 0) else (1e-2 if xscale == 'log' else 0.0)
         x_max_eval = xlim[1] if xlim is not None else 50.0
         x_eval = np.linspace(x_min_eval, x_max_eval, 300)
         y_gauss, y_exp = get_reference_curves(all_exp_disps, x_eval, component=component, signed=signed)
         if y_gauss is not None and y_exp is not None:
-            ax.plot(x_eval, y_gauss, color='gray', linestyle=':', linewidth=1.2, alpha=0.55, label='Gaussian ref.')
-            ax.plot(x_eval, y_exp, color='black', linestyle='-.', linewidth=1.0, alpha=0.45, label='Exponential ref.')
+            ax.plot(x_eval, y_gauss, color='#666666', linestyle=':', linewidth=1.3, alpha=0.6, label='Gaussian ref.')
+            ax.plot(x_eval, y_exp, color='#333333', linestyle='-.', linewidth=1.2, alpha=0.55, label='Exponential ref.')
 
     ax.set_xscale(xscale)
     ax.set_yscale(yscale)
@@ -419,35 +492,34 @@ def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, ou
     if xlim is not None:
         ax.set_xlim(xlim)
 
-    # y軸範囲の設定 (ガウシアンの急激な減衰で過大にスケールが広がらないよう制御)
     if ylim is not None:
         ax.set_ylim(ylim)
     elif yscale == 'log':
         if len(min_positive_pdf) > 0 and len(max_pdf_vals) > 0:
             y_min_data = max(np.min(min_positive_pdf), 1e-8)
             y_max_data = np.max(max_pdf_vals)
-            # データ最小値の約 0.3倍 〜 最大値の約 2.5倍に自動調整
             y_bottom = 10.0 ** (np.floor(np.log10(y_min_data * 0.3)))
             y_top = 10.0 ** (np.ceil(np.log10(y_max_data * 2.5)))
             ax.set_ylim(bottom=y_bottom, top=y_top)
 
-    ax.set_title(f'Displacement PDF & Exponential Fits ($\Delta t = {tau_sec:.1f}\\mathrm{{s}}$, $\\tau = {tau}$ frames)')
-    ax.legend(frameon=True, fontsize=8)
-    ax.grid(True, which="both", ls="--", alpha=0.3)
+    ax.set_title(f'Displacement PDF $\\pm$ IQR ($\\Delta t = {tau_sec:.1f}\\,\\mathrm{{s}}$, $\\tau = {tau}$ frames)')
+    ax.legend(fontsize=9.5, loc='upper right', framealpha=0.88, markerscale=0.85, handlelength=1.4, borderpad=0.35, labelspacing=0.28)
+    ax.grid(True, which="both", ls="--", alpha=0.35)
 
     plt.tight_layout()
-    fig.savefig(out_path, bbox_inches='tight')
+    basename = f"displacement_PDF_{component}_tau{tau_sec:.0f}s"
+    save_figure_to_all(fig, basename, out_dirs)
     plt.close(fig)
-    print(f"[SAVED] {out_path}", flush=True)
     return fit_results
 
 
-def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_path, 
+def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_dirs, 
                        xscale='linear', yscale='log', bins=40, error_style='band', xlim=(0, 50),
                        ylim=None, fit_exp=True, fit_mode='log', fit_rmin=None, fit_rmax=None,
                        show_reference=True):
     """
     複数のラグタイム tau をグリッド状に並べたサマリープロットを作成・保存する。
+    MSD.py と統一された IQR 帯スタイルで描画。
     """
     tau_list = list(all_tau_data.keys())
     n_tau = len(tau_list)
@@ -457,7 +529,7 @@ def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_path
     n_cols = min(3, n_tau)
     n_rows = (n_tau + n_cols - 1) // n_cols
 
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6.0 * n_cols, 4.8 * n_rows), squeeze=False)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6.2 * n_cols, 5.0 * n_rows), squeeze=False)
     xlabel, ylabel = get_component_label(component, signed)
 
     for idx, tau in enumerate(tau_list):
@@ -478,14 +550,24 @@ def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_path
             exp_list = beads_data[b_name]["per_exp"]
             all_exp_disps.extend(exp_list)
             bin_range = xlim if xlim is not None else None
-            centers, mean_pdf, std_pdf, _ = calc_ensemble_pdf(exp_list, bins=bins, bin_range=bin_range, density=True)
+            pdf_res = calc_ensemble_pdf(exp_list, bins=bins, bin_range=bin_range, density=True)
+            centers = pdf_res['centers']
+            mean_pdf = pdf_res['mean']
+            q25 = pdf_res['q25']
+            q75 = pdf_res['q75']
+            q10 = pdf_res['q10']
+            q90 = pdf_res['q90']
+            std_pdf = pdf_res['std']
+
             valid = (mean_pdf > 0) & (centers > 0) if (xscale == 'log' or yscale == 'log') else (mean_pdf >= 0)
+            if not np.any(valid):
+                continue
 
-            if np.any(valid):
-                min_positive_pdf.append(np.min(mean_pdf[valid]))
-                max_pdf_vals.append(np.max(mean_pdf[valid]))
+            min_positive_pdf.append(np.min(mean_pdf[valid]))
+            max_pdf_vals.append(np.max(mean_pdf[valid]))
 
-            label_text = f'{item["diameter_um"]:.2f} $\\mu\\mathrm{{m}}$'
+            d_um = item["diameter_um"]
+            label_text = f'{d_um:.2f} $\\mu\\mathrm{{m}}$'
             fit_res = None
             if fit_exp and np.sum(valid) >= 3:
                 fit_res = dpm.fit_exponential_pdf(
@@ -497,15 +579,52 @@ def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_path
                     fit_mode=fit_mode
                 )
                 if fit_res is not None:
-                    label_text = f'{item["diameter_um"]:.2f} $\\mu\\mathrm{{m}}$ ($\lambda={fit_res["lambda"]:.1f}$)'
+                    label_text = f'{d_um:.2f} $\\mu\\mathrm{{m}}$ ($\\lambda={fit_res["lambda"]:.1f}$)'
+
+            color = item["color"]
+            marker = item["marker"]
+
+            # 10%-90% 帯 & 25%-75% IQR 帯
+            if error_style in ['band', 'both']:
+                ax.fill_between(
+                    centers[valid],
+                    np.clip(q10[valid], 1e-6 if yscale == 'log' else 0, None),
+                    q90[valid],
+                    color=color,
+                    alpha=0.08,
+                    edgecolor='none'
+                )
+                ax.fill_between(
+                    centers[valid],
+                    np.clip(q25[valid], 1e-6 if yscale == 'log' else 0, None),
+                    q75[valid],
+                    color=color,
+                    alpha=0.22,
+                    edgecolor='none'
+                )
+
+            if error_style in ['bar', 'both']:
+                yerr_low = np.clip(mean_pdf[valid] - q25[valid], 0, None)
+                yerr_high = np.clip(q75[valid] - mean_pdf[valid], 0, None)
+                ax.errorbar(
+                    centers[valid],
+                    mean_pdf[valid],
+                    yerr=[yerr_low, yerr_high],
+                    fmt='none',
+                    ecolor=color,
+                    elinewidth=1.0,
+                    capsize=2,
+                    alpha=0.65
+                )
 
             ax.plot(
                 centers[valid],
                 mean_pdf[valid],
-                marker=item["marker"],
-                color=item["color"],
+                marker=marker,
+                color=color,
                 label=label_text,
-                markersize=5,
+                markersize=6,
+                linewidth=1.8,
                 alpha=0.9,
                 linestyle='none' if fit_exp else '-'
             )
@@ -515,42 +634,20 @@ def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_path
                     fit_res['fit_x'],
                     fit_res['fit_y'],
                     linestyle='--',
-                    color=item["color"],
+                    color=color,
                     alpha=0.85,
-                    linewidth=1.2
+                    linewidth=1.5
                 )
 
-            # 実験間標準偏差エラーバンド (fill_between)
-            if error_style in ['band', 'both']:
-                ax.fill_between(
-                    centers[valid],
-                    np.clip(mean_pdf[valid] - std_pdf[valid], 1e-6 if yscale == 'log' else 0, None),
-                    mean_pdf[valid] + std_pdf[valid],
-                    edgecolor=item["color"],
-                    facecolor=mcolors.to_rgba(item["color"], alpha=0.2),
-                    linewidth=0.5
-                )
-            if error_style in ['bar', 'both']:
-                ax.errorbar(
-                    centers[valid],
-                    mean_pdf[valid],
-                    yerr=std_pdf[valid],
-                    fmt='none',
-                    ecolor=item["color"],
-                    elinewidth=0.8,
-                    capsize=2,
-                    alpha=0.6
-                )
-
-        # 参考線 (Gaussian & Exponential) の描画（主張しすぎない細いグレー線）
+        # 参考線
         if show_reference and len(all_exp_disps) > 0:
             x_min_eval = xlim[0] if (xlim is not None and xlim[0] > 0) else (1e-2 if xscale == 'log' else 0.0)
             x_max_eval = xlim[1] if xlim is not None else 50.0
             x_eval = np.linspace(x_min_eval, x_max_eval, 300)
             y_gauss, y_exp = get_reference_curves(all_exp_disps, x_eval, component=component, signed=signed)
             if y_gauss is not None and y_exp is not None:
-                ax.plot(x_eval, y_gauss, color='gray', linestyle=':', linewidth=1.1, alpha=0.55, label='Gauss ref.' if idx == 0 else None)
-                ax.plot(x_eval, y_exp, color='black', linestyle='-.', linewidth=0.9, alpha=0.45, label='Exp ref.' if idx == 0 else None)
+                ax.plot(x_eval, y_gauss, color='#666666', linestyle=':', linewidth=1.1, alpha=0.55, label='Gauss ref.' if idx == 0 else None)
+                ax.plot(x_eval, y_exp, color='#333333', linestyle='-.', linewidth=1.0, alpha=0.5, label='Exp ref.' if idx == 0 else None)
 
         ax.set_xscale(xscale)
         ax.set_yscale(yscale)
@@ -559,7 +656,6 @@ def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_path
         if xlim is not None:
             ax.set_xlim(xlim)
 
-        # y軸範囲の設定
         if ylim is not None:
             ax.set_ylim(ylim)
         elif yscale == 'log':
@@ -570,18 +666,23 @@ def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_path
                 y_top = 10.0 ** (np.ceil(np.log10(y_max_data * 2.5)))
                 ax.set_ylim(bottom=y_bottom, top=y_top)
 
-        ax.set_title(f'$\Delta t = {tau_sec:.1f}\\mathrm{{s}}$ ($\Delta t = {tau}\\mathrm{{ frames}}$)')
-        ax.grid(True, which="both", ls="--", alpha=0.3)
+        ax.set_title(f'$\\Delta t = {tau_sec:.1f}\\,\\mathrm{{s}}$ ($\\tau = {tau}$ frames)')
+        ax.grid(True, which="both", ls="--", alpha=0.35)
         if idx == 0:
-            ax.legend(fontsize=7, frameon=True)
+            ax.legend(fontsize=8, framealpha=0.88, loc='upper right')
 
-    # 余分なサブプロットを非表示
     for idx in range(n_tau, n_rows * n_cols):
         r = idx // n_cols
         c = idx % n_cols
         axes[r, c].axis('off')
 
-def plot_lambda_evolution(df_fits, component, signed, out_path, fit_powerlaw=True):
+    plt.tight_layout()
+    basename = f"displacement_PDF_grid_{component}"
+    save_figure_to_all(fig, basename, out_dirs)
+    plt.close(fig)
+
+
+def plot_lambda_evolution(df_fits, component, signed, out_dirs, fit_powerlaw=True):
     """
     特性減衰長 lambda(Delta t) の時間発展プロットを作成・保存する。
     べき乗則 lambda(Delta t) = C * (Delta t)^alpha でフィッティングを行い、
@@ -591,7 +692,7 @@ def plot_lambda_evolution(df_fits, component, signed, out_path, fit_powerlaw=Tru
     if df_comp.empty or 'fit_lambda_um' not in df_comp.columns:
         return []
 
-    fig, ax = plt.subplots(figsize=(6.5, 5.0))
+    fig, ax = plt.subplots(figsize=(8.0, 5.8))
     powerlaw_records = []
     
     for item in BEADS_INFO:
@@ -617,18 +718,15 @@ def plot_lambda_evolution(df_fits, component, signed, out_path, fit_powerlaw=Tru
                 log_x = np.log(x_val)
                 log_y = np.log(y_val)
                 
-                # 線形回帰 (対数空間)
                 slope, intercept = np.polyfit(log_x, log_y, 1)
                 alpha_fit = slope
                 C_fit = np.exp(intercept)
                 
-                # 決定係数 R^2
                 log_y_pred = intercept + slope * log_x
                 ss_res = np.sum((log_y - log_y_pred) ** 2)
                 ss_tot = np.sum((log_y - np.mean(log_y)) ** 2)
                 r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
                 
-                # 誤差推定
                 if len(x_val) > 2:
                     s_err = np.sqrt(ss_res / (len(x_val) - 2))
                     s_xx = np.sum((log_x - np.mean(log_x)) ** 2)
@@ -650,7 +748,6 @@ def plot_lambda_evolution(df_fits, component, signed, out_path, fit_powerlaw=Tru
                     'n_points': len(x_val)
                 })
                 
-                # フィッティング曲線の描画（破線）
                 x_fit_line = np.geomspace(np.min(x_val), np.max(x_val), 100)
                 y_fit_line = C_fit * (x_fit_line ** alpha_fit)
                 ax.plot(
@@ -659,12 +756,11 @@ def plot_lambda_evolution(df_fits, component, signed, out_path, fit_powerlaw=Tru
                     linestyle='--',
                     color=item["color"],
                     alpha=0.85,
-                    linewidth=1.5
+                    linewidth=1.8
                 )
             except Exception as e:
                 print(f"[WARNING] Powerlaw fit failed for {b_name}: {e}", flush=True)
 
-        # エラーバー付きデータ点プロット
         ax.errorbar(
             x_val,
             y_val,
@@ -672,9 +768,10 @@ def plot_lambda_evolution(df_fits, component, signed, out_path, fit_powerlaw=Tru
             marker=item["marker"],
             color=item["color"],
             label=label_text,
-            capsize=3,
-            elinewidth=1.0,
-            markersize=6,
+            capsize=3.5,
+            capthick=1.0,
+            elinewidth=1.2,
+            markersize=7.5,
             alpha=0.9,
             linestyle='none' if fit_powerlaw else '-'
         )
@@ -686,43 +783,41 @@ def plot_lambda_evolution(df_fits, component, signed, out_path, fit_powerlaw=Tru
         t_ref = np.logspace(np.log10(t_min), np.log10(t_max), 50)
         ref_val = float(np.nanmedian(df_comp['fit_lambda_um']))
         med_t = float(np.median(all_tau))
-        ax.plot(t_ref, ref_val * (t_ref / med_t) ** 0.5, ':', color='gray', alpha=0.5, label=r'$\sim \Delta t^{0.5}$ (diffusive)')
-        ax.plot(t_ref, ref_val * (t_ref / med_t) ** 1.0, '-.', color='gray', alpha=0.5, label=r'$\sim \Delta t^{1.0}$ (ballistic)')
+        ax.plot(t_ref, ref_val * (t_ref / med_t) ** 0.5, ':', color='#666666', linewidth=1.3, alpha=0.6, label=r'$\sim \Delta t^{0.5}$ (diffusive)')
+        ax.plot(t_ref, ref_val * (t_ref / med_t) ** 1.0, '-.', color='#333333', linewidth=1.2, alpha=0.55, label=r'$\sim \Delta t^{1.0}$ (ballistic)')
 
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.set_xlabel(r'Lag time $\Delta t$ [$\mathrm{s}$]')
-    ax.set_ylabel(r'$\lambda$ [$\mu\mathrm{m}$]')
-    ax.legend(frameon=True, fontsize=8, loc='upper left')
-    ax.grid(True, which="both", ls="--", alpha=0.3)
+    ax.set_ylabel(r'Characteristic decay length $\lambda$ [$\mu\mathrm{m}$]')
+    ax.legend(frameon=True, fontsize=9.0, loc='upper left', framealpha=0.88)
+    ax.grid(True, which="both", ls="--", alpha=0.35)
+    ax.set_title(f'Decay Length $\\lambda(\\Delta t)$ vs Lag Time ({component})')
 
     plt.tight_layout()
-    fig.savefig(out_path, bbox_inches='tight')
+    basename = f"displacement_lambda_evolution_{component}"
+    save_figure_to_all(fig, basename, out_dirs)
     plt.close(fig)
-    print(f"[SAVED] {out_path}", flush=True)
     return powerlaw_records
 
 
-def plot_scaled_pdf_master(all_tau_data, df_fits, frame_interval, component, signed, out_path,
+def plot_scaled_pdf_master(all_tau_data, df_fits, frame_interval, component, signed, out_dirs,
                            plot_tau_list=None, xscale='linear', yscale='log', bins=50, xlim=(0, 10),
                            error_style='band'):
     """
     スケーリング変数 xi = Delta r / lambda(Delta t), y = lambda(Delta t) * P(Delta r) による
     全ビーズ・代表ラグタイムのデータコラップス（Master Scaling）プロットを作成・保存する。
-    理論マスター曲線 f(xi) = exp(-xi) を破線でオーバーレイ。
     """
-    fig, ax = plt.subplots(figsize=(7.5, 5.5))
+    fig, ax = plt.subplots(figsize=(8.5, 6.2))
     df_comp = df_fits[(df_fits['component'] == component) & (df_fits['signed'] == signed)]
     
     if plot_tau_list is None:
         plot_tau_list = sorted(list(all_tau_data.keys()))
 
-    # 理論マスター曲線 f(xi) = exp(-xi)
     xi_max = xlim[1] if xlim is not None else 10.0
     xi_theory = np.linspace(0, xi_max, 200)
-    ax.plot(xi_theory, np.exp(-xi_theory), 'k--', linewidth=2.0, alpha=0.8, label=r'Master curve $e^{-\xi}$', zorder=10)
+    ax.plot(xi_theory, np.exp(-xi_theory), 'k--', linewidth=2.0, alpha=0.85, label=r'Master curve $e^{-\xi}$', zorder=10)
 
-    # 各ビーズ・ラグタイムのプロット
     for item in BEADS_INFO:
         b_name = item["name"]
         color = item["color"]
@@ -734,7 +829,6 @@ def plot_scaled_pdf_master(all_tau_data, df_fits, frame_interval, component, sig
             if len(exp_list) == 0:
                 continue
                 
-            # lambda の取得
             row = df_comp[(df_comp['bead_name'] == b_name) & (df_comp['tau_frame'] == tau)]
             if row.empty or 'fit_lambda_um' not in row.columns:
                 continue
@@ -742,14 +836,16 @@ def plot_scaled_pdf_master(all_tau_data, df_fits, frame_interval, component, sig
             if np.isnan(lambda_val) or lambda_val <= 0:
                 continue
 
-            centers, mean_pdf, std_pdf, _ = calc_ensemble_pdf(exp_list, bins=bins, bin_range=None, density=True)
+            pdf_res = calc_ensemble_pdf(exp_list, bins=bins, bin_range=None, density=True)
+            centers = pdf_res['centers']
+            mean_pdf = pdf_res['mean']
             valid = (mean_pdf > 0) & (centers > 0)
             
             x_scaled = centers[valid] / lambda_val
             y_scaled = mean_pdf[valid] * lambda_val
             
             marker = item["marker"]
-            alpha_val = 0.75 if tau == plot_tau_list[0] else 0.45
+            alpha_val = 0.85 if tau == plot_tau_list[0] else 0.45
             label_text = f'{item["diameter_um"]:.2f} $\\mu\\mathrm{{m}}$' if tau == plot_tau_list[0] else None
 
             ax.plot(
@@ -758,7 +854,7 @@ def plot_scaled_pdf_master(all_tau_data, df_fits, frame_interval, component, sig
                 marker=marker,
                 color=color,
                 label=label_text,
-                markersize=4.5,
+                markersize=5.5,
                 alpha=alpha_val,
                 linestyle='none'
             )
@@ -770,16 +866,17 @@ def plot_scaled_pdf_master(all_tau_data, df_fits, frame_interval, component, sig
     if xlim is not None:
         ax.set_xlim(xlim)
     ax.set_ylim(bottom=1e-4, top=3.0)
-    ax.legend(frameon=True, fontsize=8, loc='upper right')
-    ax.grid(True, which="both", ls="--", alpha=0.3)
+    ax.legend(frameon=True, fontsize=9.5, loc='upper right', framealpha=0.88)
+    ax.grid(True, which="both", ls="--", alpha=0.35)
+    ax.set_title(f'Universal Scaled PDF Collapse ({component})')
 
     plt.tight_layout()
-    fig.savefig(out_path, bbox_inches='tight')
+    basename = f"displacement_PDF_scaled_master_{component}"
+    save_figure_to_all(fig, basename, out_dirs)
     plt.close(fig)
-    print(f"[SAVED] {out_path}", flush=True)
 
 
-def plot_scaled_pdf_per_bead(all_tau_data, df_fits, frame_interval, component, signed, out_path,
+def plot_scaled_pdf_per_bead(all_tau_data, df_fits, frame_interval, component, signed, out_dirs,
                              plot_tau_list=None, xscale='linear', yscale='log', bins=50, xlim=(0, 10),
                              error_style='band'):
     """
@@ -790,7 +887,7 @@ def plot_scaled_pdf_per_bead(all_tau_data, df_fits, frame_interval, component, s
     n_cols = 3
     n_rows = (n_beads + n_cols - 1) // n_cols
 
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.5 * n_cols, 4.5 * n_rows), squeeze=False)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.8 * n_cols, 4.8 * n_rows), squeeze=False)
     df_comp = df_fits[(df_fits['component'] == component) & (df_fits['signed'] == signed)]
     
     if plot_tau_list is None:
@@ -804,10 +901,9 @@ def plot_scaled_pdf_per_bead(all_tau_data, df_fits, frame_interval, component, s
         ax = axes[r, c]
         b_name = item["name"]
 
-        # 理論マスター曲線 f(xi) = exp(-xi)
         xi_max = xlim[1] if xlim is not None else 10.0
         xi_theory = np.linspace(0, xi_max, 200)
-        ax.plot(xi_theory, np.exp(-xi_theory), 'k--', linewidth=1.8, alpha=0.7, label=r'$e^{-\xi}$', zorder=10)
+        ax.plot(xi_theory, np.exp(-xi_theory), 'k--', linewidth=1.8, alpha=0.75, label=r'$e^{-\xi}$', zorder=10)
 
         for t_idx, tau in enumerate(plot_tau_list):
             if tau not in all_tau_data or b_name not in all_tau_data[tau]:
@@ -823,16 +919,40 @@ def plot_scaled_pdf_per_bead(all_tau_data, df_fits, frame_interval, component, s
             if np.isnan(lambda_val) or lambda_val <= 0:
                 continue
 
-            centers, mean_pdf, std_pdf, _ = calc_ensemble_pdf(exp_list, bins=bins, bin_range=None, density=True)
+            pdf_res = calc_ensemble_pdf(exp_list, bins=bins, bin_range=None, density=True)
+            centers = pdf_res['centers']
+            mean_pdf = pdf_res['mean']
+            q25 = pdf_res['q25']
+            q75 = pdf_res['q75']
+            q10 = pdf_res['q10']
+            q90 = pdf_res['q90']
             valid = (mean_pdf > 0) & (centers > 0)
 
             x_scaled = centers[valid] / lambda_val
             y_scaled = mean_pdf[valid] * lambda_val
-            std_scaled = std_pdf[valid] * lambda_val
             tau_sec = tau * frame_interval
 
             t_color = tau_colors[t_idx]
-            label_text = f'$\Delta t = {tau_sec:.0f}\\mathrm{{s}}$'
+            label_text = f'$\\Delta t = {tau_sec:.0f}\\mathrm{{s}}$'
+
+            # IQR スケーリングバンド
+            if error_style in ['band', 'both']:
+                ax.fill_between(
+                    x_scaled,
+                    np.clip(q10[valid] * lambda_val, 1e-6, None),
+                    q90[valid] * lambda_val,
+                    color=t_color,
+                    alpha=0.08,
+                    edgecolor='none'
+                )
+                ax.fill_between(
+                    x_scaled,
+                    np.clip(q25[valid] * lambda_val, 1e-6, None),
+                    q75[valid] * lambda_val,
+                    color=t_color,
+                    alpha=0.20,
+                    edgecolor='none'
+                )
 
             ax.plot(
                 x_scaled,
@@ -840,19 +960,10 @@ def plot_scaled_pdf_per_bead(all_tau_data, df_fits, frame_interval, component, s
                 marker='o',
                 color=t_color,
                 label=label_text,
-                markersize=4,
+                markersize=4.5,
                 alpha=0.85,
                 linestyle='none'
             )
-            if error_style in ['band', 'both']:
-                ax.fill_between(
-                    x_scaled,
-                    np.clip(y_scaled - std_scaled, 1e-6, None),
-                    y_scaled + std_scaled,
-                    facecolor=mcolors.to_rgba(t_color, alpha=0.15),
-                    edgecolor=t_color,
-                    linewidth=0.5
-                )
 
         ax.set_xscale(xscale)
         ax.set_yscale(yscale)
@@ -862,8 +973,8 @@ def plot_scaled_pdf_per_bead(all_tau_data, df_fits, frame_interval, component, s
             ax.set_xlim(xlim)
         ax.set_ylim(bottom=1e-4, top=3.0)
         ax.set_title(f'{item["diameter_um"]:.2f} $\\mu\\mathrm{{m}}$ ({item["name"]})')
-        ax.legend(fontsize=7, frameon=True, loc='upper right')
-        ax.grid(True, which="both", ls="--", alpha=0.3)
+        ax.legend(fontsize=7.5, framealpha=0.88, loc='upper right')
+        ax.grid(True, which="both", ls="--", alpha=0.35)
 
     for idx in range(n_beads, n_rows * n_cols):
         r = idx // n_cols
@@ -871,9 +982,9 @@ def plot_scaled_pdf_per_bead(all_tau_data, df_fits, frame_interval, component, s
         axes[r, c].axis('off')
 
     plt.tight_layout()
-    fig.savefig(out_path, bbox_inches='tight')
+    basename = f"displacement_PDF_scaled_per_bead_{component}"
+    save_figure_to_all(fig, basename, out_dirs)
     plt.close(fig)
-    print(f"[SAVED] {out_path}", flush=True)
 
 
 def main():
@@ -886,14 +997,14 @@ def main():
                         choices=['norm', 'x', 'y', 'both_xy', 'parallel', 'perpendicular', 'all'],
                         help="Displacement component: 'norm' (2D magnitude |Δr|), 'x', 'y', 'both_xy', 'parallel' (|Δr_par|), 'perpendicular' (|Δr_perp|), or 'all'.")
     DEFAULT_FINE_TAU = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 35, 40, 45, 50]
-    DEFAULT_PLOT_TAU = [1, 2, 5, 10, 25]
+    DEFAULT_PLOT_TAU = [1, 2, 5, 10, 25, 75]
 
     parser.add_argument('--tau', type=int, nargs='+', default=DEFAULT_FINE_TAU,
                         help="Lag time list in frames for lambda(Δt) time evolution (default: 1..50 fine list).")
     parser.add_argument('--tau_seconds', type=float, nargs='+', default=None,
                         help="Lag time in seconds (overrides --tau if provided).")
     parser.add_argument('--plot_tau', type=int, nargs='+', default=DEFAULT_PLOT_TAU,
-                        help="Representative lag times in frames to plot PDF histograms for (default: 1 2 5 10 25, 5 series).")
+                        help="Representative lag times in frames to plot PDF histograms for (default: 1 2 5 10 25 75).")
     parser.add_argument('--plot_tau_seconds', type=float, nargs='+', default=None,
                         help="Representative lag times in seconds to plot PDF histograms for (overrides --plot_tau).")
     parser.add_argument('--scale', type=float, default=0.11,
@@ -908,8 +1019,8 @@ def main():
                         help="X-axis scale for PDF plot (default: linear).")
     parser.add_argument('--yscale', type=str, default='log', choices=['log', 'linear'],
                         help="Y-axis scale for PDF plot (default: log).")
-    parser.add_argument('--fit_exp', action='store_true', default=True,
-                        help="Fit displacement PDF with exponential distribution P(r) = A * exp(-r/lambda) (default: True).")
+    parser.add_argument('--fit_exp', action='store_true', default=False,
+                        help="Fit displacement PDF with exponential distribution P(r) = A * exp(-r/lambda) (default: False).")
     parser.add_argument('--no_fit_exp', dest='fit_exp', action='store_false',
                         help="Disable exponential fitting.")
     parser.add_argument('--fit_mode', type=str, default='log', choices=['log', 'linear'],
@@ -919,7 +1030,7 @@ def main():
     parser.add_argument('--fit_rmax', type=float, default=None,
                         help="Maximum r value for fitting exponential tail (default: None).")
     parser.add_argument('--error_style', type=str, default='band', choices=['band', 'bar', 'both', 'none'],
-                        help="Error representation across experiments: 'band' (shaded fill_between like MSD.py, default), 'bar' (error bars), 'both', or 'none'.")
+                        help="Error representation across experiments: 'band' (shaded IQR fill_between like MSD.py, default), 'bar' (IQR error bars), 'both', or 'none'.")
     parser.add_argument('--show_reference', action='store_true', default=True,
                         help="Show subtle Gaussian and Exponential reference guide lines on PDF plots to highlight heavy tails (default: True).")
     parser.add_argument('--no_reference', dest='show_reference', action='store_false',
@@ -929,7 +1040,7 @@ def main():
     parser.add_argument('--ylim', type=float, nargs=2, default=None,
                         help="Y-axis limits [min, max] (default: auto-adjusted to experimental PDF data range).")
     parser.add_argument('--out_dir', type=str, default=None,
-                        help="Output directory to save plots and CSVs. Defaults to root_dir/figure.")
+                        help="Output directory to save plots and CSVs. Defaults to workspace/figure/displacement and root_dir/figure/displacement.")
     args = parser.parse_args()
 
     # ルートディレクトリの確定
@@ -938,15 +1049,29 @@ def main():
     else:
         root_dir = find_default_root()
 
+    workspace_dir = Path(__file__).parent.resolve()
     print(f"=== Cargo Particle Displacement Analysis ===", flush=True)
     print(f"Root Directory: {root_dir}", flush=True)
 
-    # 出力先ディレクトリ
+    # 出力先ディレクトリ群（MSD.pyと同様にworkspaceとroot_dir両方に対応）
     if args.out_dir is not None:
-        out_dir = Path(args.out_dir)
+        out_dirs = [Path(args.out_dir)]
     else:
-        out_dir = root_dir / 'figure'
-    out_dir.mkdir(parents=True, exist_ok=True)
+        out_dirs = [
+            workspace_dir / 'figure' / 'displacement',
+            root_dir / 'figure' / 'displacement',
+        ]
+
+    for d in out_dirs:
+        try:
+            if d.exists() or d.parent.exists():
+                d.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+    print("Saving outputs to:", flush=True)
+    for d in out_dirs:
+        print(f"  {d}", flush=True)
 
     # 対象ビーズ条件の抽出
     if 'all' in args.beads:
@@ -975,7 +1100,6 @@ def main():
     else:
         plot_tau_list = sorted(list(set(args.plot_tau)))
 
-    # plot_tau_list が tau_list に含まれるように統合
     for pt in plot_tau_list:
         if pt not in tau_list:
             tau_list.append(pt)
@@ -1026,6 +1150,8 @@ def main():
                         'exp_mean_std': float(np.std(exp_means, ddof=1)) if len(exp_means) > 1 else 0.0,
                         'p25': float(np.percentile(pooled, 25)),
                         'p75': float(np.percentile(pooled, 75)),
+                        'p10': float(np.percentile(pooled, 10)),
+                        'p90': float(np.percentile(pooled, 90)),
                         'msd': float(np.mean(pooled**2)),
                     })
 
@@ -1036,7 +1162,10 @@ def main():
                     if bead_name in beads_data and len(beads_data[bead_name]["per_exp"]) > 0:
                         exp_list = beads_data[bead_name]["per_exp"]
                         bin_range = xlim_tuple if xlim_tuple is not None else None
-                        centers, mean_pdf, std_pdf, _ = calc_ensemble_pdf(exp_list, bins=args.bins, bin_range=bin_range, density=True)
+                        pdf_res = calc_ensemble_pdf(exp_list, bins=args.bins, bin_range=bin_range, density=True)
+                        centers = pdf_res['centers']
+                        mean_pdf = pdf_res['mean']
+                        std_pdf = pdf_res['std']
                         valid = (mean_pdf > 0) & (centers > 0) if (args.xscale == 'log' or args.yscale == 'log') else (mean_pdf >= 0)
                         if np.sum(valid) >= 3:
                             fit_res = dpm.fit_exponential_pdf(
@@ -1064,33 +1193,13 @@ def main():
             if tau in plot_tau_list:
                 print(f"  Plotting PDF for tau={tau} frames ({tau_sec:.1f} s)...", flush=True)
                 plot_tau_data[tau] = beads_data
-                pdf_save_path = out_dir / f"displacement_PDF_{comp}_tau{tau_sec:.0f}s.svg"
                 plot_pdf_across_beads(
                     beads_data,
                     tau=tau,
                     frame_interval=args.frame_interval,
                     component=comp,
                     signed=args.signed,
-                    out_path=pdf_save_path,
-                    xscale=args.xscale,
-                    yscale=args.yscale,
-                    bins=args.bins,
-                    error_style=args.error_style,
-                    xlim=xlim_tuple,
-                    ylim=ylim_tuple,
-                    fit_exp=args.fit_exp,
-                    fit_mode=args.fit_mode,
-                    fit_rmin=args.fit_rmin,
-                    fit_rmax=args.fit_rmax,
-                    show_reference=args.show_reference
-                )
-                plot_pdf_across_beads(
-                    beads_data,
-                    tau=tau,
-                    frame_interval=args.frame_interval,
-                    component=comp,
-                    signed=args.signed,
-                    out_path=pdf_save_path.with_suffix('.png'),
+                    out_dirs=out_dirs,
                     xscale=args.xscale,
                     yscale=args.yscale,
                     bins=args.bins,
@@ -1108,31 +1217,12 @@ def main():
 
         # 代表ラグタイムのグリッドプロット保存
         if plot_tau_data:
-            grid_save_path = out_dir / f"displacement_PDF_grid_{comp}.svg"
             plot_multitau_grid(
                 plot_tau_data,
                 frame_interval=args.frame_interval,
                 component=comp,
                 signed=args.signed,
-                out_path=grid_save_path,
-                xscale=args.xscale,
-                yscale=args.yscale,
-                bins=args.bins,
-                error_style=args.error_style,
-                xlim=xlim_tuple,
-                ylim=ylim_tuple,
-                fit_exp=args.fit_exp,
-                fit_mode=args.fit_mode,
-                fit_rmin=args.fit_rmin,
-                fit_rmax=args.fit_rmax,
-                show_reference=args.show_reference
-            )
-            plot_multitau_grid(
-                plot_tau_data,
-                frame_interval=args.frame_interval,
-                component=comp,
-                signed=args.signed,
-                out_path=grid_save_path.with_suffix('.png'),
+                out_dirs=out_dirs,
                 xscale=args.xscale,
                 yscale=args.yscale,
                 bins=args.bins,
@@ -1149,59 +1239,42 @@ def main():
     # 統計サマリーの CSV 保存
     if stats_records:
         df_stats = pd.DataFrame(stats_records)
-        csv_save_path = out_dir / "displacement_statistics_summary.csv"
-        safe_save_csv(df_stats, csv_save_path)
-        print(f"\n[SAVED] Statistics summary saved to {csv_save_path}", flush=True)
+        save_csv_to_all(df_stats, "displacement_statistics_summary.csv", out_dirs)
+        print(f"\n[SAVED] Statistics summary saved to out directories", flush=True)
 
         if args.fit_exp and 'fit_lambda_um' in df_stats.columns:
             fit_cols = ['component', 'signed', 'bead_name', 'tau_frame', 'lag_time_s', 
-                        'fit_lambda_um', 'fit_lambda_err', 'fit_A', 'fit_r2', 'count', 'mean', 'std', 'msd']
+                        'fit_lambda_um', 'fit_lambda_err', 'fit_A', 'fit_r2', 'count', 'mean', 'std', 'median', 'p25', 'p75', 'msd']
             present_cols = [c for c in fit_cols if c in df_stats.columns]
             df_fits = df_stats[present_cols].dropna(subset=['fit_lambda_um'])
-            fits_csv_path = out_dir / "displacement_exponential_fits.csv"
-            safe_save_csv(df_fits, fits_csv_path)
-            print(f"[SAVED] Exponential fits summary saved to {fits_csv_path}", flush=True)
+            save_csv_to_all(df_fits, "displacement_exponential_fits.csv", out_dirs)
+            print(f"[SAVED] Exponential fits summary saved to out directories", flush=True)
 
             # lambda(Delta t) の時間発展プロット保存 & べき乗フィッティング
             all_powerlaw_records = []
             for comp in components_to_run:
-                lambda_plot_path = out_dir / f"displacement_lambda_evolution_{comp}.svg"
-                pw_recs = plot_lambda_evolution(df_fits, component=comp, signed=args.signed, out_path=lambda_plot_path, fit_powerlaw=True)
-                plot_lambda_evolution(df_fits, component=comp, signed=args.signed, out_path=lambda_plot_path.with_suffix('.png'), fit_powerlaw=True)
+                pw_recs = plot_lambda_evolution(df_fits, component=comp, signed=args.signed, out_dirs=out_dirs, fit_powerlaw=True)
                 if pw_recs:
                     all_powerlaw_records.extend(pw_recs)
 
             if all_powerlaw_records:
                 df_pw = pd.DataFrame(all_powerlaw_records)
-                pw_csv_path = out_dir / "displacement_lambda_powerlaw_fits.csv"
-                safe_save_csv(df_pw, pw_csv_path)
-                print(f"[SAVED] Lambda power-law fits summary saved to {pw_csv_path}", flush=True)
+                save_csv_to_all(df_pw, "displacement_lambda_powerlaw_fits.csv", out_dirs)
+                print(f"[SAVED] Lambda power-law fits summary saved to out directories", flush=True)
 
             # スケーリングプロット (Data collapse: xi = Delta r / lambda vs lambda * P(Delta r))
             for comp in components_to_run:
                 if comp in all_comp_tau_data:
                     tau_data = all_comp_tau_data[comp]
-                    scaled_master_path = out_dir / f"displacement_PDF_scaled_master_{comp}.svg"
                     plot_scaled_pdf_master(
                         tau_data, df_fits, frame_interval=args.frame_interval,
-                        component=comp, signed=args.signed, out_path=scaled_master_path,
-                        plot_tau_list=plot_tau_list, error_style=args.error_style
-                    )
-                    plot_scaled_pdf_master(
-                        tau_data, df_fits, frame_interval=args.frame_interval,
-                        component=comp, signed=args.signed, out_path=scaled_master_path.with_suffix('.png'),
+                        component=comp, signed=args.signed, out_dirs=out_dirs,
                         plot_tau_list=plot_tau_list, error_style=args.error_style
                     )
 
-                    scaled_per_bead_path = out_dir / f"displacement_PDF_scaled_per_bead_{comp}.svg"
                     plot_scaled_pdf_per_bead(
                         tau_data, df_fits, frame_interval=args.frame_interval,
-                        component=comp, signed=args.signed, out_path=scaled_per_bead_path,
-                        plot_tau_list=plot_tau_list, error_style=args.error_style
-                    )
-                    plot_scaled_pdf_per_bead(
-                        tau_data, df_fits, frame_interval=args.frame_interval,
-                        component=comp, signed=args.signed, out_path=scaled_per_bead_path.with_suffix('.png'),
+                        component=comp, signed=args.signed, out_dirs=out_dirs,
                         plot_tau_list=plot_tau_list, error_style=args.error_style
                     )
 
@@ -1210,3 +1283,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

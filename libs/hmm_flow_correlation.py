@@ -300,6 +300,7 @@ def fit_flow_correlation_length(
     min_fit_dist: float = 0.0,
     max_fit_dist: float = 20.0,
     min_corr_threshold: float = 0.01,
+    cutoff_ratio: Optional[float] = None,
 ) -> Dict[str, Union[float, np.ndarray]]:
     """
     微小管フローの C(r) 曲線に対して y 軸を対数（ln(C(r))）に変換した上で
@@ -316,6 +317,10 @@ def fit_flow_correlation_length(
         フィッティングに使用する最大距離 (um)
     min_corr_threshold : float, default 0.01
         対数をとるために必要な相関の最小閾値
+    cutoff_ratio : float or None, default None
+        適応的フィッティング範囲のカットオフ比率（例: 1/e ≈ 0.368）。
+        指定時、相関が C_peak * cutoff_ratio を初めて下回る距離までをフィット範囲上限とする。
+        None の場合は max_fit_dist まで全点をフィットする（従来の挙動）。
 
     Returns
     -------
@@ -341,10 +346,31 @@ def fit_flow_correlation_length(
         search_idx = np.arange(min(len(r_all), 10))
     peak_idx = search_idx[np.argmax(c_all[search_idx])]
     r_peak = float(r_all[peak_idx])
+    c_peak = float(c_all[peak_idx])
 
-    # 2. ピーク以降かつ min_fit_dist 以降 (r >= max(min_fit_dist, r_peak)) かつ r <= max_fit_dist かつ C(r) >= min_corr_threshold の減衰領域を抽出
+    # 2. ピーク以降の減衰領域を抽出（適応的カットオフの判定）
     eff_min_r = max(min_fit_dist, r_peak)
-    decay_mask = (r_all >= eff_min_r) & (r_all <= max_fit_dist) & (c_all >= min_corr_threshold)
+    eff_max_r = float(max_fit_dist)
+
+    threshold = float(min_corr_threshold)
+    if cutoff_ratio is not None and np.isfinite(cutoff_ratio) and float(cutoff_ratio) > 0:
+        threshold = max(threshold, c_peak * float(cutoff_ratio))
+        after_peak = np.where(r_all >= eff_min_r)[0]
+        below_th = [i for i in after_peak if c_all[i] < threshold]
+        if below_th:
+            # threshold を初めて下回った点を含める（1/e 減衰幅を確実に包含）
+            first_below_idx = below_th[0]
+            eff_max_r = min(eff_max_r, float(r_all[first_below_idx]))
+
+    decay_mask = (r_all >= eff_min_r) & (r_all <= eff_max_r) & (c_all >= min_corr_threshold)
+
+    # 3点未満の場合は安全フォールバック（少なくとも先頭3点を確保）
+    if np.count_nonzero(decay_mask) < 3:
+        cand = np.where((r_all >= eff_min_r) & (c_all >= min_corr_threshold))[0]
+        if len(cand) >= 3:
+            decay_mask = np.zeros_like(decay_mask, dtype=bool)
+            decay_mask[cand[:3]] = True
+            eff_max_r = float(r_all[cand[2]])
 
     r_fit = r_all[decay_mask]
     c_fit = c_all[decay_mask]

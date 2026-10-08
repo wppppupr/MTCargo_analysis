@@ -893,6 +893,7 @@ def fit_xi_from_curve(
     min_fit_dist: float,
     max_fit_dist: float,
     min_corr_threshold: float,
+    cutoff_ratio: Optional[float] = 1.0 / np.e,
 ) -> Dict[str, object]:
     """
     C_bg(r) 曲線から ln C = ln a - r / xi の重み付き線形フィットにより xi_bg を求める。
@@ -900,6 +901,7 @@ def fit_xi_from_curve(
     フィット実装は hmm_flow_correlation_analysis.py と共通
     （libs.hmm_flow_correlation.fit_flow_correlation_length）で、これにより
     既存の xi_flow（粒子近傍・BG モード）と同一の定義・同一のフィット範囲条件で比較できる。
+    cutoff_ratio（既定 1/e ≈ 0.368）により、主要減衰領域に限定した適応的フィットを行う。
     """
     empty: Dict[str, object] = {
         'xi_um': np.nan, 'xi_err_um': np.nan, 'r2_log': np.nan, 'r2': np.nan,
@@ -919,7 +921,8 @@ def fit_xi_from_curve(
     })
     res = fit_flow_correlation_length(df, min_fit_dist=float(min_fit_dist),
                                       max_fit_dist=float(max_fit_dist),
-                                      min_corr_threshold=float(min_corr_threshold))
+                                      min_corr_threshold=float(min_corr_threshold),
+                                      cutoff_ratio=cutoff_ratio)
     out = dict(empty)
     for key in ('xi_um', 'xi_err_um', 'r2', 'r2_log', 'r_peak_um', 'r_fit_min_um', 'r_fit_max_um',
                 'fit_r', 'fit_c'):
@@ -941,6 +944,7 @@ def build_tables(
     exp_results: List[dict],
     fit_range: Tuple[float, float],
     min_corr_threshold: float,
+    cutoff_ratio: Optional[float] = 1.0 / np.e,
     error_mode: str = 'frame',
 ) -> Tuple[pd.DataFrame, pd.DataFrame,
            Dict[Tuple[str, str, int], List[float]],
@@ -954,6 +958,7 @@ def build_tables(
 
     error_mode ('frame' | 'sample') は xi_bg フィットの重み（sigma_ln C = SEM / C）に使う誤差を選ぶ。
     どちらのモードでも両方の誤差による xi_bg を算出し CSV に併記する。
+    cutoff_ratio（既定 1/e）により主要減衰領域での適応的フィッティングを行う。
     """
     point_rows: List[dict] = []
     xi_rows: List[dict] = []
@@ -1010,13 +1015,13 @@ def build_tables(
         # 誤差モードに応じた主フィット ＋ 両モードの比較用フィット
         sem_primary = sem_cf if str(error_mode) == 'frame' else sem_c
         fit = fit_xi_from_curve(r_um, mean_c, sem_primary, fit_range[0], fit_range[1],
-                                min_corr_threshold)
+                                min_corr_threshold, cutoff_ratio=cutoff_ratio)
         fit_sample = (fit if str(error_mode) == 'sample'
                       else fit_xi_from_curve(r_um, mean_c, sem_c, fit_range[0], fit_range[1],
-                                             min_corr_threshold))
+                                             min_corr_threshold, cutoff_ratio=cutoff_ratio))
         fit_frame = (fit if str(error_mode) == 'frame'
                      else fit_xi_from_curve(r_um, mean_c, sem_cf, fit_range[0], fit_range[1],
-                                            min_corr_threshold))
+                                            min_corr_threshold, cutoff_ratio=cutoff_ratio))
 
         for i, r in enumerate(r_um):
             point_rows.append({
@@ -1030,7 +1035,7 @@ def build_tables(
                 'mean_c': float(mean_c[i]) if i < mean_c.size else np.nan,
                 'sem_c': float(sem_c[i]) if i < sem_c.size else np.nan,
                 'mean_c_raw': float(mean_c_raw[i]) if i < mean_c_raw.size else np.nan,
-                'sem_c_raw': float(sem_c_raw[i]) if i < sem_c_raw.size else np.nan,
+                'sem_c_raw': float(sem_c_raw[i]) if i < mean_c_raw.size else np.nan,
                 'n_samples': int(n_c[i]) if i < n_c.size else 0,
                 'mean_c_frame': float(mean_cf[i]) if i < mean_cf.size else np.nan,
                 'sem_c_frame': float(sem_cf[i]) if i < sem_cf.size else np.nan,
@@ -1061,6 +1066,7 @@ def build_tables(
             'r_peak_um': float(fit['r_peak_um']),
             'fit_min_um': float(fit['r_fit_min_um']),
             'fit_max_um': float(fit['r_fit_max_um']),
+            'cutoff_ratio': float(cutoff_ratio) if cutoff_ratio is not None else np.nan,
             'error_mode': str(error_mode),
             'xi_um_sample_sem': float(fit_sample['xi_um']),
             'xi_err_um_sample_sem': float(fit_sample['xi_err_um']),
@@ -1097,6 +1103,7 @@ def summarize_conditions(
     grid_distances: np.ndarray,
     fit_range: Tuple[float, float],
     min_corr_threshold: float,
+    cutoff_ratio: Optional[float] = 1.0 / np.e,
     pool_frame: Optional[Dict[Tuple[str, str, int], List[float]]] = None,
     error_mode: str = 'frame',
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -1109,6 +1116,7 @@ def summarize_conditions(
       - フレームブロックプール（pool_frame）: フレーム平均の平均 ± フレーム平均間 SEM
         （実効独立サンプル数 ≈ フレーム数。誤差帯の描画に用いる）
     error_mode ('frame' | 'sample') で主フィット（xi_bg_pooled_um）の誤差重みを選ぶ。
+    cutoff_ratio（既定 1/e）により主要減衰領域での適応的フィッティングを行う。
     """
     curve_rows: List[dict] = []
     summary_rows: List[dict] = []
@@ -1168,12 +1176,13 @@ def summarize_conditions(
                 pfp = pool_stat(pool_frame, 'perp', bead, i)
                 pooled_perp_f[i], pooled_sem_perp_f[i] = pfp[0], pfp[1]
 
-        fit_cond = fit_xi_from_curve(grid, exp_mean, exp_sem, fit_range[0], fit_range[1], min_corr_threshold)
+        fit_cond = fit_xi_from_curve(grid, exp_mean, exp_sem, fit_range[0], fit_range[1],
+                                     min_corr_threshold, cutoff_ratio=cutoff_ratio)
         fit_pooled_sample = fit_xi_from_curve(grid, pooled_mean, pooled_sem, fit_range[0], fit_range[1],
-                                              min_corr_threshold)
+                                              min_corr_threshold, cutoff_ratio=cutoff_ratio)
         has_frame_pool = bool(pool_frame is not None and np.any(np.isfinite(pooled_mean_f)))
         fit_pooled_frame = (fit_xi_from_curve(grid, pooled_mean_f, pooled_sem_f, fit_range[0],
-                                              fit_range[1], min_corr_threshold)
+                                              fit_range[1], min_corr_threshold, cutoff_ratio=cutoff_ratio)
                             if has_frame_pool else fit_pooled_sample)
         fit_pooled = (fit_pooled_frame if (str(error_mode) == 'frame' and has_frame_pool)
                       else fit_pooled_sample)
@@ -1241,6 +1250,7 @@ def summarize_conditions(
             'xi_bg_std_um': float(np.std(xi_vals, ddof=1)) if xi_vals.size > 1 else 0.0,
             'xi_bg_median_um': float(np.median(xi_vals)) if xi_vals.size else np.nan,
             'xi_bg_n_experiments': int(xi_vals.size),
+            'cutoff_ratio': float(cutoff_ratio) if cutoff_ratio is not None else np.nan,
             'error_mode': str(error_mode),
             'n_frames_pooled': int(np.nanmax(pooled_n_frames)) if pooled_n_frames.size else 0,
             'xi_bg_mean_sample_sem_um': (float(np.mean(xi_vals_sample))
@@ -1316,6 +1326,7 @@ def plot_condition_curves(
     meta: dict,
     fit_range: Tuple[float, float],
     min_corr_threshold: float,
+    cutoff_ratio: Optional[float] = 1.0 / np.e,
     xscale: str = 'linear',
     yscale: str = 'log',
     max_dist: float = 12.0,
@@ -1398,7 +1409,8 @@ def plot_condition_curves(
         fit = fit_xi_from_curve(sub['distance_um'].to_numpy(dtype=float),
                                 sub['mean_c'].to_numpy(dtype=float),
                                 sub['sem_c'].to_numpy(dtype=float),
-                                fit_range[0], fit_range[1], min_corr_threshold)
+                                fit_range[0], fit_range[1], min_corr_threshold,
+                                cutoff_ratio=cutoff_ratio)
         fit_r = np.asarray(fit.get('fit_r', np.array([])), dtype=float)
         fit_c = np.asarray(fit.get('fit_c', np.array([])), dtype=float)
         if fit_r.size and np.isfinite(fit.get('xi_um', np.nan)):
@@ -1758,6 +1770,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--scale', type=float, default=0.11, help="Spatial scale (um/pixel).")
     parser.add_argument('--fit_range', type=float, nargs=2, default=[0.0, 20.0], metavar=('MIN', 'MAX'),
                         help="xi_bg フィットに使う距離範囲 [um]（既定 0 20）.")
+    parser.add_argument('--cutoff_ratio', type=float, default=float(1.0 / np.e),
+                        help="適応的フィッティング範囲のカットオフ比率（既定 1/e ≈ 0.368）。"
+                             "相関が C_peak * cutoff_ratio を下回る距離までをフィット上限とする。"
+                             "0 または負値を指定すると --fit_range の上限まで全点フィット。")
     parser.add_argument('--min_corr_threshold', type=float, default=0.01,
                         help="対数をとる C_bg の下限閾値（既定 0.01）.")
     parser.add_argument('--max_dist', type=float, default=60.0, help="C_bg(r) 図の横軸上限 [um].")
@@ -1932,9 +1948,12 @@ def main():
         print("[WARNING] 距離グリッドが実験間で一致しません（先頭実験のグリッドで集計します）")
     grid_um = grid_px * float(args.scale)
 
+    cutoff_ratio = float(args.cutoff_ratio) if (args.cutoff_ratio is not None and args.cutoff_ratio > 0) else None
+
     # --- 集計（実験 -> 条件） ---
     df_points, df_xi, pool, pool_frame = build_tables(exp_results, fit_range,
                                                       args.min_corr_threshold,
+                                                      cutoff_ratio=cutoff_ratio,
                                                       error_mode=args.error_mode)
     meta = {
         'n_exp': len(exp_results),
@@ -1944,10 +1963,12 @@ def main():
         'mask_min_px': float(df_xi['mask_radius_px'].min()),
         'mask_max_px': float(df_xi['mask_radius_px'].max()),
         'error_mode': str(args.error_mode),
+        'cutoff_ratio': cutoff_ratio,
         'n_workers': int(n_workers),
     }
     df_curves, df_summary = summarize_conditions(df_points, df_xi, pool, target_beads,
                                                  grid_um, fit_range, args.min_corr_threshold,
+                                                 cutoff_ratio=cutoff_ratio,
                                                  pool_frame=pool_frame,
                                                  error_mode=args.error_mode)
     global_xi = weighted_global_xi(df_xi)
@@ -1962,6 +1983,7 @@ def main():
     # --- 作図 ---
     plot_condition_curves(df_curves, df_points, df_summary, out_dirs, meta,
                           fit_range, args.min_corr_threshold,
+                          cutoff_ratio=cutoff_ratio,
                           xscale=args.xscale, yscale=args.yscale,
                           max_dist=args.max_dist, ylim=ylim,
                           error_mode=args.error_mode)
