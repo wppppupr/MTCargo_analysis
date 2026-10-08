@@ -8,6 +8,7 @@ import os
 import sys
 import glob
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 # libsモジュールの読み込み
 from libs import fit_model as fm
@@ -134,9 +135,96 @@ def calc_pooled_MSD_stats(df_pool: pd.DataFrame, min_particles: int = 1) -> pd.D
     return stats_df
 
 
-def concat_dimensionless_MSD(folder, interval_list, Rc, scale = 0.11, alpha_threshold = 0.5):
+def load_correlation_lengths(root_dir: Optional[Path] = None) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """
+    空間配向相関から得られた相関長 xi [um] を読み込む。
+    1. bg_angular_correlation_length_per_experiment.csv (実験ごと)
+    2. bg_angular_correlation_length_summary.csv (条件ごと)
+    3. xi.csv (フォールバック)
+    戻り値: (xi_exp_dict, xi_cond_dict)
+    """
+    workspace_dir = Path(__file__).parent.resolve()
+    xi_exp_dict: Dict[str, float] = {}
+    xi_cond_dict: Dict[str, float] = {}
+
+    # 1. 実験ごとの相関長 CSV
+    cand_per_exp = [
+        workspace_dir / 'figure' / 'bg_angular_correlation' / 'bg_angular_correlation_length_per_experiment.csv',
+    ]
+    if root_dir is not None:
+        cand_per_exp.append(Path(root_dir) / 'figure' / 'bg_angular_correlation' / 'bg_angular_correlation_length_per_experiment.csv')
+    
+    for p in cand_per_exp:
+        if p.exists():
+            try:
+                df = pd.read_csv(p)
+                for _, row in df.iterrows():
+                    exp_name = str(row['exp_dir']).strip()
+                    if 'xi_um' in row and np.isfinite(row['xi_um']) and row['xi_um'] > 0:
+                        xi_exp_dict[exp_name] = float(row['xi_um'])
+                break
+            except Exception as e:
+                print(f"[WARNING] Could not read {p}: {e}")
+
+    # 2. 条件ごとのサマリー CSV
+    cand_summary = [
+        workspace_dir / 'figure' / 'bg_angular_correlation' / 'bg_angular_correlation_length_summary.csv',
+    ]
+    if root_dir is not None:
+        cand_summary.append(Path(root_dir) / 'figure' / 'bg_angular_correlation' / 'bg_angular_correlation_length_summary.csv')
+
+    for p in cand_summary:
+        if p.exists():
+            try:
+                df = pd.read_csv(p)
+                for _, row in df.iterrows():
+                    bname = str(row['bead_name']).strip()
+                    val = row.get('xi_bg_mean_um', np.nan)
+                    if np.isfinite(val) and val > 0:
+                        xi_cond_dict[bname] = float(val)
+                break
+            except Exception as e:
+                print(f"[WARNING] Could not read {p}: {e}")
+
+    # 3. xi.csv によるフォールバック
+    cand_xi_csv = [
+        workspace_dir / 'xi.csv',
+    ]
+    if root_dir is not None:
+        cand_xi_csv.append(Path(root_dir) / 'xi.csv')
+
+    for p in cand_xi_csv:
+        if p.exists():
+            try:
+                df = pd.read_csv(p)
+                df.columns = df.columns.str.strip()
+                for ctype in ['flow_particle', 'background', 'bead_flow']:
+                    sub = df[(df['component'] == 'total') & (df['type'] == ctype)]
+                    for _, row in sub.iterrows():
+                        cname = str(row['condition']).strip()
+                        if cname not in xi_cond_dict and np.isfinite(row['xi_um']) and row['xi_um'] > 0:
+                            xi_cond_dict[cname] = float(row['xi_um'])
+                break
+            except Exception as e:
+                print(f"[WARNING] Could not read {p}: {e}")
+
+    return xi_exp_dict, xi_cond_dict
+
+
+def concat_dimensionless_MSD(
+    folder,
+    interval_list,
+    Rc,
+    scale = 0.11,
+    alpha_threshold = 0.5,
+    xi_exp_dict: Optional[Dict[str, float]] = None,
+    xi_cond_dict: Optional[Dict[str, float]] = None
+):
     all_imsds = []
-    file_list = sorted(glob.glob(str(Path(folder) / "*" / "*" / "beads_tracks.csv")))
+    folder_path = Path(folder)
+    cond_name = folder_path.name
+    file_list = sorted(glob.glob(str(folder_path / "*" / "*" / "beads_tracks.csv")))
+    
     for vid_idx, file_path in enumerate(file_list):
         interval = interval_list[vid_idx] if vid_idx < len(interval_list) else interval_list[-1]
         track = cv.cal(pd.read_csv(file_path), scale=scale, frame_interval=interval)
@@ -144,16 +232,42 @@ def concat_dimensionless_MSD(folder, interval_list, Rc, scale = 0.11, alpha_thre
         imsd_df['video_idx'] = vid_idx
         imsd_df['unique_particle_id'] = f"vid{vid_idx}_" + imsd_df['particle'].astype(str)
         
+        # 微小管速度 v_MT の取得 (velocities_mean.csv)
         vel_path = Path(file_path).parent / "velocities_mean.csv"
         if vel_path.exists():
-            v0 = pd.read_csv(vel_path)['mean_velocity'].mean()
+            try:
+                df_vel = pd.read_csv(vel_path)
+                if 'mean_velocity' in df_vel.columns and len(df_vel) > 0:
+                    v0 = float(df_vel['mean_velocity'].mean())
+                else:
+                    v0 = 1.0
+            except Exception:
+                v0 = 1.0
         else:
             v0 = 1.0
             
-        d_MT = 0.025
-        Tc = d_MT / v0
-        imsd_df['dim_lag_time'] = imsd_df['lag time'] / Tc
-        imsd_df['dim_MSD'] = imsd_df['MSD'] / (d_MT**2)
+        if not np.isfinite(v0) or v0 <= 0:
+            v0 = 1.0
+            
+        # 空間配向相関から得た相関長 xi の取得 (実験ごと -> 条件代表値 -> フォールバック)
+        exp_name = Path(file_path).parent.name
+        xi = None
+        if xi_exp_dict and exp_name in xi_exp_dict:
+            xi = xi_exp_dict[exp_name]
+        elif xi_cond_dict and cond_name in xi_cond_dict:
+            xi = xi_cond_dict[cond_name]
+        if xi is None or not np.isfinite(xi) or xi <= 0:
+            xi = 5.33  # フォールバック値 [um]
+            
+        # 特徴時間 tau = xi / v_MT
+        tau = xi / v0
+        
+        # 無次元化: <dr^2> は xi^2 でわる、dt は tau でわる
+        imsd_df['dim_lag_time'] = imsd_df['lag time'] / tau
+        imsd_df['dim_MSD'] = imsd_df['MSD'] / (xi**2)
+        imsd_df['xi_um'] = xi
+        imsd_df['v_MT_um_s'] = v0
+        imsd_df['tau_s'] = tau
         imsd_df['exp'] = vid_idx
         all_imsds.append(imsd_df)
         
@@ -821,13 +935,16 @@ def main():
     print(f"  beads7um:  {n_tot_7um} -> {n_filt_7um} particles (removed {n_tot_7um - n_filt_7um})")
     print(f"  beads20um: {n_tot_20um} -> {n_filt_20um} particles (removed {n_tot_20um - n_filt_20um})")
     
-    # 無次元化 MSD (alpha > 0.5 フィルタ済み)
-    dim_msd06um = concat_dimensionless_MSD(root_dir / "beads06um", [4, 4, 4, 4], Rc=0.315, alpha_threshold=alpha_thresh)
-    dim_msd1um  = concat_dimensionless_MSD(root_dir / "beads1um",  [4, 4, 4, 4], Rc=0.59,  alpha_threshold=alpha_thresh)
-    dim_msd3um  = concat_dimensionless_MSD(root_dir / "beads3um",  [4, 4, 4, 4], Rc=1.685, alpha_threshold=alpha_thresh)
-    dim_msd5um  = concat_dimensionless_MSD(root_dir / "beads5um",  [4, 4, 4, 4], Rc=2.5,   alpha_threshold=alpha_thresh)
-    dim_msd7um  = concat_dimensionless_MSD(root_dir / "beads7um",  [4, 4, 4],    Rc=3.62,  alpha_threshold=alpha_thresh)
-    dim_msd20um = concat_dimensionless_MSD(root_dir / "beads20um", [4, 4, 4],    Rc=10.0,  alpha_threshold=alpha_thresh)
+    # 無次元化 MSD (alpha > 0.5 フィルタ済み, 特徴距離 xi, 特徴時間 tau = xi / v_MT)
+    xi_exp_dict, xi_cond_dict = load_correlation_lengths(root_dir=root_dir)
+    print(f"\nLoaded {len(xi_exp_dict)} experiment correlation lengths and {len(xi_cond_dict)} condition correlation lengths.")
+    
+    dim_msd06um = concat_dimensionless_MSD(root_dir / "beads06um", [4, 4, 4, 4], Rc=0.315, alpha_threshold=alpha_thresh, xi_exp_dict=xi_exp_dict, xi_cond_dict=xi_cond_dict)
+    dim_msd1um  = concat_dimensionless_MSD(root_dir / "beads1um",  [4, 4, 4, 4], Rc=0.59,  alpha_threshold=alpha_thresh, xi_exp_dict=xi_exp_dict, xi_cond_dict=xi_cond_dict)
+    dim_msd3um  = concat_dimensionless_MSD(root_dir / "beads3um",  [4, 4, 4, 4], Rc=1.685, alpha_threshold=alpha_thresh, xi_exp_dict=xi_exp_dict, xi_cond_dict=xi_cond_dict)
+    dim_msd5um  = concat_dimensionless_MSD(root_dir / "beads5um",  [4, 4, 4, 4], Rc=2.5,   alpha_threshold=alpha_thresh, xi_exp_dict=xi_exp_dict, xi_cond_dict=xi_cond_dict)
+    dim_msd7um  = concat_dimensionless_MSD(root_dir / "beads7um",  [4, 4, 4],    Rc=3.62,  alpha_threshold=alpha_thresh, xi_exp_dict=xi_exp_dict, xi_cond_dict=xi_cond_dict)
+    dim_msd20um = concat_dimensionless_MSD(root_dir / "beads20um", [4, 4, 4],    Rc=10.0,  alpha_threshold=alpha_thresh, xi_exp_dict=xi_exp_dict, xi_cond_dict=xi_cond_dict)
 
     dim_elag_06um, dim_emsd_06um, dim_err_06um, _ = calc_dimensionless_MSD(dim_msd06um)
     dim_elag_1um,  dim_emsd_1um,  dim_err_1um, _  = calc_dimensionless_MSD(dim_msd1um)
@@ -1437,7 +1554,7 @@ def main():
     save_figure_to_all(fig2, "alpha", out_dirs)
     
     # ---------------------------------------------------------
-    # 図3: 無次元化 MSD
+    # 図3: 無次元化 MSD (特徴距離 xi, 特徴時間 tau = xi / v_MT)
     # ---------------------------------------------------------
     fig3, ax3 = plt.subplots()
     ax3.plot(dim_elag_06um, dim_emsd_06um, marker='^', label=f'0.63 \u03bcm', alpha=alpha, markersize=marker_size, color=style_colors[0])
@@ -1453,14 +1570,27 @@ def main():
     ax3.plot(dim_elag_20um, dim_emsd_20um, marker='s', label=f'20.0 \u03bcm', alpha=alpha, markersize=marker_size, color=style_colors[5])
     ax3.fill_between(dim_elag_20um, dim_emsd_20um - dim_err_20um, dim_emsd_20um + dim_err_20um, edgecolor=style_colors[5], facecolor=mcolors.to_rgba(style_colors[5], alpha=0.2))
     
-    t_start, t_end = 100, 400
-    max_A2 = 0
+    # ガイド線の範囲を無次元時間データから決定
+    valid_curves = [
+        (dim_elag_06um, dim_emsd_06um), (dim_elag_1um, dim_emsd_1um), 
+        (dim_elag_3um, dim_emsd_3um), (dim_elag_5um, dim_emsd_5um), 
+        (dim_elag_7um, dim_emsd_7um), (dim_elag_20um, dim_emsd_20um)
+    ]
+    all_lags = [l for l, _ in valid_curves if len(l) > 0]
+    if all_lags:
+        min_l = max(float(np.min(l)) for l in all_lags)
+        max_l = min(float(np.max(l)) for l in all_lags)
+        t_start = max(min_l * 1.5, 1.0)
+        t_end = min(max_l * 0.8, 50.0)
+        if t_end <= t_start:
+            t_start, t_end = min_l, max_l
+    else:
+        t_start, t_end = 2.0, 30.0
+        
+    max_A2 = 0.0
     min_A1 = np.inf
-    
-    for dim_elag, dim_emsd in [(dim_elag_06um, dim_emsd_06um), (dim_elag_1um, dim_emsd_1um), 
-                               (dim_elag_3um, dim_emsd_3um), (dim_elag_5um, dim_emsd_5um), 
-                               (dim_elag_7um, dim_emsd_7um), (dim_elag_20um, dim_emsd_20um)]:
-        valid_idx = (dim_elag > t_start) & (dim_elag < t_end)
+    for dim_elag, dim_emsd in valid_curves:
+        valid_idx = (dim_elag >= t_start) & (dim_elag <= t_end)
         if valid_idx.any():
             t_ref = dim_elag[valid_idx].values
             msd_ref = dim_emsd[valid_idx].values
@@ -1469,19 +1599,21 @@ def main():
             
     if max_A2 > 0 and min_A1 < np.inf:
         A1 = min_A1 * 0.3
-        ax3.plot([t_start, t_end], [A1 * t_start, A1 * t_end], color='#333333')
-        ax3.text(t_start * 1.5, A1 * (t_start * 1.5) * 0.5, r'$\propto \Delta\tilde{t}^{1.0}$')
+        ax3.plot([t_start, t_end], [A1 * t_start, A1 * t_end], color='#333333', linestyle='--')
+        ax3.text(t_start * 1.3, A1 * (t_start * 1.3) * 0.5, r'$\propto \widetilde{\Delta t}^{1.0}$')
         
         A2 = max_A2 * 3.0
-        ax3.plot([t_start, t_end], [A2 * (t_start**2), A2 * (t_end**2)], color='#333333')
-        ax3.text(t_start * 1.2, A2 * ((t_start * 1.2)**2) * 1.5, r'$\propto \Delta\tilde{t}^{2.0}$')
+        ax3.plot([t_start, t_end], [A2 * (t_start**2), A2 * (t_end**2)], color='#333333', linestyle='--')
+        ax3.text(t_start * 1.1, A2 * ((t_start * 1.1)**2) * 1.5, r'$\propto \widetilde{\Delta t}^{2.0}$')
         
     ax3.legend()
     ax3.set(
+        xlim=(1e-1, 1e2),
+        ylim=(1e-3, 1e3),
         xscale='log',
         yscale='log',
-        xlabel='Dimensionless lag time $\\Delta\\tilde{t}$',
-        ylabel='Dimensionless MSD $\\langle\\Delta\\tilde{\\boldsymbol{r}}^2\\rangle$'
+        xlabel=r'Dimensionless lag time $\widetilde{\Delta t} = \Delta t / \tau$',
+        ylabel=r'Dimensionless MSD $\langle \widetilde{\Delta r}^2 \rangle = \langle \Delta r^2 \rangle / \xi^2$'
     )
     save_figure_to_all(fig3, "dimensionless_MSD", out_dirs)
     
@@ -1511,8 +1643,8 @@ def main():
     ax5.set(
         ylim=(0,2),
         xscale='log',
-        xlabel='Dimensionless lag time $\\Delta\\tilde{t}$',
-        ylabel='Local exponent $\\alpha(\\tilde{t}) = d\\log(\\widetilde{MSD}) / d\\log(\\Delta\\tilde{t})$'
+        xlabel=r'Dimensionless lag time $\widetilde{\Delta t} = \Delta t / \tau$',
+        ylabel=r'Local exponent $\alpha(\widetilde{\Delta t}) = d\log(\langle\widetilde{\Delta r}^2\rangle) / d\log(\widetilde{\Delta t})$'
     )
     save_figure_to_all(fig5, "dimensionless_local_alpha", out_dirs)
 

@@ -3,24 +3,147 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
-def cal(tracking_df, scale=1, frame_interval=1, pos_window=None, pos_center=False, pos_min_periods=1):
+def cal(
+    tracking_df,
+    scale=1,
+    frame_interval=1,
+    pos_window=None,
+    pos_center=False,
+    pos_min_periods=1,
+    smooth_method=None,
+    noise_std=0.05,
+    k=3,
+    smoothing_factor=None,
+):
     """
-    データフレーム内の各particleごとに位置を（オプションで）平滑化してから
-    速さ（スカラー値）と角度（ラジアン），角度変化などを計算して新しいカラムとして追加する関数。
+    データフレーム内の各particleごとに速度ベクトル (vx, vy)、速さ (v)、
+    角度 (theta)、角度変化 (dtheta, omega, alpha) などを計算して新しいカラムとして追加する関数。
 
     Parameters:
     - tracking_df: トラッキング結果のデータフレーム（'x', 'y', 'particle', 'frame'を含む）
-    - frame_interval: フレーム間の時間間隔（デフォルトは1)
-    - pos_window: 位置に対する移動平均ウィンドウ（int）。None の場合は平滑化しない。
+    - scale: μm/pixel 変換スケール（デフォルト: 1）
+    - frame_interval: フレーム間の時間間隔 [s]（デフォルト: 1）
+    - smooth_method: None / 'none' / 'raw' (既定: 生データ差分法), 'spline' (平滑化スプライン + 解析的微分), 'moving_average' (移動平均)
+    - noise_std: 観測ノイズ標準偏差 [μm] (spline の平滑化パラメータ s = N * noise_std^2 の計算用、デフォルト: 0.05)
+    - k: スプラインの次数 (デフォルト: 3)
+    - smoothing_factor: スプライン平滑化パラメータ s (明示指定する場合。None の場合は noise_std から自動計算)
+    - pos_window: 位置移動平均ウィンドウ（int、指定時は移動平均モード）
     - pos_center: rolling の center 引数
     - pos_min_periods: rolling の min_periods
 
     Returns:
-    - tracking_df: 速さ・角度等のカラムが追加されたデータフレーム
+    - tracking_df: 速さ (v)、速度成分 (vx, vy)、角度 (theta)、平滑化座標 (x_s, y_s / x_smooth, y_smooth) 等のカラムが追加されたデータフレーム
     """
-    # 各パーティクルごとに速度と角度を計算
+    if pos_window is not None and pos_window > 1:
+        smooth_method = "moving_average"
+
+    s_method_str = str(smooth_method).lower() if smooth_method is not None else "none"
+
+    if s_method_str in ("spline", "smoothing_spline"):
+        from libs.trajectory_velocity import SplineVelocityEstimator
+
+        estimator = SplineVelocityEstimator(
+            smoothing_factor=smoothing_factor,
+            noise_std=noise_std,
+            k=k,
+        )
+
+        def calculate_spline_per_particle(df):
+            df = df.sort_values('frame').copy()
+            N = len(df)
+            t = df['frame'].values * frame_interval
+            x = df['x'].values
+            y = df['y'].values
+
+            if N >= 2:
+                try:
+                    res = estimator.estimate(t, x, y, scale=scale)
+                    df['x_s'] = res.x_smooth
+                    df['y_s'] = res.y_smooth
+                    df['x_smooth'] = res.x_smooth
+                    df['y_smooth'] = res.y_smooth
+                    df['vx'] = res.vx
+                    df['vy'] = res.vy
+                    df['v'] = res.v
+                    df['theta'] = res.theta
+                    df['distance'] = res.v * frame_interval / scale
+                except Exception:
+                    return _calculate_diff_per_particle(df)
+            else:
+                return _calculate_diff_per_particle(df)
+
+            # 速度が微小な点の theta を NaN に
+            df.loc[df['v'] <= 1e-8, 'theta'] = np.nan
+
+            # 単位方向ベクトル dx, dy
+            with np.errstate(divide='ignore', invalid='ignore'):
+                dx = np.where(df['v'] > 1e-8, df['vx'] / df['v'], np.nan)
+                dy = np.where(df['v'] > 1e-8, df['vy'] / df['v'], np.nan)
+            df['dx'] = dx
+            df['dy'] = dy
+
+            dx_prev = df['dx'].shift(1)
+            dy_prev = df['dy'].shift(1)
+            cross = dx_prev * df['dy'] - dy_prev * df['dx']
+            dot = dx_prev * df['dx'] + dy_prev * df['dy']
+
+            df['dtheta'] = np.arctan2(cross, dot)
+            df.loc[df['v'] <= 1e-8, 'dtheta'] = np.nan
+            df['omega'] = df['dtheta'] / frame_interval
+
+            # 進行方向変化ベクトル alpha
+            df['ddx'] = df['dx'] - dx_prev
+            df['ddy'] = df['dy'] - dy_prev
+            df['alpha'] = np.arctan2(df['ddy'], df['ddx'])
+            df.loc[df['v'] <= 1e-8, 'alpha'] = np.nan
+
+            df['t'] = t
+            return df
+
+        def _calculate_diff_per_particle(df):
+            x_ref = df['x']
+            y_ref = df['y']
+            df['x_s'] = x_ref
+            df['y_s'] = y_ref
+            df['x_smooth'] = x_ref * scale
+            df['y_smooth'] = y_ref * scale
+
+            df['x_diff'] = x_ref - x_ref.shift(1)
+            df['y_diff'] = y_ref - y_ref.shift(1)
+            df['distance'] = np.sqrt(df['x_diff'] ** 2 + df['y_diff'] ** 2)
+            df['v'] = scale * df['distance'] / frame_interval
+            df['vx'] = scale * df['x_diff'] / frame_interval
+            df['vy'] = scale * df['y_diff'] / frame_interval
+
+            df['theta'] = np.arctan2(df['y_diff'], df['x_diff'])
+            df.loc[df['distance'] == 0, 'theta'] = np.nan
+
+            df['dx'] = df['x_diff'] / df['distance']
+            df['dy'] = df['y_diff'] / df['distance']
+            df.loc[df['distance'] == 0, ['dx', 'dy']] = np.nan
+
+            dx_prev = df['dx'].shift(1)
+            dy_prev = df['dy'].shift(1)
+            cross = dx_prev * df['dy'] - dy_prev * df['dx']
+            dot = dx_prev * df['dx'] + dy_prev * df['dy']
+
+            df['dtheta'] = np.arctan2(cross, dot)
+            df.loc[df['distance'] == 0, 'dtheta'] = np.nan
+            df['omega'] = df['dtheta'] / frame_interval
+
+            df['ddx'] = df['dx'] - dx_prev
+            df['ddy'] = df['dy'] - dy_prev
+            df['alpha'] = np.arctan2(df['ddy'], df['ddx'])
+            df.loc[df['distance'] == 0, 'alpha'] = np.nan
+
+            df['t'] = df['frame'] * frame_interval
+            return df
+
+        tracking_df = tracking_df.groupby('particle', group_keys=False).apply(calculate_spline_per_particle)
+        return tracking_df
+
+    # 従来の移動平均 / 差分法
     def calculate_v_and_theta(df, frame_interval=frame_interval):
-        # Optional: smooth positions per-particle using rolling mean
         if pos_window is not None and pos_window > 1:
             df['x_s'] = df['x'].rolling(window=pos_window, center=pos_center, min_periods=pos_min_periods).mean()
             df['y_s'] = df['y'].rolling(window=pos_window, center=pos_center, min_periods=pos_min_periods).mean()
@@ -33,13 +156,17 @@ def cal(tracking_df, scale=1, frame_interval=1, pos_window=None, pos_center=Fals
         # 前のフレームとの座標差を計算
         df['x_diff'] = x_ref - x_ref.shift(1)
         df['y_diff'] = y_ref - y_ref.shift(1)
-        
+
         # 座標差から距離（速さ）を計算
-        df['distance'] = np.sqrt(df['x_diff']**2 + df['y_diff']**2)
-        
+        df['distance'] = np.sqrt(df['x_diff'] ** 2 + df['y_diff'] ** 2)
+
         # 速さを計算
         df['v'] = scale * df['distance'] / frame_interval
-        
+        df['vx'] = scale * df['x_diff'] / frame_interval
+        df['vy'] = scale * df['y_diff'] / frame_interval
+        df['x_smooth'] = x_ref * scale
+        df['y_smooth'] = y_ref * scale
+
         # 角度（ラジアン）を計算（np.arctan2）。距離が0の点はNaNにする
         df['theta'] = np.arctan2(df['y_diff'], df['x_diff'])
         df.loc[df['distance'] == 0, 'theta'] = np.nan
@@ -47,12 +174,12 @@ def cal(tracking_df, scale=1, frame_interval=1, pos_window=None, pos_center=Fals
         # 角度方向の変化（符号付き回転量）
         df['dx'] = df['x_diff'] / df['distance']
         df['dy'] = df['y_diff'] / df['distance']
-        df.loc[df['distance'] == 0, ['dx','dy']] = np.nan
+        df.loc[df['distance'] == 0, ['dx', 'dy']] = np.nan
 
         dx_prev = df['dx'].shift(1)
         dy_prev = df['dy'].shift(1)
         cross = dx_prev * df['dy'] - dy_prev * df['dx']
-        dot   = dx_prev * df['dx'] + dy_prev * df['dy']
+        dot = dx_prev * df['dx'] + dy_prev * df['dy']
 
         df['dtheta'] = np.arctan2(cross, dot)
         df.loc[df['distance'] == 0, 'dtheta'] = np.nan
@@ -65,22 +192,67 @@ def cal(tracking_df, scale=1, frame_interval=1, pos_window=None, pos_center=Fals
         df.loc[df['distance'] == 0, 'alpha'] = np.nan
 
         df['t'] = df['frame'] * frame_interval
-        
-        cols = ['v', 'theta', 'alpha', 't', 'dtheta', 'omega']
+
+        cols = ['v', 'vx', 'vy', 'theta', 'alpha', 't', 'dtheta', 'omega', 'x_smooth', 'y_smooth']
         if 'x_s' in df.columns:
             cols += ['x_s', 'y_s']
         return df[cols]
-    
+
     # パーティクルごとに速度と角度を一度に計算してデータフレームに追加
-    cols_to_assign = ['v', 'theta', 'alpha', 't', 'dtheta', 'omega']
+    cols_to_assign = ['v', 'vx', 'vy', 'theta', 'alpha', 't', 'dtheta', 'omega', 'x_smooth', 'y_smooth']
     if pos_window is not None and pos_window > 1:
         cols_to_assign += ['x_s', 'y_s']
 
-    tracking_df[cols_to_assign] = tracking_df.groupby('particle').apply(
-        calculate_v_and_theta
-    ).reset_index(level=0, drop=True)
+    res = tracking_df.groupby('particle', group_keys=False).apply(calculate_v_and_theta)
+    for c in cols_to_assign:
+        tracking_df[c] = res[c]
 
     return tracking_df
+
+
+def cal_advanced(
+    tracking_df: pd.DataFrame,
+    method: str = "kalman_rts",
+    scale: float = 1.0,
+    frame_interval: float = 1.0,
+    **kwargs
+) -> pd.DataFrame:
+    """
+    高度な平滑化・微分手法を用いてトラッキングデータから速度・角速度等を計算する関数。
+
+    Parameters:
+    - tracking_df: トラッキング結果の DataFrame ('x', 'y', 'particle', 'frame' を含む)
+    - method: 'kalman_rts' (カルマン/RTS スムーザー), 'spline' (平滑化スプライン), 'diff' (差分法)
+    - scale: μm/pixel 変換スケール
+    - frame_interval: フレーム間時間隔 [s]
+    - kwargs: 各推定器へのオプション引数 (例: obs_noise_std, process_noise_std, smoothing_factor 等)
+
+    Returns:
+    - tracking_df: vx, vy, v, theta, omega, x_smooth, y_smooth, v_std 等が追加された DataFrame
+    """
+    from libs.trajectory_velocity import estimate_particle_velocities
+
+    df_res = estimate_particle_velocities(
+        tracking_df=tracking_df,
+        method=method,
+        frame_interval=frame_interval,
+        scale=scale,
+        **kwargs
+    )
+
+    # 角度変化 dtheta, 角速度 omega も追加計算
+    def _calc_angular(df_p):
+        theta = df_p['theta'].values
+        # 連続する角度差 (wrapped to [-pi, pi])
+        dtheta = np.diff(theta, prepend=theta[0])
+        dtheta = (dtheta + np.pi) % (2 * np.pi) - np.pi
+        df_p['dtheta'] = dtheta
+        df_p['omega'] = dtheta / frame_interval
+        return df_p
+
+    df_res = df_res.groupby('particle', group_keys=False).apply(_calc_angular)
+    return df_res
+
 
 
 def plot_v(tracking_df, color = "black", alpha = 0.2, time_interval = 1, xlabel = 'x', ylabel = 'y', title = 'title'):

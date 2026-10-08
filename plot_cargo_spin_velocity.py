@@ -170,6 +170,8 @@ CURRENT_DIR = Path(__file__).parent.resolve()
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
+from libs.trajectory_velocity import SplineVelocityEstimator
+
 from libs import hmm_cargo as hc
 from libs import ising_magnetization as ising
 import plot_mt_orientation_distribution as mt_ori
@@ -299,22 +301,30 @@ def tracked_velocity_lookup(
     tau: int = 1,
     scale: float = 0.11,
     frame_interval: float = 4.0,
-    smooth_method: str = 'moving_average',
+    smooth_method: str = 'none',
     smooth_window: int = 3,
     savgol_poly: int = 2,
     savgol_window: Optional[int] = None,
+    spline_noise_std: float = 0.05,
+    spline_k: int = 3,
+    spline_s: Optional[float] = None,
 ) -> Dict[Tuple[int, int], Tuple[float, float, float]]:
     """
     beads_tracks.csv から (particle, frame) -> (vx, vy, v_mag) [um/s] の辞書を作る。
 
-    移動平均フィルタ（smooth_method='moving_average',既定）または Savitzky-Golay フィルタ
-    により各粒子の連続軌跡 (x, y) を平滑化してから速度ベクトル (vx, vy) および速力 v_mag を算出する。
+    生データ差分法（smooth_method='none' / 'raw', 既定）、平滑化スプライン（smooth_method='spline'）、
+    移動平均フィルタ（'moving_average'）、または Savitzky-Golay フィルタ（'savgol'）を選択可能。
 
     定義:
-        dt = tau * frame_interval [s]
-        vx = (x_smooth(t + tau) - x_smooth(t)) / dt
-        vy = (y_smooth(t + tau) - y_smooth(t)) / dt
-        v_mag = sqrt(vx^2 + vy^2)
+        スプライン (tau == 1):
+            vx = x'_spline(t)
+            vy = y'_spline(t)
+            v_mag = sqrt(vx^2 + vy^2)
+        差分 (tau >= 1 または移動平均/SG):
+            dt = tau * frame_interval [s]
+            vx = (x_smooth(t + tau) - x_smooth(t)) / dt
+            vy = (y_smooth(t + tau) - y_smooth(t)) / dt
+            v_mag = sqrt(vx^2 + vy^2)
 
     連続フレーム対 (t, t + tau) が存在する場合のみ値を持つ（欠損フレームは含まれない）。
     """
@@ -357,7 +367,26 @@ def tracked_velocity_lookup(
             x_seg = xs[seg_indices]
             y_seg = ys[seg_indices]
 
-            if s_method in ('moving_average', 'ma') and w_smooth > 1 and n_seg >= w_smooth:
+            if s_method in ('spline', 'smoothing_spline') and n_seg >= 2:
+                t_seg = f_seg * frame_interval
+                spl_estimator = SplineVelocityEstimator(
+                    smoothing_factor=spline_s,
+                    noise_std=spline_noise_std,
+                    k=spline_k,
+                )
+                try:
+                    res = spl_estimator.estimate(t_seg, x_seg, y_seg, scale=1.0)
+                    if tau == 1:
+                        for k in range(n_seg - 1):
+                            if f_seg[k + 1] == f_seg[k] + 1:
+                                out[(int(pid), int(f_seg[k]))] = (float(res.vx[k]), float(res.vy[k]), float(res.v[k]))
+                        continue
+                    else:
+                        x_smooth = res.x_smooth
+                        y_smooth = res.y_smooth
+                except Exception:
+                    x_smooth, y_smooth = x_seg, y_seg
+            elif s_method in ('moving_average', 'ma') and w_smooth > 1 and n_seg >= w_smooth:
                 x_smooth = moving_average_1d(x_seg, window=w_smooth)
                 y_smooth = moving_average_1d(y_seg, window=w_smooth)
             elif s_method in ('savgol', 'sg') and w_smooth > 1 and n_seg >= 3:
@@ -506,10 +535,13 @@ def process_experiment_cargo(
     flow_cache: str = 'auto',
     flow_cache_name: Optional[str] = None,
     progress: bool = True,
-    smooth_method: str = 'moving_average',
+    smooth_method: str = 'none',
     smooth_window: int = 3,
     savgol_poly: int = 2,
     savgol_window: Optional[int] = None,
+    spline_noise_std: float = 0.05,
+    spline_k: int = 3,
+    spline_s: Optional[float] = None,
 ) -> Optional[dict]:
     """
     1 つの実験ディレクトリについて、各フレーム t・各貨物粒子 i の
@@ -564,7 +596,8 @@ def process_experiment_cargo(
         smooth_window = int(savgol_window)
     v_track = tracked_velocity_lookup(
         df_tracks, tau=tau, scale=scale, frame_interval=frame_interval,
-        smooth_method=smooth_method, smooth_window=smooth_window, savgol_poly=savgol_poly)
+        smooth_method=smooth_method, smooth_window=smooth_window, savgol_poly=savgol_poly,
+        spline_noise_std=spline_noise_std, spline_k=spline_k, spline_s=spline_s)
     if not positions:
         print(f"    [WARNING] no usable cargo positions in {tracks_path}", flush=True)
         return None
@@ -2347,11 +2380,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--frame_interval', type=float, default=4.0, help="フレーム間隔 [s]")
     parser.add_argument('--tau', type=int, default=1,
                         help="速度計算のラグ [frames]（1 = 連続フレーム、光学フローと同時刻）")
-    parser.add_argument('--smooth_method', type=str, default='moving_average',
-                        choices=['moving_average', 'savgol', 'none'],
-                        help="貨物軌跡の平滑化方式（moving_average = 移動平均、savgol = Savitzky-Golay、none = なし）")
+    parser.add_argument('--smooth_method', type=str, default='none',
+                        choices=['none', 'raw', 'spline', 'moving_average', 'savgol'],
+                        help="貨物軌跡の平滑化方式（none / raw = 生データ差分法（既定）、spline = 平滑化スプライン+解析微分、moving_average = 移動平均、savgol = Savitzky-Golay）")
+    parser.add_argument('--spline_noise_std', type=float, default=0.05,
+                        help="スプライン平滑化の観測ノイズ標準偏差 [um]（smooth_method=spline 時、既定 0.05）")
+    parser.add_argument('--spline_k', type=int, default=3,
+                        help="スプラインの次数（smooth_method=spline 時、既定 3）")
     parser.add_argument('--smooth_window', type=int, default=3,
-                        help="貨物軌跡の平滑化窓幅 [frames]（既定 3 = 12 秒、<=1 で無効化）")
+                        help="貨物軌跡の平滑化窓幅 [frames]（移動平均/SG用、既定 3 = 12 秒、<=1 で無効化）")
     parser.add_argument('--savgol_window', type=int, default=None,
                         help="--smooth_window のエイリアス（互換性用）")
     parser.add_argument('--savgol_poly', type=int, default=2,
@@ -2506,7 +2543,9 @@ def main() -> None:
                 progress=not args.no_progress,
                 smooth_method=args.smooth_method,
                 smooth_window=w_smooth,
-                savgol_poly=args.savgol_poly)
+                savgol_poly=args.savgol_poly,
+                spline_noise_std=args.spline_noise_std,
+                spline_k=args.spline_k)
             if res is None:
                 continue
             print(f"    {exp_dir.name}: {res['n_frames_used']}/{res['n_frames_total']} frames, "
