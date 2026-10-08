@@ -131,8 +131,18 @@ def _style_colors(n: int) -> List[str]:
     return [cols[i % len(cols)] for i in range(n)]
 
 
-# 貨物粒子（ビーズ）の直径・半径・マーカー
+# 貨物粒子（ビーズ）およびコントロール条件の定義
 BEADS_INFO = [
+    {
+        "name": "control",
+        "dir_name": "control/MTs8uM",
+        "display_name": "w/o Cargo",
+        "diameter_um": np.nan,
+        "radius_um": 0.0,
+        "marker": None,
+        "color": "black",
+        "is_control": True,
+    },
     {"name": "beads06um", "diameter_um": 0.63, "radius_um": 0.315, "marker": "^"},
     {"name": "beads1um",  "diameter_um": 1.18, "radius_um": 0.590, "marker": "o"},
     {"name": "beads3um",  "diameter_um": 3.37, "radius_um": 1.685, "marker": "d"},
@@ -140,7 +150,8 @@ BEADS_INFO = [
     {"name": "beads7um",  "diameter_um": 7.24, "radius_um": 3.620, "marker": "h"},
     {"name": "beads20um", "diameter_um": 20.0, "radius_um": 10.00, "marker": "s"},
 ]
-for _b, _c in zip(BEADS_INFO, _style_colors(len(BEADS_INFO))):
+cargo_beads = [b for b in BEADS_INFO if not b.get("is_control", False)]
+for _b, _c in zip(cargo_beads, _style_colors(len(cargo_beads))):
     _b["color"] = _c
 
 BEAD_LOOKUP = {b['name']: b for b in BEADS_INFO}
@@ -148,11 +159,15 @@ BEAD_LOOKUP = {b['name']: b for b in BEADS_INFO}
 
 def normalize_bead_name(raw_name: str) -> Optional[str]:
     """
-    入力文字列（例: 'beads06um', 'bead06um', '06um', '0.6um', '0.6', '1um', '1', etc.）を
-    BEADS_INFO の標準名 ('beads06um' 等) に正規化する。
+    入力文字列（例: 'control', 'w/o cargo', 'beads06um', '06um', etc.）を
+    BEADS_INFO の標準名 ('control', 'beads06um' 等) に正規化する。
     """
     s = raw_name.strip().lower()
     mapping = {
+        'control': 'control', 'nocargo': 'control', 'no_cargo': 'control',
+        'w/o cargo': 'control', 'w/o_cargo': 'control', 'wo_cargo': 'control',
+        'control/mts8um': 'control', 'control_mts8um': 'control',
+        'mts8um': 'control', '8um': 'control', 'control_8um': 'control',
         'beads06um': 'beads06um', 'bead06um': 'beads06um', '06um': 'beads06um', '0.6um': 'beads06um', '0.6': 'beads06um', '06': 'beads06um',
         'beads1um': 'beads1um', 'bead1um': 'beads1um', '1um': 'beads1um', '1.0um': 'beads1um', '1.18um': 'beads1um', '1': 'beads1um',
         'beads3um': 'beads3um', 'bead3um': 'beads3um', '3um': 'beads3um', '3.0um': 'beads3um', '3.37um': 'beads3um', '3': 'beads3um',
@@ -199,9 +214,10 @@ def parse_target_beads(beads_args: Union[str, List[str]], beads_info: List[dict]
         return list(beads_info)
 
 
-def find_experiment_dirs(root_dir: Path, bead_name: str) -> List[Path]:
-    """<root_dir>/<bead_name>/{date/}exp 配下で GFP_flows.h5 を持つ実験ディレクトリを返す。"""
-    base = Path(root_dir) / bead_name
+def find_experiment_dirs(root_dir: Path, bead_name: str, dir_name: Optional[str] = None) -> List[Path]:
+    """<root_dir>/<target_rel>/{date/}exp 配下で GFP_flows.h5 を持つ実験ディレクトリを返す。"""
+    target_rel = dir_name or bead_name
+    base = Path(root_dir) / target_rel
     if not base.exists():
         return []
 
@@ -220,7 +236,10 @@ def mask_radius_px_for_bead(radius_um: float, scale: float, factor: float, min_p
 
     radius_px = max(min_px, factor * R_c / scale)
     = 粒子半径そのものではなく「粒子近傍（流れが乱されている領域）」を除外するための半径。
+    control 等で radius_um <= 0 または非有限値の場合は 0.0 px（マスクなし）を返す。
     """
+    if not np.isfinite(radius_um) or radius_um <= 0:
+        return 0.0
     radius_px = float(radius_um) / float(scale)
     return float(max(float(min_px), float(factor) * radius_px))
 
@@ -500,6 +519,7 @@ def compute_virtual_point_correlations(
         cols_axis = np.arange(cols, dtype=np.float32)[None, :]
         r_sq = float(mask_radius_px) ** 2
         grouped = df_tracks.groupby('frame') if df_tracks is not None else None
+        u_sq_list: List[float] = []
 
         iterator = tqdm(frames, desc=f"    {exp_dir.name}", leave=False) if verbose else frames
         for fi, t in enumerate(iterator):
@@ -536,6 +556,12 @@ def compute_virtual_point_correlations(
                 m_ux = np.where(valid, m_x / np.maximum(v_mag, 1e-6), 0.0).astype(np.float32)
                 m_uy = np.where(valid, m_y / np.maximum(v_mag, 1e-6), 0.0).astype(np.float32)
 
+            val_cnt = np.sum(valid)
+            if val_cnt > 50:
+                mean_ux = float(np.sum(m_ux) / val_cnt)
+                mean_uy = float(np.sum(m_uy) / val_cnt)
+                u_sq_list.append(mean_ux ** 2 + mean_uy ** 2)
+
             c_ux = np.asarray(m_ux[sel_y, sel_x], dtype=np.float32)
             c_uy = np.asarray(m_uy[sel_y, sel_x], dtype=np.float32)
             th_t = float(thetas[t]) if t < len(thetas) else 0.0
@@ -554,6 +580,7 @@ def compute_virtual_point_correlations(
 
     dist_coord = np.asarray(distances, dtype=float)
     frame_coord = np.asarray(frames, dtype=int)
+    mean_u_sq_attr = float(np.mean(u_sq_list)) if u_sq_list else 0.0
     ds = xr.Dataset(
         data_vars={
             'angular_correlation': xr.DataArray(
@@ -588,6 +615,7 @@ def compute_virtual_point_correlations(
             'frame_stride': int(frame_stride),
             'n_frames': int(len(frames)),
             'image_shape': [int(rows), int(cols)],
+            'mean_u_bar_sq': mean_u_sq_attr,
         },
     )
     return ds
@@ -618,6 +646,71 @@ def h5_num_frames(exp_dir: Path, flow_name: str = FLOW_NAME) -> int:
         return -1
 
 
+def compute_mean_u_bar_sq(
+    exp_dir: Path,
+    frame_stride: int = 1,
+    max_frames: Optional[int] = None,
+    min_flow_mag: float = 1e-4,
+    max_sample_frames: int = 50,
+    cached_val: Optional[float] = None,
+) -> float:
+    """
+    GFP_flows.h5 から各フレームの空間平均配向ベクトル u_bar(t) を求め、
+    その自乗の時間平均 <|u_bar(t)|^2>_t を高速に算出する（HDF5一括読み込み & 最大 max_sample_frames で等間隔サンプリング）。
+    """
+    if cached_val is not None and np.isfinite(cached_val) and cached_val >= 0:
+        return float(cached_val)
+
+    exp_dir = Path(exp_dir)
+    flow_path = exp_dir / FLOW_NAME
+    if not flow_path.exists():
+        return 0.0
+
+    try:
+        with h5py.File(str(flow_path), 'r') as f:
+            key = list(f.keys())[0]
+            flow = f[key]
+            num_frames = flow.shape[0]
+            channel_first = not (flow.shape[-1] == 2)
+
+            stride = max(1, int(frame_stride))
+            frames = list(range(0, num_frames, stride))
+            if max_frames is not None:
+                frames = frames[:int(max_frames)]
+            if not frames:
+                return 0.0
+
+            # 高速化: 最大 max_sample_frames フレームで等間隔サンプリング
+            if len(frames) > max_sample_frames:
+                step = max(1, len(frames) // max_sample_frames)
+                frames = frames[::step][:max_sample_frames]
+
+            # HDF5から一括読み込み（NAS I/Oのレイテンシを最小化）
+            data = flow[frames]
+            if channel_first:
+                vx = data[:, 0].astype(np.float32)
+                vy = data[:, 1].astype(np.float32)
+            else:
+                vx = data[..., 0].astype(np.float32)
+                vy = data[..., 1].astype(np.float32)
+
+            vmag = np.hypot(vx, vy)
+            val = vmag > float(min_flow_mag)
+
+            u_sq_list = []
+            for i in range(len(frames)):
+                m = val[i]
+                cnt = int(np.sum(m))
+                if cnt > 50:
+                    ux = float(np.sum(vx[i][m] / vmag[i][m])) / cnt
+                    uy = float(np.sum(vy[i][m] / vmag[i][m])) / cnt
+                    u_sq_list.append(ux**2 + uy**2)
+            return float(np.mean(u_sq_list)) if u_sq_list else 0.0
+    except Exception as e:
+        print(f"[WARNING] Failed to compute <|u_bar(t)|^2> in {exp_dir.name}: {e}")
+        return 0.0
+
+
 def load_experiment_correlation(
     exp_dir: Path,
     binfo: dict,
@@ -626,12 +719,10 @@ def load_experiment_correlation(
     verbose: bool = True,
 ) -> Optional[dict]:
     """
-    1 実験の仮想粒子バックグラウンド相関サンプルを取得する。
-
-    取得順:
-      1. --source existing: 既存の angular_correlation_bg.zarr（仮想粒子型 = random_point 次元を持つもの）
-      2. --cache_name のキャッシュ zarr（計算パラメータが一致する場合。--force_recompute で無効化）
-      3. GFP_flows.h5 から計算し、キャッシュ zarr として保存
+    1 実験の仮想粒子バックグラウンド相関サンプルを取得し、
+    大域配向ゆらぎの二乗時間平均 <|u_bar(t)|^2>_t によるベースライン補正:
+    C_corrected(r) = (C_raw(r) - <|u_bar|^2>) / (1 - <|u_bar|^2>)
+    を適用して返す。
     """
     exp_dir = Path(exp_dir)
     mask_px = mask_radius_px_for_bead(binfo['radius_um'], args.scale,
@@ -645,12 +736,14 @@ def load_experiment_correlation(
     n_pts = int(args.n_virtual_points)
     mask_out = float(mask_px)
     source = ''
+    cached_u_sq: Optional[float] = None
 
     if args.source == 'existing':
         ds_ex = open_virtual_point_dataset(exp_dir / args.existing_zarr_name)
         if ds_ex is not None:
             out = virtual_point_samples(ds_ex)
             mask_attr = ds_ex.attrs.get('particle_mask_radius', ds_ex.attrs.get('mask_radius_px', None))
+            cached_u_sq = ds_ex.attrs.get('mean_u_bar_sq', None)
             ds_ex.close()
             if out is not None and out[0] is not None:
                 samples, par, perp, dist_px, n_pts, _ = out
@@ -674,6 +767,7 @@ def load_experiment_correlation(
                 if plan is not None:
                     out = virtual_point_samples(ds_c, n_points_limit=plan['n_points'],
                                                 frame_stride=plan['frame_stride'])
+                    cached_u_sq = ds_c.attrs.get('mean_u_bar_sq', None)
                 ds_c.close()
                 if plan is not None and out is not None and out[0] is not None:
                     samples, par, perp, dist_px, n_pts, _ = out
@@ -699,6 +793,7 @@ def load_experiment_correlation(
         if ds is None:
             print(f"[WARNING] {exp_dir.name}: {FLOW_NAME} を読み込めませんでした（スキップ）")
             return None
+        cached_u_sq = ds.attrs.get('mean_u_bar_sq', None)
         if not args.no_cache:
             save_dataset_cache(ds, exp_dir / args.cache_name)
         out = virtual_point_samples(ds)
@@ -717,6 +812,17 @@ def load_experiment_correlation(
                   f"(--frame_stride {stride})。全フレームで再計算するには "
                   f"--force_recompute を指定してください")
 
+    # 大域配向ゆらぎの二乗時間平均 <|u_bar(t)|^2>_t によるベースライン補正:
+    # C_corrected(r) = (C_raw(r) - <|u_bar|^2>) / (1 - <|u_bar|^2>)
+    u_bar_sq = compute_mean_u_bar_sq(exp_dir, frame_stride=args.frame_stride,
+                                     max_frames=args.max_frames, min_flow_mag=args.min_flow_mag,
+                                     cached_val=cached_u_sq)
+    denom = max(1.0 - u_bar_sq, 1e-4)
+    samples_raw = np.copy(samples) if samples is not None else None
+    samples_corr = (samples - u_bar_sq) / denom if samples is not None else None
+    par_corr = (par - u_bar_sq) / denom if par is not None else None
+    perp_corr = (perp - u_bar_sq) / denom if perp is not None else None
+
     return {
         'bead_name': binfo['name'],
         'diameter_um': float(binfo['diameter_um']),
@@ -725,9 +831,11 @@ def load_experiment_correlation(
         'exp_path': str(exp_dir),
         'distances_px': np.asarray(dist_px, dtype=float),
         'distances_um': np.asarray(dist_px, dtype=float) * float(args.scale),
-        'samples': samples,
-        'samples_par': par,
-        'samples_perp': perp,
+        'samples': samples_corr,
+        'samples_raw': samples_raw,
+        'samples_par': par_corr,
+        'samples_perp': perp_corr,
+        'u_bar_sq_mean': float(u_bar_sq),
         'n_frames': int(samples.shape[1]),
         'n_virtual_points': int(n_pts),
         'mask_radius_px': float(mask_out),
@@ -884,7 +992,9 @@ def build_tables(
     for res in exp_results:
         bead = res['bead_name']
         r_um = res['distances_um']
+        u_bar_sq = float(res.get('u_bar_sq_mean', 0.0))
         mean_c, sem_c, n_c = summarize_samples(res['samples'])
+        mean_c_raw, sem_c_raw, _ = summarize_samples(res.get('samples_raw'))
         mean_cf, sem_cf, n_frames_c = frame_block_stats(res['samples'])
         mean_par, sem_par, _ = summarize_samples(res['samples_par'])
         mean_perp, sem_perp, _ = summarize_samples(res['samples_perp'])
@@ -914,10 +1024,13 @@ def build_tables(
                 'diameter_um': res['diameter_um'],
                 'exp_dir': res['exp_dir'],
                 'source': res['source'],
+                'u_bar_sq_mean': u_bar_sq,
                 'distance_px': float(res['distances_px'][i]),
                 'distance_um': float(r),
                 'mean_c': float(mean_c[i]) if i < mean_c.size else np.nan,
                 'sem_c': float(sem_c[i]) if i < sem_c.size else np.nan,
+                'mean_c_raw': float(mean_c_raw[i]) if i < mean_c_raw.size else np.nan,
+                'sem_c_raw': float(sem_c_raw[i]) if i < sem_c_raw.size else np.nan,
                 'n_samples': int(n_c[i]) if i < n_c.size else 0,
                 'mean_c_frame': float(mean_cf[i]) if i < mean_cf.size else np.nan,
                 'sem_c_frame': float(sem_cf[i]) if i < sem_cf.size else np.nan,
@@ -935,6 +1048,7 @@ def build_tables(
             'diameter_um': res['diameter_um'],
             'exp_dir': res['exp_dir'],
             'source': res['source'],
+            'u_bar_sq_mean': u_bar_sq,
             'n_frames': res['n_frames'],
             'n_virtual_points': res['n_virtual_points'],
             'mask_radius_px': res['mask_radius_px'],
@@ -1242,19 +1356,31 @@ def plot_condition_curves(
         row = df_summary[df_summary['bead_name'] == binfo['name']]
         xi_mean = float(row['xi_bg_mean_um'].iloc[0]) if not row.empty else np.nan
         xi_sem = float(row['xi_bg_sem_um'].iloc[0]) if not row.empty else np.nan
+
+        is_ctrl = binfo.get('is_control', False) or not np.isfinite(binfo.get('diameter_um', np.nan))
+        display_name = binfo.get('display_name', "w/o Cargo" if is_ctrl else rf"$2R_c = {binfo['diameter_um']:.2f}\,\mu\mathrm{{m}}$")
+
         if np.isfinite(xi_mean) and np.isfinite(xi_sem) and xi_sem > 0:
-            label = (rf"$2R_c = {binfo['diameter_um']:.2f}\,\mu\mathrm{{m}}$ "
+            label = (rf"{display_name} "
                      rf"($\xi_{{\mathrm{{bg}}}} = {xi_mean:.1f} \pm {xi_sem:.1f}\,\mu\mathrm{{m}}$)")
         elif np.isfinite(xi_mean):
-            label = (rf"$2R_c = {binfo['diameter_um']:.2f}\,\mu\mathrm{{m}}$ "
+            label = (rf"{display_name} "
                      rf"($\xi_{{\mathrm{{bg}}}} = {xi_mean:.1f}\,\mu\mathrm{{m}}$)")
         else:
-            label = rf"$2R_c = {binfo['diameter_um']:.2f}\,\mu\mathrm{{m}}$"
+            label = display_name
 
-        ax.errorbar(sub['distance_um'], sub['mean_c'], yerr=sub['sem_c'],
-                    fmt=binfo['marker'], ms=7.0, color=binfo['color'],
-                    mfc=binfo['color'], mec='black', mew=0.8,
-                    elinewidth=1.1, capsize=2.5, lw=1.5, alpha=0.95, zorder=4, label=label)
+        marker = binfo.get('marker')
+        if marker:
+            ax.errorbar(sub['distance_um'], sub['mean_c'], yerr=sub['sem_c'],
+                        fmt=marker, ms=7.0, color=binfo['color'],
+                        mfc=binfo['color'], mec='black', mew=0.8,
+                        elinewidth=1.1, capsize=2.5, lw=1.5, alpha=0.95, zorder=4, label=label)
+        else:
+            ax.errorbar(sub['distance_um'], sub['mean_c'], yerr=sub['sem_c'],
+                        fmt='none', color=binfo['color'],
+                        elinewidth=1.1, capsize=2.5, alpha=0.95, zorder=4)
+            ax.plot(sub['distance_um'], sub['mean_c'], ls='-', color=binfo['color'],
+                    lw=1.6, alpha=0.95, zorder=4, label=label)
 
         # プールしたフレームブロック SEM の誤差帯（実効独立サンプル数 ≈ フレーム数）
         if 'pooled_sem_c_frame' in sub.columns:
@@ -1367,8 +1493,18 @@ def plot_xi_vs_diameter(
         row = df_summary[df_summary['bead_name'] == binfo['name']]
         if sub.empty or row.empty:
             continue
+        dia = float(binfo.get('diameter_um', np.nan))
+        if not np.isfinite(dia):
+            # コントロール条件（w/o Cargo）は水平線・帯として描画
+            ctrl_mean = float(row['xi_bg_mean_um'].iloc[0])
+            ctrl_sem = float(row['xi_bg_sem_um'].iloc[0]) if np.isfinite(row['xi_bg_sem_um'].iloc[0]) else 0.0
+            if np.isfinite(ctrl_mean):
+                ax.axhspan(ctrl_mean - ctrl_sem, ctrl_mean + ctrl_sem, color='black', alpha=0.08, zorder=1)
+                ax.axhline(ctrl_mean, color='black', ls=':', lw=1.4, zorder=2,
+                           label=rf"w/o Cargo: $\xi_{{\mathrm{{bg}}}} = {ctrl_mean:.2f} \pm {ctrl_sem:.2f}\,\mu\mathrm{{m}}$ ($N = {len(sub)}$)")
+            continue
+
         plotted_any = True
-        dia = float(binfo['diameter_um'])
         plotted_dias.append(dia)
         if xscale == 'log':
             x_pts = dia * rng.uniform(0.90, 1.10, size=len(sub))
@@ -1517,13 +1653,15 @@ def plot_par_perp_panels(
                                 color=bcolor, alpha=0.16, lw=0, zorder=1)
 
         row = df_summary[df_summary['bead_name'] == binfo['name']]
+        is_ctrl = binfo.get('is_control', False) or not np.isfinite(binfo.get('diameter_um', np.nan))
+        display_name = binfo.get('display_name', "w/o Cargo" if is_ctrl else rf"$2R_c = {binfo['diameter_um']:.2f}\,\mu\mathrm{{m}}$")
         if not row.empty and np.isfinite(row['xi_bg_mean_um'].iloc[0]):
-            title = (rf"$2R_c = {binfo['diameter_um']:.2f}\,\mu\mathrm{{m}}$ "
+            title = (rf"{display_name} "
                      rf"($\xi_{{\mathrm{{bg}}}} = {row['xi_bg_mean_um'].iloc[0]:.1f}\,"
                      rf"\pm {row['xi_bg_sem_um'].iloc[0]:.1f}\,\mu\mathrm{{m}}$, "
                      rf"$N_{{\mathrm{{exp}}}} = {int(row['n_experiments'].iloc[0])}$)")
         else:
-            title = rf"$2R_c = {binfo['diameter_um']:.2f}\,\mu\mathrm{{m}}$"
+            title = display_name
         ax.set_title(title, fontsize=10.5, fontweight='bold')
         ax.set_xscale(xscale)
         ax.set_yscale(yscale)
@@ -1722,7 +1860,7 @@ def main():
     # --- 対象実験ディレクトリの列挙 ---
     targets: List[Tuple[dict, Path]] = []
     for binfo in target_beads:
-        exp_dirs = find_experiment_dirs(root_dir, binfo['name'])
+        exp_dirs = find_experiment_dirs(root_dir, binfo['name'], binfo.get('dir_name'))
         print(f"[{binfo['name']}] {len(exp_dirs)} experiment dir(s) with {FLOW_NAME}")
         targets.extend((binfo, ed) for ed in exp_dirs)
     if not targets:

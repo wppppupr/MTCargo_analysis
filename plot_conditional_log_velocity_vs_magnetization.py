@@ -130,11 +130,20 @@ def save_figure_to_all(fig: plt.Figure, basename: str, out_dirs: List[Path], dpi
 
 
 def save_csv_to_all(df: pd.DataFrame, basename: str, out_dirs: List[Path]):
-    """指定されたすべての出力ディレクトリに CSV を保存する"""
+    """指定されたすべての出力ディレクトリに CSV を保存する (ロック対策リトライ付き)"""
+    import time
     for d in out_dirs:
         d.mkdir(parents=True, exist_ok=True)
         csv_path = d / f"{basename}.csv"
-        df.to_csv(csv_path, index=False)
+        for attempt in range(3):
+            try:
+                df.to_csv(csv_path, index=False)
+                break
+            except OSError as e:
+                if attempt < 2:
+                    time.sleep(1.0)
+                else:
+                    print(f"Warning: Could not save CSV to {csv_path}: {e}")
     print(f"Saved CSV: {basename}.csv -> {len(out_dirs)} dir(s)")
 
 
@@ -357,27 +366,61 @@ def plot_qq_outlier_diagnostic(
 
 
 def load_scaled_radius_info(root_dir: Optional[Path] = None) -> Dict[str, dict]:
-    """各ビーズサイズにおける相関長 xi_{i,t} および スケール半径 x = R_c / xi_{i,t} の統計量を算出・取得"""
+    """
+    各ビーズサイズにおけるスケール半径 x = R_c / xi_0 を算出・取得
+    xi_0 は bg_angular_correlation_length_summary.csv の control（無粒子条件、約10.74 um）を参照
+    """
     xi_info = {}
 
-    summary_path = CURRENT_DIR / "figure" / "scaling" / "msd300_lambda100_vs_scaled_radius_summary.csv"
-    if summary_path.exists():
-        try:
-            df_msd_summary = pd.read_csv(summary_path)
-            for _, row in df_msd_summary.iterrows():
-                b_name = str(row['bead_name'])
-                xi_info[b_name] = {
-                    "rc_over_xi_mean": float(row['rc_over_xi_mean']),
-                    "rc_over_xi_sem": float(row['rc_over_xi_sem']),
-                    "xi_um_mean": float(row['xi_um_mean']),
-                }
-        except Exception:
-            pass
+    # 1. bg_angular_correlation_length_summary.csv から control の相関長 xi_0 を取得
+    xi_0 = 10.743244  # デフォルト値 (約 10.7 um)
+    xi_0_std = 1.169707
+    xi_0_sem = 0.675331
+
+    possible_bg_paths = [
+        CURRENT_DIR / "figure" / "bg_angular_correlation" / "bg_angular_correlation_length_summary.csv",
+        Path("/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/figure/bg_angular_correlation/bg_angular_correlation_length_summary.csv"),
+    ]
+    if root_dir is not None:
+        possible_bg_paths.insert(0, root_dir / "figure" / "bg_angular_correlation" / "bg_angular_correlation_length_summary.csv")
+
+    for bg_path in possible_bg_paths:
+        if bg_path.exists():
+            try:
+                df_bg = pd.read_csv(bg_path)
+                ctrl_row = df_bg[df_bg['bead_name'] == 'control']
+                if not ctrl_row.empty:
+                    xi_0 = float(ctrl_row['xi_bg_mean_um'].values[0])
+                    if 'xi_bg_std_um' in ctrl_row.columns:
+                        xi_0_std = float(ctrl_row['xi_bg_std_um'].values[0])
+                    if 'xi_bg_sem_um' in ctrl_row.columns:
+                        xi_0_sem = float(ctrl_row['xi_bg_sem_um'].values[0])
+                    print(f"Loaded control correlation length xi_0 = {xi_0:.3f} ± {xi_0_std:.3f} um (SEM: {xi_0_sem:.3f}) from {bg_path.name}")
+                    break
+            except Exception as e:
+                print(f"Warning: Failed to load {bg_path}: {e}")
 
     for b in BEADS_INFO:
         b_name = b["name"]
         rc = b["radius_um"]
+
+        # 基準スケール半径 x = Rc / xi_0
+        x_base = rc / xi_0
+        x_std_prop = x_base * (xi_0_std / xi_0) if xi_0 > 0 else 0.0
+        x_sem_prop = x_base * (xi_0_sem / xi_0) if xi_0 > 0 else 0.0
+
+        # 瞬時相関長 xi_{i,t} のデータ（存在する場合）も読み込み
         xi_csv = CURRENT_DIR / "figure" / "xi_vs_velocity" / f"xi_vs_velocity_{b_name}.csv"
+        if not xi_csv.exists() and root_dir is not None:
+            xi_csv = root_dir / "figure" / "xi_vs_velocity" / f"xi_vs_velocity_{b_name}.csv"
+
+        x_instant_std = x_std_prop
+        x_instant_sem = x_sem_prop
+        x_instant_median = x_base
+        n_pts = 0
+        xi_inst_mean = xi_0
+        xi_inst_std = xi_0_std
+
         if xi_csv.exists():
             try:
                 df_xi = pd.read_csv(xi_csv)
@@ -385,28 +428,27 @@ def load_scaled_radius_info(root_dir: Optional[Path] = None) -> Dict[str, dict]:
                 valid_xi = valid_xi[valid_xi > 0].values
                 if len(valid_xi) > 0:
                     x_vals = rc / valid_xi
-                    x_mean = float(np.mean(x_vals))
-                    x_sem = float(np.std(x_vals, ddof=1) / np.sqrt(len(x_vals))) if len(x_vals) > 1 else 0.0
-                    x_median = float(np.median(x_vals))
-                    xi_mean = float(np.mean(valid_xi))
-                    xi_median = float(np.median(valid_xi))
-
-                    if b_name not in xi_info:
-                        xi_info[b_name] = {
-                            "rc_over_xi_mean": x_mean,
-                            "rc_over_xi_sem": x_sem,
-                            "xi_um_mean": xi_mean,
-                        }
-                    xi_info[b_name].update({
-                        "rc_over_xi_instant_mean": x_mean,
-                        "rc_over_xi_instant_sem": x_sem,
-                        "rc_over_xi_median": x_median,
-                        "rc_over_median_xi": rc / xi_median if xi_median > 0 else np.nan,
-                        "xi_um_median": xi_median,
-                        "n_xi_points": len(valid_xi),
-                    })
+                    n_pts = len(x_vals)
+                    x_instant_std = float(np.std(x_vals, ddof=1)) if n_pts > 1 else 0.0
+                    x_instant_sem = float(x_instant_std / np.sqrt(n_pts)) if n_pts > 1 else 0.0
+                    x_instant_median = float(np.median(x_vals))
+                    xi_inst_mean = float(np.mean(valid_xi))
+                    xi_inst_std = float(np.std(valid_xi, ddof=1)) if len(valid_xi) > 1 else 0.0
             except Exception as e:
                 print(f"Warning: could not process {xi_csv}: {e}")
+
+        xi_info[b_name] = {
+            "rc_over_xi_mean": x_base,            # x = Rc / xi_0
+            "rc_over_xi_std": x_instant_std,      # 瞬時分布の STD (または誤差伝播)
+            "rc_over_xi_sem": x_instant_sem,      # 瞬時分布の SEM
+            "rc_over_xi_median": x_instant_median,
+            "rc_over_xi_prop_std": x_std_prop,
+            "rc_over_xi_prop_sem": x_sem_prop,
+            "xi_0_um": xi_0,
+            "xi_um_mean": xi_inst_mean,
+            "xi_um_std": xi_inst_std,
+            "n_xi_points": n_pts,
+        }
 
     return xi_info
 
@@ -437,9 +479,15 @@ def compute_linear_fits(df: pd.DataFrame, xi_info: Dict[str, dict]) -> Tuple[Dic
 
         xi_data = xi_info.get(b_name, {})
         rc_over_xi_mean = xi_data.get("rc_over_xi_mean", np.nan)
+        rc_over_xi_std = xi_data.get("rc_over_xi_std", np.nan)
         rc_over_xi_sem = xi_data.get("rc_over_xi_sem", np.nan)
         rc_over_xi_med = xi_data.get("rc_over_xi_median", np.nan)
         xi_mean = xi_data.get("xi_um_mean", np.nan)
+        xi_std = xi_data.get("xi_um_std", np.nan)
+
+        m_mean_val = float(np.mean(x)) if len(x) > 0 else np.nan
+        m_std_val = float(np.std(x, ddof=1)) if len(x) > 1 else np.nan
+        m_sem_val = float(m_std_val / np.sqrt(len(x))) if len(x) > 1 else np.nan
 
         fit_dict[b_name] = {
             "name": b_name,
@@ -448,9 +496,14 @@ def compute_linear_fits(df: pd.DataFrame, xi_info: Dict[str, dict]) -> Tuple[Dic
             "label": b_label,
             "n_points": len(sub_df),
             "rc_over_xi_mean": rc_over_xi_mean,
+            "rc_over_xi_std": rc_over_xi_std,
             "rc_over_xi_sem": rc_over_xi_sem,
             "rc_over_xi_median": rc_over_xi_med,
             "xi_um_mean": xi_mean,
+            "xi_um_std": xi_std,
+            "m_mean": m_mean_val,
+            "m_std": m_std_val,
+            "m_sem": m_sem_val,
             "x": x,
             "y_ln": y_ln,
             "y_log10": y_log10,
@@ -477,9 +530,14 @@ def compute_linear_fits(df: pd.DataFrame, xi_info: Dict[str, dict]) -> Tuple[Dic
             "label": b_label,
             "n_points": len(sub_df),
             "rc_over_xi_mean": rc_over_xi_mean,
+            "rc_over_xi_std": rc_over_xi_std,
             "rc_over_xi_sem": rc_over_xi_sem,
             "rc_over_xi_median": rc_over_xi_med,
             "xi_um_mean": xi_mean,
+            "xi_um_std": xi_std,
+            "m_mean": m_mean_val,
+            "m_std": m_std_val,
+            "m_sem": m_sem_val,
             # ln fit
             "ln_y0_intercept": res_ln.intercept,
             "ln_y0_stderr": res_ln.intercept_stderr,
@@ -917,7 +975,7 @@ def plot_fit_parameters_vs_scaled_radius(
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     save_figure_to_all(fig, "linear_fit_params_vs_scaled_radius", out_dirs)
 
-    # 2. 単体パネル 1: Slope beta vs Scaled Radius
+    # 2. 単体パネル 1: Slope beta vs Scaled Radius (Linear scale)
     fig_slope, ax_s = plt.subplots(figsize=(7.5, 6.0))
     for i in range(len(sub_df)):
         b_name = sub_df.iloc[i]["bead_name"]
@@ -930,24 +988,25 @@ def plot_fit_parameters_vs_scaled_radius(
             markeredgecolor='black', markeredgewidth=1.2, zorder=5,
             label=f"$d = {b_info['label']}$"
         )
-    ax_s.axhline(0, color='#666666', ls='--', lw=1.3, label=r'$\beta = 0$ (Crossover)')
-    ax_s.set_xscale('log')
+    ax_s.axhline(0, color='#666666', ls='--', lw=1.3, zorder=2, label=r'$\beta = 0$ (Crossover)')
+    ax_s.set_xscale('linear')
+    ax_s.set_yscale('linear')
     ax_s.set_xlabel(r"Scaled Radius $x = R_c / \xi_{i,t}$", fontsize=13.0)
-    ax_s.set_ylabel(rf"Slope $\beta$ [${unit_str} / M$]", fontsize=13.0)
+    ax_s.set_ylabel(rf"Magnetization Sensitivity $\beta$ [${unit_str} / M$]", fontsize=13.0)
     ax_s.set_title(r"Magnetization Sensitivity $\beta$ vs Scaled Radius $x = R_c / \xi$" + "\n(QQ Filtered)", fontsize=13.5, fontweight='bold', pad=10)
-    ax_s.grid(True, which='both', ls=':', alpha=0.6)
+    ax_s.grid(True, which='major', ls=':', alpha=0.6)
     ax_s.legend(loc='best', fontsize=9.5, framealpha=0.9)
     plt.tight_layout()
     save_figure_to_all(fig_slope, f"linear_fit_slope_vs_scaled_radius_{log_base}", out_dirs)
     if log_base == "ln":
         save_figure_to_all(fig_slope, "linear_fit_slope_vs_scaled_radius", out_dirs)
 
-    # 3. 単体パネル 2: Intercept y0 vs Scaled Radius
-    fig_y0, ax_y = plt.subplots(figsize=(7.5, 6.0))
+    # 3. 単体パネル 2: Intercept y0 vs Scaled Radius (Linear scale)
+    fig_y0, ax_y2 = plt.subplots(figsize=(7.5, 6.0))
     for i in range(len(sub_df)):
         b_name = sub_df.iloc[i]["bead_name"]
         b_info = next(b for b in BEADS_INFO if b["name"] == b_name)
-        ax_y.errorbar(
+        ax_y2.errorbar(
             x_vals[i], y0_vals[i],
             xerr=x_errs[i], yerr=y0_errs[i],
             fmt=b_info["marker"], color=b_info["color"], ecolor='black',
@@ -955,12 +1014,13 @@ def plot_fit_parameters_vs_scaled_radius(
             markeredgecolor='black', markeredgewidth=1.2, zorder=5,
             label=f"$d = {b_info['label']}$"
         )
-    ax_y.set_xscale('log')
-    ax_y.set_xlabel(r"Scaled Radius $x = R_c / \xi_{i,t}$", fontsize=13.0)
-    ax_y.set_ylabel(rf"Baseline Intercept $y_0$ (at $M=0$)", fontsize=13.0)
-    ax_y.set_title(r"Baseline Velocity $y_0$ at $M=0$ vs Scaled Radius $x = R_c / \xi$" + "\n(QQ Filtered)", fontsize=13.5, fontweight='bold', pad=10)
-    ax_y.grid(True, which='both', ls=':', alpha=0.6)
-    ax_y.legend(loc='best', fontsize=9.5, framealpha=0.9)
+    ax_y2.set_xscale('linear')
+    ax_y2.set_yscale('linear')
+    ax_y2.set_xlabel(r"Scaled Radius $x = R_c / \xi_{i,t}$", fontsize=13.0)
+    ax_y2.set_ylabel(rf"Baseline Intercept $y_0$ (at $M=0$)", fontsize=13.0)
+    ax_y2.set_title(r"Baseline Velocity $y_0$ at $M=0$ vs Scaled Radius $x = R_c / \xi$" + "\n(QQ Filtered)", fontsize=13.5, fontweight='bold', pad=10)
+    ax_y2.grid(True, which='major', ls=':', alpha=0.6)
+    ax_y2.legend(loc='best', fontsize=9.5, framealpha=0.9)
     plt.tight_layout()
     save_figure_to_all(fig_y0, f"linear_fit_intercept_vs_scaled_radius_{log_base}", out_dirs)
     if log_base == "ln":
