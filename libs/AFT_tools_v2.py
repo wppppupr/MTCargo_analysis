@@ -374,6 +374,8 @@ def _calculate_order_parameter_loop(im_theta, neighborhood_radius):
     for r in range(r_start, r_end):
         for c in range(c_start, c_end):
             center_val = im_theta[r, c]
+            if np.isnan(center_val):
+                continue
             sum_order = 0.0
             count = 0
             
@@ -395,16 +397,25 @@ def _calculate_order_parameter_loop(im_theta, neighborhood_radius):
         return np.array([np.nan])
     return res[:res_idx]
 
-def calculate_order_parameter(im_theta_stack, neighborhood_radius):
+def calculate_order_parameter(im_theta_stack, neighborhood_radius, im_ecc_stack=None, eccentricity_thresh=0.0):
     if type(im_theta_stack) == np.ndarray:
         if len(im_theta_stack.shape) == 2:
             im_theta_stack = [im_theta_stack]
+    if im_ecc_stack is not None and type(im_ecc_stack) == np.ndarray:
+        if len(im_ecc_stack.shape) == 2:
+            im_ecc_stack = [im_ecc_stack]
 
     N_images = len(im_theta_stack)
     im_orderparameter_stack = []
 
-    for im_theta in im_theta_stack:
-        order_list = _calculate_order_parameter_loop(im_theta, neighborhood_radius)
+    for idx, im_theta in enumerate(im_theta_stack):
+        theta_to_process = im_theta
+        if im_ecc_stack is not None and eccentricity_thresh > 0.0:
+            ecc = im_ecc_stack[idx]
+            theta_to_process = np.copy(im_theta)
+            theta_to_process[ecc < eccentricity_thresh] = np.nan
+
+        order_list = _calculate_order_parameter_loop(theta_to_process, neighborhood_radius)
         if len(order_list) > 0 and not np.isnan(order_list).all():
             im_orderparameter_stack.append(np.nanmedian(order_list))
         else:
@@ -436,6 +447,8 @@ def _calculate_order_parameter_heatmap_loop(im_theta, neighborhood_radius):
             c = c_start + c_idx
             
             center_val = im_theta[r, c]
+            if np.isnan(center_val):
+                continue
             sum_order = 0.0
             count = 0
             
@@ -454,16 +467,25 @@ def _calculate_order_parameter_heatmap_loop(im_theta, neighborhood_radius):
                 
     return res
 
-def calculate_order_parameter_heatmap(im_theta_stack, neighborhood_radius):
+def calculate_order_parameter_heatmap(im_theta_stack, neighborhood_radius, im_ecc_stack=None, eccentricity_thresh=0.0):
     if type(im_theta_stack) == np.ndarray:
         if len(im_theta_stack.shape) == 2:
             im_theta_stack = [im_theta_stack]
+    if im_ecc_stack is not None and type(im_ecc_stack) == np.ndarray:
+        if len(im_ecc_stack.shape) == 2:
+            im_ecc_stack = [im_ecc_stack]
 
     N_images = len(im_theta_stack)
     im_orderparameter_stack = []
 
-    for im_theta in im_theta_stack:
-        order_list_reshape = _calculate_order_parameter_heatmap_loop(im_theta, neighborhood_radius)
+    for idx, im_theta in enumerate(im_theta_stack):
+        theta_to_process = im_theta
+        if im_ecc_stack is not None and eccentricity_thresh > 0.0:
+            ecc = im_ecc_stack[idx]
+            theta_to_process = np.copy(im_theta)
+            theta_to_process[ecc < eccentricity_thresh] = np.nan
+
+        order_list_reshape = _calculate_order_parameter_heatmap_loop(theta_to_process, neighborhood_radius)
         im_orderparameter_stack.append(order_list_reshape)
 
     if N_images == 1:

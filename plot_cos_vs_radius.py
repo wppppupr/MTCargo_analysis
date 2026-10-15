@@ -492,6 +492,154 @@ def plot_cos_vs_radius_main(
     plt.close(fig)
 
 
+def load_experiment_correlation_lengths(
+    root_dir: Path,
+    workspace_dir: Path
+) -> Dict[str, float]:
+    """
+    bg_angular_correlation_length_per_experiment.csv から
+    各実験ごとの空間配向相関長 xi [um] を取得する。
+    """
+    possible_paths = [
+        workspace_dir / "figure" / "bg_angular_correlation" / "bg_angular_correlation_length_per_experiment.csv",
+        root_dir / "figure" / "bg_angular_correlation" / "bg_angular_correlation_length_per_experiment.csv",
+        Path("/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/figure/bg_angular_correlation/bg_angular_correlation_length_per_experiment.csv"),
+        Path("/mnt/NAS-Ebanaru/sasaki/MTsingleBeads/figure/bg_angular_correlation/bg_angular_correlation_length_per_experiment.csv"),
+    ]
+    for p in possible_paths:
+        if p.exists():
+            try:
+                df = pd.read_csv(p)
+                if 'exp_dir' in df.columns and 'xi_um' in df.columns:
+                    exp_xi_dict = {}
+                    for _, row in df.iterrows():
+                        k = str(row['exp_dir']).strip()
+                        v = float(row['xi_um'])
+                        if pd.notna(v) and v > 0:
+                            exp_xi_dict[k] = v
+                    print(f"Loaded {len(exp_xi_dict)} correlation lengths xi from {p}")
+                    return exp_xi_dict
+            except Exception as e:
+                print(f"Warning: Failed to read {p}: {e}")
+    print("[WARNING] Could not find bg_angular_correlation_length_per_experiment.csv")
+    return {}
+
+
+def plot_cos_vs_scaled_radius_main(
+    df_all_particles: pd.DataFrame,
+    df_condition_summary: pd.DataFrame,
+    out_dirs: List[Path],
+    xscale: str = 'log',
+    region_mode: str = 'radius'
+):
+    """
+    メイン散布図: 方向追従コサイン cos(theta) vs スケール半径 x = R_c / xi
+    - 横軸: x = R_c / xi（各実験の空間配向相関長 xi [um] で無次元化）
+    - 個別粒子の散布 (半透明マーカー、各実験の xi を反映)
+    - アンサンブル代表点 Mean +- SEM (横軸・縦軸両方のエラーバー付き大マーカー)
+    - アンサンブル中央値 Median
+    - 基準線: 完全一致 cos = 1.0, 直交・無相関 cos = 0.0
+    """
+    fig, ax = plt.subplots(figsize=(8.5, 6.2))
+    # 背景参照ライン
+    ax.axhline(0.0, color='#666666', linestyle=':', linewidth=1.5, zorder=1, label=r'Orthogonal / No alignment ($\cos \theta = 0$)')
+    ax.axhline(1.0, color='#222222', linestyle='--', linewidth=1.8, zorder=1, label=r'Perfect alignment ($\cos \theta = 1$)')
+
+    cond_x_means = []
+    cond_cos_means = []
+    cond_cos_sems = []
+    cond_x_medians = []
+    cond_cos_medians = []
+
+    np.random.seed(42)
+    for b_item in BEADS_INFO:
+        bname = b_item['name']
+        marker = b_item['marker']
+        color = b_item['color']
+        lbl = b_item['label']
+
+        sub_p = df_all_particles[df_all_particles['bead_name'] == bname]
+        if sub_p.empty or 'rc_over_xi' not in sub_p.columns:
+            continue
+
+        valid_mask = sub_p['cos_mean'].notna() & sub_p['rc_over_xi'].notna()
+        sub_valid = sub_p[valid_mask]
+        if sub_valid.empty:
+            continue
+
+        cos_vals = sub_valid['cos_mean'].values
+        x_vals = sub_valid['rc_over_xi'].values
+        n_p = len(cos_vals)
+
+        # 個別粒子散布 (各実験の xi に基づく x = R_c / xi)
+        # 同一実験内の粒子が重ならないよう微小ジッター (±1.5%) を付与
+        jitter_factor = 1.0 + np.random.uniform(-0.015, 0.015, size=n_p)
+        jittered_x = x_vals * jitter_factor
+
+        ax.scatter(
+            jittered_x, cos_vals,
+            color=color, marker=marker, s=55, alpha=0.38,
+            edgecolors='none', zorder=2
+        )
+
+        mean_cos = float(np.mean(cos_vals))
+        sem_cos = float(np.std(cos_vals, ddof=1) / np.sqrt(n_p)) if n_p > 1 else 0.0
+        med_cos = float(np.median(cos_vals))
+
+        mean_x = float(np.mean(x_vals))
+        sem_x = float(np.std(x_vals, ddof=1) / np.sqrt(n_p)) if n_p > 1 else 0.0
+        med_x = float(np.median(x_vals))
+
+        cond_x_means.append(mean_x)
+        cond_cos_means.append(mean_cos)
+        cond_cos_sems.append(sem_cos)
+        cond_x_medians.append(med_x)
+        cond_cos_medians.append(med_cos)
+
+        # 代表値のエラーバー付きマーカー (アンサンブル平均: 縦横両方の SEM)
+        ax.errorbar(
+            mean_x, mean_cos,
+            xerr=sem_x, yerr=sem_cos,
+            fmt=marker, color=color, ecolor=color, elinewidth=2.2, capsize=5.0, capthick=1.5,
+            markersize=11.0, markeredgewidth=1.8, markeredgecolor='#333333',
+            label=f'{lbl} ($N={n_p}$)', zorder=5
+        )
+
+    # 代表値同士を繋ぐ実線 (平均) と破線 (中央値)
+    if len(cond_x_means) > 0:
+        sort_idx = np.argsort(cond_x_means)
+        x_sorted = np.array(cond_x_means)[sort_idx]
+        mean_sorted = np.array(cond_cos_means)[sort_idx]
+
+        sort_med_idx = np.argsort(cond_x_medians)
+        x_med_sorted = np.array(cond_x_medians)[sort_med_idx]
+        med_sorted = np.array(cond_cos_medians)[sort_med_idx]
+
+        ax.plot(x_sorted, mean_sorted, color='#333333', linestyle='-', linewidth=2.0, alpha=0.8, zorder=4)
+        ax.plot(x_med_sorted, med_sorted, color='#888888', linestyle='-.', linewidth=1.5, alpha=0.85, zorder=3)
+
+    ax.set_xscale(xscale)
+    ax.set_xlabel(r'Scaled cargo radius $R_c / \xi$ [-]')
+    ax.set_ylabel(r'Directional alignment $\cos \theta$' + '\n' + r'$[(\mathbf{v}_{\mathrm{cargo}} \cdot \bar{\mathbf{v}}_{\mathrm{MT}}) \,/\, (|\mathbf{v}_{\mathrm{cargo}}| |\bar{\mathbf{v}}_{\mathrm{MT}}|)]$', fontsize=18)
+    ax.set_title(r'Cargo Directional Coupling vs Scaled Radius $R_c / \xi$' + f'\n(Window: {region_mode}, Ensemble Mean $\pm$ SEM)', fontsize=18)
+
+    if xscale == 'log':
+        ax.set_xlim(0.03, 3.5)
+    else:
+        ax.set_xlim(-0.05, 2.2)
+
+    ax.set_ylim(-0.35, 1.05)
+
+    ax.legend(
+        loc='upper right', fontsize=10.0, framealpha=0.92,
+        markerscale=0.85, handlelength=1.4, borderpad=0.35, labelspacing=0.28
+    )
+
+    suffix = f"_{xscale}" if xscale != 'log' else ""
+    save_figure_to_all(fig, f"cos_vs_scaled_radius_scatter{suffix}", out_dirs)
+    plt.close(fig)
+
+
 def plot_cos_6panels_grid(
     df_all_particles: pd.DataFrame,
     df_instant: pd.DataFrame,
@@ -649,11 +797,13 @@ def plot_cos_individual_panels(
 
 def plot_cos_vs_window_6panels(
     df_all_sigmas: pd.DataFrame,
-    out_dirs: List[Path]
+    out_dirs: List[Path],
+    exp_xi_dict: Optional[Dict[str, float]] = None
 ):
     """
     窓サイズ依存性 cos(theta)(R) vs R の 6 パネル個別図。
     各ビーズ径ごとに、窓を広げたときのコサイン減衰カーブを個別パネルで表示。
+    各実験の微小管空間配向相関長 xi の縦線および貨物半径 R_c の縦線を表示。
     """
     if df_all_sigmas.empty:
         return
@@ -694,8 +844,29 @@ def plot_cos_vs_window_6panels(
 
         ax.axhline(0.0, color='#888888', linestyle=':', linewidth=1.2, zorder=1)
         ax.axhline(1.0, color='#333333', linestyle='--', linewidth=1.4, zorder=1)
+
         # 貨物半径 R_c の位置に縦点線を引く
         ax.axvline(r_c, color='#cc2222', linestyle=':', linewidth=1.5, zorder=2, label=f'Cargo $R_c={r_c:.2f}\,\mu\mathrm{{m}}$')
+
+        # 実験ごとの空間配向相関長 xi の縦線を引く
+        if exp_xi_dict:
+            exp_names = sub['exp_dir'].unique()
+            xis = [exp_xi_dict[e] for e in exp_names if e in exp_xi_dict and not np.isnan(exp_xi_dict[e])]
+            if xis:
+                xi_m = float(np.mean(xis))
+                xi_sem = float(np.std(xis, ddof=1) / np.sqrt(len(xis))) if len(xis) > 1 else 0.0
+
+                # 個別実験の xi を薄い点線で表示
+                for xi_val in xis:
+                    ax.axvline(xi_val, color='#2b5c8f', linestyle=':', linewidth=1.2, alpha=0.4, zorder=2)
+
+                # 平均 xi の縦破線と SEM バンド
+                if xi_sem > 0:
+                    ax.axvspan(xi_m - xi_sem, xi_m + xi_sem, color='#2b5c8f', alpha=0.12, zorder=1)
+                    xi_lbl = rf'Corr. length $\xi={xi_m:.2f}\pm{xi_sem:.2f}\,\mu\mathrm{{m}}$'
+                else:
+                    xi_lbl = rf'Corr. length $\xi={xi_m:.2f}\,\mu\mathrm{{m}}$'
+                ax.axvline(xi_m, color='#2b5c8f', linestyle='--', linewidth=1.8, zorder=2, label=xi_lbl)
 
         ax.plot(r_w, c_m, marker=marker, markersize=6.5, color=color, linewidth=2.2, label=f'{lbl} ($N={n_p_total}$, {n_e_total} movies)', zorder=4)
         ax.fill_between(r_w, c_m - c_s, c_m + c_s, color=color, alpha=0.2, zorder=3)
@@ -707,7 +878,7 @@ def plot_cos_vs_window_6panels(
         ax.set_xlabel(r"Window Radius $R$ [$\mu\mathrm{m}$]", fontsize=13)
         if idx % 3 == 0:
             ax.set_ylabel(r"Alignment $\cos \theta(R)$", fontsize=15)
-        ax.legend(loc='upper right', fontsize=9.5, framealpha=0.9)
+        ax.legend(loc='upper right', fontsize=9.0, framealpha=0.9)
 
     fig.suptitle(r'Window Radius $R$ Dependence of Directional Alignment $\cos \theta(R)$', fontsize=17.0, y=0.99)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
@@ -870,7 +1041,16 @@ def main():
     df_instant = pd.concat(all_instant_list, ignore_index=True) if all_instant_list else pd.DataFrame()
     df_all_sigmas = pd.concat(all_sigma_list, ignore_index=True) if all_sigma_list else pd.DataFrame()
 
-    # 3. 条件レベルのサマリー統計量作成
+    # 3. 実験ごとの空間配向相関長 xi [um] の紐付け
+    exp_xi_dict = load_experiment_correlation_lengths(root_dir, CURRENT_DIR)
+    if exp_xi_dict:
+        df_all_particles['xi_um'] = df_all_particles['exp_dir'].astype(str).str.strip().map(exp_xi_dict)
+        df_all_particles['rc_over_xi'] = df_all_particles['radius_um'] / df_all_particles['xi_um']
+    else:
+        df_all_particles['xi_um'] = np.nan
+        df_all_particles['rc_over_xi'] = np.nan
+
+    # 4. 条件レベルのサマリー統計量作成
     condition_summary_rows = []
     for b_item in BEADS_INFO:
         bname = b_item['name']
@@ -882,6 +1062,9 @@ def main():
         chi_arr = sub['chi_mean'].dropna().values
         n_p = len(cos_arr)
 
+        xi_arr = sub['xi_um'].dropna().values if 'xi_um' in sub.columns else np.array([])
+        rc_xi_arr = sub['rc_over_xi'].dropna().values if 'rc_over_xi' in sub.columns else np.array([])
+
         condition_summary_rows.append({
             'bead_name': bname,
             'diameter_um': b_item['diameter_um'],
@@ -890,6 +1073,12 @@ def main():
             'target_region_um': float(sub['target_region_um'].iloc[0]),
             'actual_window_um': float(sub['actual_window_um'].iloc[0]),
             'n_particles': n_p,
+            # xi & rc_over_xi 統計量
+            'xi_um_mean': float(np.mean(xi_arr)) if len(xi_arr) > 0 else np.nan,
+            'xi_um_sem': float(np.std(xi_arr, ddof=1) / np.sqrt(len(xi_arr))) if len(xi_arr) > 1 else 0.0,
+            'rc_over_xi_mean': float(np.mean(rc_xi_arr)) if len(rc_xi_arr) > 0 else np.nan,
+            'rc_over_xi_sem': float(np.std(rc_xi_arr, ddof=1) / np.sqrt(len(rc_xi_arr))) if len(rc_xi_arr) > 1 else 0.0,
+            'rc_over_xi_median': float(np.median(rc_xi_arr)) if len(rc_xi_arr) > 0 else np.nan,
             # cos 統計量
             'cos_mean': float(np.mean(cos_arr)),
             'cos_std': float(np.std(cos_arr, ddof=1)) if n_p > 1 else 0.0,
@@ -905,27 +1094,31 @@ def main():
 
     df_condition_summary = pd.DataFrame(condition_summary_rows)
 
-    # 4. CSV 保存
+    # 5. CSV 保存
     save_csv_to_all(df_all_particles, "cos_vs_radius_particle_summary.csv", out_dirs)
     save_csv_to_all(df_condition_summary, "cos_vs_radius_condition_summary.csv", out_dirs)
 
-    # 5. プロット描画
+    # 6. プロット描画
     print("\nGenerating figures focusing on cos(theta)...")
     # (1) メイン散布図: cos vs R_c (対数軸)
     plot_cos_vs_radius_main(df_all_particles, df_condition_summary, out_dirs, xscale='log', region_mode=args.region_mode)
     # (2) メイン散布図: cos vs R_c (線形軸)
     plot_cos_vs_radius_main(df_all_particles, df_condition_summary, out_dirs, xscale='linear', region_mode=args.region_mode)
-    # (3) 各ビーズ条件 6 パネル個別図
+    # (3) 無次元化メイン散布図: cos vs R_c / xi (対数軸)
+    plot_cos_vs_scaled_radius_main(df_all_particles, df_condition_summary, out_dirs, xscale='log', region_mode=args.region_mode)
+    # (4) 無次元化メイン散布図: cos vs R_c / xi (線形軸)
+    plot_cos_vs_scaled_radius_main(df_all_particles, df_condition_summary, out_dirs, xscale='linear', region_mode=args.region_mode)
+    # (5) 各ビーズ条件 6 パネル個別図
     plot_cos_6panels_grid(df_all_particles, df_instant, out_dirs, region_mode=args.region_mode)
-    # (4) 各ビーズ条件ごとの個別単体パネル図 (1パネルずつ独立)
+    # (6) 各ビーズ条件ごとの個別単体パネル図 (1パネルずつ独立)
     plot_cos_individual_panels(df_all_particles, out_dirs, region_mode=args.region_mode)
-    # (5) 窓サイズ依存性 6 パネル図
-    plot_cos_vs_window_6panels(df_all_sigmas, out_dirs)
-    # (6) バイオリン分布図
+    # (7) 窓サイズ依存性 6 パネル図
+    plot_cos_vs_window_6panels(df_all_sigmas, out_dirs, exp_xi_dict=exp_xi_dict)
+    # (8) バイオリン分布図
     plot_cos_distribution_violin(df_all_particles, out_dirs)
 
     print("\n=== Cosine Alignment Summary Table ===")
-    cols_disp = ['bead_name', 'radius_um', 'n_particles', 'cos_mean', 'cos_sem', 'cos_median', 'cos_q25', 'cos_q75']
+    cols_disp = ['bead_name', 'radius_um', 'xi_um_mean', 'rc_over_xi_mean', 'n_particles', 'cos_mean', 'cos_sem', 'cos_median']
     print(df_condition_summary[cols_disp].to_string(index=False))
     print("\nAll cos-focused figures generated successfully!")
 
