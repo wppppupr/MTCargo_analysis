@@ -2,11 +2,9 @@
 """
 plot_msd300_and_ccdf_r90.py
 
-MSD(Δt = 300s) を第1軸（左軸: 青系）、
-CCDF 90% 到達距離 Δr_90(Δt = 300s, P(R >= Δr) = 0.90) を第2軸（右軸: 赤系）にして、
-横軸を貨物粒子径 2R_c [μm] とした 2軸プロットを作成・保存するスクリプト。
-
-マーカーおよびラインカラーもそれぞれ青系・赤系に合わせています。
+変位のRMS sqrt(MSD)(Δt = 300s) と、
+CCDF 90% 到達距離 Δr_90(Δt = 300s, P(R <= Δr) = 0.90) を、
+単一軸（縦軸: 変位 [μm]）に重ねて横軸を貨物粒子径 2R_c [μm] としたプロットを作成・保存するスクリプト。
 """
 
 import argparse
@@ -112,7 +110,7 @@ def load_data_from_csv_or_raw(
     root_dir: Path,
     workspace_dir: Path,
     msd_time_s: float = 300.0,
-    ccdf_time_s: float = 100.0,
+    ccdf_time_s: float = 300.0,
     frame_interval: float = 4.0,
     scale: float = 0.11,
     alpha_threshold: float = 0.5
@@ -190,18 +188,17 @@ def load_data_from_csv_or_raw(
     return pd.DataFrame(records)
 
 
-def plot_msd_and_ccdf_r90(
+def plot_rms_and_ccdf_r90(
     df: pd.DataFrame,
     out_dirs: List[Path],
     msd_time_s: float = 300.0,
-    ccdf_time_s: float = 100.0
+    ccdf_time_s: float = 300.0
 ):
     """
-    第1軸 (左軸: 青系) MSD(msd_time_s), 第2軸 (右軸: 赤系) 長距離テール Δr_90 (P(R <= r)=0.90, ccdf_time_s) の 2軸プロットを作成する。
-    両軸ともエラーバー（SEM）を表示します。
+    MSDから算出した変位のRMS (sqrt(MSD)) と 長距離テール到達距離 Δr_90 を、
+    2軸ではなく単一のy軸 [μm] に重ねてプロットする。
     """
-    fig, ax_msd = plt.subplots(figsize=(8.4, 5.8))
-    ax_r90 = ax_msd.twinx()
+    fig, ax = plt.subplots(figsize=(7.5, 5.5))
 
     d_vals = df["diameter_um"].to_numpy(dtype=float)
     msd_col_mean = f"msd_{int(msd_time_s)}s_mean_um2"
@@ -211,93 +208,72 @@ def plot_msd_and_ccdf_r90(
 
     msd_mean = df[msd_col_mean].to_numpy(dtype=float)
     msd_sem = df[msd_col_sem].to_numpy(dtype=float)
+
+    # RMS = sqrt(MSD), 誤差伝播: d(sqrt(MSD)) = sem_MSD / (2 * sqrt(MSD))
+    rms_disp = np.sqrt(np.maximum(msd_mean, 0.0))
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rms_sem = np.where(rms_disp > 0, msd_sem / (2.0 * rms_disp), 0.0)
+
     r90_vals = df[r90_col].to_numpy(dtype=float)
     r90_sems = df[r90_sem_col].to_numpy(dtype=float) if r90_sem_col in df.columns else np.zeros_like(r90_vals)
 
     # カラーパレットの定義
-    color_msd = '#1f77b4'  # 青系 (MSD)
+    color_rms = '#1f77b4'  # 青系 (RMS変位)
     color_r90 = '#d62728'  # 赤系 (長距離テール Δr_90)
 
-    # ---------------------------------------------------------
-    # 第1軸 (左軸): MSD [um^2] (log scale, 青系)
-    # ---------------------------------------------------------
-    line1 = ax_msd.errorbar(
-        d_vals, msd_mean, yerr=msd_sem,
-        fmt='o-', color=color_msd, ecolor=color_msd, elinewidth=1.6,
-        capsize=4.5, capthick=1.2, markersize=8.5, linewidth=2.0,
-        label=rf'$\mathrm{{MSD}}(\Delta t = {int(msd_time_s)}\,\mathrm{{s}})$',
+    # RMS変位プロット
+    line1 = ax.errorbar(
+        d_vals, rms_disp, yerr=rms_sem,
+        fmt='o-', color=color_rms, ecolor=color_rms, elinewidth=1.6,
+        capsize=4.5, capthick=1.2, markersize=8.0, linewidth=2.0,
+        label=rf'RMS displacement $\sqrt{{\langle \Delta r^2 \rangle}}$ ($\Delta t = {int(msd_time_s)}\,\mathrm{{s}}$)',
         zorder=4
     )
 
-    # ---------------------------------------------------------
-    # 第2軸 (右軸): 長距離テール到達距離 Δr_90 [um] (linear scale, 赤系) + エラーバー
-    # ---------------------------------------------------------
-    line2 = ax_r90.errorbar(
+    # 長距離テール到達距離 Δr_90 プロット
+    line2 = ax.errorbar(
         d_vals, r90_vals, yerr=r90_sems,
         fmt='s--', color=color_r90, ecolor=color_r90, elinewidth=1.6,
-        capsize=4.5, capthick=1.2, markersize=8.5, linewidth=2.0,
-        label=rf'Tail Reach $\Delta r_{{90}}(\Delta t = {int(ccdf_time_s)}\,\mathrm{{s}})$',
+        capsize=4.5, capthick=1.2, markersize=8.0, linewidth=2.0,
+        label=rf'Tail Reach $\Delta r_{{90}}$ ($\Delta t = {int(ccdf_time_s)}\,\mathrm{{s}}$, $P(R \leq \Delta r) = 0.90$)',
         zorder=5
     )
 
-    # ---------------------------------------------------------
     # 軸・スケール・目盛り設定
-    # ---------------------------------------------------------
     # 横軸 (貨物粒子径)
-    ax_msd.set_xscale('log')
-    ax_msd.set_xlim(0.4, 28.0)
-    ax_msd.xaxis.set_major_locator(ticker.FixedLocator([0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 20.0]))
-    ax_msd.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:g}"))
-    ax_msd.set_xlabel(r'Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]', fontsize=12.5, fontweight='bold')
+    ax.set_xscale('log')
+    ax.set_xlim(0.4, 28.0)
+    ax.xaxis.set_major_locator(ticker.FixedLocator([0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 20.0]))
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:g}"))
+    ax.set_xlabel(r'Cargo Diameter $2R_c$ [$\mu\mathrm{m}$]', fontsize=12.5, fontweight='bold')
 
-    # 第1軸 (左軸: MSD)
-    ax_msd.set_yscale('log')
-    ax_msd.set_ylim(0.05, 5000.0)
-    ax_msd.set_ylabel(
-        rf'MSD $\langle \Delta \boldsymbol{{r}}^2(\Delta t = {int(msd_time_s)}\,\mathrm{{s}}) \rangle$ [$\mu\mathrm{{m}}^2$]',
-        fontsize=12.0, fontweight='bold', color=color_msd
-    )
-    ax_msd.tick_params(axis='y', colors=color_msd, which='both')
-    ax_msd.spines['left'].set_color(color_msd)
-    ax_msd.spines['left'].set_linewidth(1.3)
-
-    # 第2軸 (右軸: 長距離テール到達距離 Δr_90)
-    max_r90 = np.nanmax(r90_vals) if len(r90_vals) > 0 else 15.0
-    y2_max = float(np.ceil(max_r90 * 1.25 / 5) * 5) if max_r90 > 5.0 else float(np.ceil(max_r90 * 1.25))
-    ax_r90.set_ylim(0.0, max(y2_max, 10.0))
-    step = 5.0 if y2_max > 15.0 else (2.0 if y2_max > 8.0 else 1.0)
-    ax_r90.yaxis.set_major_locator(ticker.MultipleLocator(step))
-    ax_r90.yaxis.set_minor_locator(ticker.MultipleLocator(step / 2.0))
-    ax_r90.set_ylabel(
-        rf'Reach Distance $\Delta r_{{90}}(\Delta t = {int(ccdf_time_s)}\,\mathrm{{s}})$ [$\mu\mathrm{{m}}$]' '\n'
-        r'($P(R \leq \Delta r_{90}) = 0.90$, Top 10% Tail)',
-        fontsize=12.0, fontweight='bold', color=color_r90
-    )
-    ax_r90.tick_params(axis='y', colors=color_r90, which='both')
-    ax_r90.spines['right'].set_color(color_r90)
-    ax_r90.spines['right'].set_linewidth(1.3)
+    # 縦軸 (変位 [μm])
+    ax.set_yscale('linear')
+    y_max = max(np.nanmax(rms_disp + rms_sem), np.nanmax(r90_vals + r90_sems), 10.0)
+    y_upper = float(np.ceil((y_max * 1.15) / 5) * 5) if y_max > 5.0 else float(np.ceil(y_max * 1.15))
+    ax.set_ylim(0.0, y_upper)
+    ax.set_ylabel(r'Displacement [$\mu\mathrm{m}$]', fontsize=12.5, fontweight='bold')
 
     # グリッド
-    ax_msd.grid(True, which='both', linestyle='--', alpha=0.35)
+    ax.grid(True, which='both', linestyle='--', alpha=0.35)
 
-    # 凡例を1つに統合
-    lines = [line1, line2]
-    labels = [l.get_label() for l in lines]
-    ax_msd.legend(lines, labels, loc='upper right', framealpha=0.94, fontsize=9.5, edgecolor='#dddddd')
+    # 凡例
+    ax.legend(loc='upper right', framealpha=0.94, fontsize=9.5, edgecolor='#dddddd')
 
     # タイトル
-    ax_msd.set_title(
-        rf'Cargo MSD ($\Delta t = {int(msd_time_s)}\,\mathrm{{s}}$) & Tail $\Delta r_{{90}}$ ($\Delta t = {int(ccdf_time_s)}\,\mathrm{{s}}$) vs Diameter',
-        fontsize=12.0, fontweight='bold', pad=12
+    ax.set_title(
+        rf'RMS Displacement ($\Delta t = {int(msd_time_s)}\,\mathrm{{s}}$) & Tail $\Delta r_{{90}}$ ($\Delta t = {int(ccdf_time_s)}\,\mathrm{{s}}$) vs Diameter',
+        fontsize=11.5, fontweight='bold', pad=12
     )
 
     plt.tight_layout()
-    filename = f"msd{int(msd_time_s)}_and_ccdf_r90_{int(ccdf_time_s)}s_vs_diameter"
+    filename = f"rms{int(msd_time_s)}_and_ccdf_r90_{int(ccdf_time_s)}s_vs_diameter"
     save_figure_to_all(fig, filename, out_dirs)
-    # デフォルト名でも保存
+    # 互換性・デフォルト保存
+    save_figure_to_all(fig, "rms300_and_ccdf_r90_vs_diameter", out_dirs)
     save_figure_to_all(fig, "msd300_and_ccdf_r90_vs_diameter", out_dirs)
     plt.close(fig)
-    print(f"[SAVED] Dual-Axis Plot: {filename}")
+    print(f"[SAVED] Single-Axis Plot: {filename}")
 
 
 def main():
@@ -306,7 +282,7 @@ def main():
     )
     parser.add_argument("--root_dir", type=str, default=None, help="Root directory containing beads folders.")
     parser.add_argument("--msd_time_s", type=float, default=300.0, help="Target MSD lag time in seconds (default: 300.0s).")
-    parser.add_argument("--ccdf_time_s", type=float, default=100.0, help="Target CCDF lag time in seconds (default: 100.0s).")
+    parser.add_argument("--ccdf_time_s", type=float, default=300.0, help="Target CCDF lag time in seconds (default: 300.0s).")
     parser.add_argument("--frame_interval", type=float, default=4.0, help="Frame interval in seconds (default: 4.0s).")
     args = parser.parse_args()
 
@@ -350,8 +326,8 @@ def main():
     ]
     print(df_combined[cols_to_show].to_string(index=False))
 
-    print("\nPlotting dual-axis figure...")
-    plot_msd_and_ccdf_r90(
+    print("\nPlotting figure...")
+    plot_rms_and_ccdf_r90(
         df_combined, out_dirs=out_dirs,
         msd_time_s=args.msd_time_s,
         ccdf_time_s=args.ccdf_time_s
