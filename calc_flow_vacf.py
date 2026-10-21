@@ -29,6 +29,7 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy.fft as sfft
 
 # スタイルの適用
 current_dir = Path(__file__).parent.resolve()
@@ -144,10 +145,11 @@ def compute_movie_flow_vacf(h5_path_str: str, stride: int = 16, max_frames: Opti
 
     # 時間方向 FFT による高速相関計算
     # 線形相関のため長さ 2*T にゼロパディング
-    V = np.fft.rfft(arr, n=2 * T, axis=0) # shape: (T + 1, 2, H, W)
-    P = np.sum(np.abs(V) ** 2, axis=1)    # shape: (T + 1, H, W)
-    P_sum = np.sum(P, axis=(1, 2))        # shape: (T + 1,)
-    sum_dot = np.fft.irfft(P_sum, n=2 * T)[:T] # shape: (T,)
+    # scipy.fft は float32 のまま計算でき np.fft より約6倍速い (プロセス並列と競合しないよう workers は小さく)
+    V = sfft.rfft(arr, n=2 * T, axis=0, workers=2)  # shape: (T + 1, 2, H, W)
+    P_sum = (V.real.astype(np.float64) ** 2 + V.imag.astype(np.float64) ** 2).sum(axis=(1, 2, 3))  # shape: (T + 1,)
+    del V
+    sum_dot = sfft.irfft(P_sum, n=2 * T)[:T]        # shape: (T,)
 
     # 正規化係数: 各ラグ Δt における時空間サンプル数 (T - Δt) * (H * W)
     sample_counts = (T - np.arange(T, dtype=np.float64)) * (H * W)
