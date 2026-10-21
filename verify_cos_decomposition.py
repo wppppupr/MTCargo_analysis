@@ -449,9 +449,10 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     df_window['pred_cos_i'] = df_window['Phi_mag'] * df_window['cos_bulk_mean']
 
     # -------------------------------------------------------------
-    # 図1: 瞬時値散布図: <cos theta_i> vs cos Theta_bulk (ビーズ直下窓)
     # -------------------------------------------------------------
-    fig, axes = plt.subplots(1, 2, figsize=(15.0, 6.5))
+    # 図1: 瞬時値散布図: <cos theta_i> vs cos Theta_bulk, Phi(R_c), Phi*cos_bulk (ビーズ直下窓)
+    # -------------------------------------------------------------
+    fig, axes = plt.subplots(1, 3, figsize=(21.0, 6.2))
 
     # Panel A: cos_i vs cos_bulk
     ax = axes[0]
@@ -472,12 +473,34 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     ax.set_ylim(-1.05, 1.05)
     ax.set_xlabel(r"Bulk Directional Coupling $\cos \Theta_{\mathrm{bulk}} \equiv \frac{\mathbf{v}_{\mathrm{cargo}} \cdot \bar{\mathbf{v}}_{\mathrm{MT}}}{|\mathbf{v}_{\mathrm{cargo}}| |\bar{\mathbf{v}}_{\mathrm{MT}}|}$")
     ax.set_ylabel(r"Pixel-Averaged Coupling $\langle \cos \theta_i \rangle$")
-    ax.set_title(r"Instantaneous: $\langle \cos \theta_i \rangle$ vs $\cos \Theta_{\mathrm{bulk}}$ ($R = R_c$)", fontsize=14, fontweight='bold')
-    ax.legend(loc='upper left', fontsize=10, framealpha=0.9)
+    ax.set_title(r"$\langle \cos \theta_i \rangle$ vs $\cos \Theta_{\mathrm{bulk}}$ ($R = R_c$)", fontsize=14, fontweight='bold')
+    ax.legend(loc='upper left', fontsize=9.5, framealpha=0.9)
     ax.grid(True)
 
-    # Panel B: cos_i vs (Phi * cos_bulk)
-    ax2 = axes[1]
+    # Panel B: cos_i vs Phi(R_c) (直接相関散布図)
+    ax1 = axes[1]
+    ax1.axhline(0, color='#888888', linestyle=':', linewidth=1.2)
+    ax1.axvline(0, color='#888888', linestyle=':', linewidth=1.2)
+
+    for b_item in BEADS_INFO:
+        bname = b_item['name']
+        sub = df_instant[df_instant['bead_name'] == bname].dropna(subset=['Phi_mag', 'cos_i'])
+        if sub.empty:
+            continue
+        corr = sub['cos_i'].corr(sub['Phi_mag'])
+        ax1.scatter(sub['Phi_mag'], sub['cos_i'], color=b_item['color'], marker=b_item['marker'],
+                    alpha=0.25, s=18, label=f"{b_item['label']} ($r={corr:.3f}$)")
+
+    ax1.set_xlim(-0.05, 1.05)
+    ax1.set_ylim(-1.05, 1.05)
+    ax1.set_xlabel(r"Local Polar Order $\Phi(R_c)$ (from local_polar_w.zarr)")
+    ax1.set_ylabel(r"Pixel-Averaged Coupling $\langle \cos \theta_i \rangle$")
+    ax1.set_title(r"Direct Correlation: $\langle \cos \theta_i \rangle$ vs $\Phi(R_c)$", fontsize=14, fontweight='bold')
+    ax1.legend(loc='upper left', fontsize=9.5, framealpha=0.9)
+    ax1.grid(True)
+
+    # Panel C: cos_i vs (Phi * cos_bulk)
+    ax2 = axes[2]
     ax2.axhline(0, color='#888888', linestyle=':', linewidth=1.2)
     ax2.axvline(0, color='#888888', linestyle=':', linewidth=1.2)
     ax2.plot([-1, 1], [-1, 1], color='#333333', linestyle='--', linewidth=1.5, label='1:1 line ($y = x$)')
@@ -493,15 +516,68 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
 
     ax2.set_xlim(-1.05, 1.05)
     ax2.set_ylim(-1.05, 1.05)
-    ax2.set_xlabel(r"Product: $\Phi(R_c) \times \cos \Theta_{\mathrm{bulk}}$ (from local_polar_w.zarr)")
+    ax2.set_xlabel(r"Product: $\Phi(R_c) \times \cos \Theta_{\mathrm{bulk}}$")
     ax2.set_ylabel(r"Pixel-Averaged Coupling $\langle \cos \theta_i \rangle$")
     ax2.set_title(r"Verification: $\langle \cos \theta_i \rangle$ vs $\Phi(R_c) \times \cos \Theta_{\mathrm{bulk}}$", fontsize=14, fontweight='bold')
-    ax2.legend(loc='upper left', fontsize=10, framealpha=0.9)
+    ax2.legend(loc='upper left', fontsize=9.5, framealpha=0.9)
     ax2.grid(True)
 
     fig.tight_layout()
+    save_figure(fig, "cos_instantaneous_decomposition_scatter_3panels", OUT_DIRS)
     save_figure(fig, "cos_instantaneous_decomposition_scatter", OUT_DIRS)
     plt.close(fig)
+
+    # 単独の「<cos theta_i> vs Phi(R_c)」直接相関散布図 (瞬時値 & 粒子平均)
+    fig_single, axes_s = plt.subplots(1, 2, figsize=(15.0, 6.5))
+
+    # Panel A: 瞬時値散布図
+    ax_sa = axes_s[0]
+    ax_sa.axhline(0, color='#888888', linestyle=':', linewidth=1.2)
+    ax_sa.axvline(0, color='#888888', linestyle=':', linewidth=1.2)
+    for b_item in BEADS_INFO:
+        bname = b_item['name']
+        sub = df_instant[df_instant['bead_name'] == bname].dropna(subset=['Phi_mag', 'cos_i'])
+        if sub.empty:
+            continue
+        corr = sub['cos_i'].corr(sub['Phi_mag'])
+        ax_sa.scatter(sub['Phi_mag'], sub['cos_i'], color=b_item['color'], marker=b_item['marker'],
+                      alpha=0.25, s=20, label=f"{b_item['label']} ($r={corr:.3f}$)")
+    ax_sa.set_xlim(-0.05, 1.05)
+    ax_sa.set_ylim(-1.05, 1.05)
+    ax_sa.set_xlabel(r"Local Polar Order $\Phi(R_c)$")
+    ax_sa.set_ylabel(r"Pixel-Averaged Coupling $\langle \cos \theta_i \rangle$")
+    ax_sa.set_title(r"Instantaneous: $\langle \cos \theta_i \rangle$ vs $\Phi(R_c)$", fontsize=14, fontweight='bold')
+    ax_sa.legend(loc='upper left', fontsize=10, framealpha=0.9)
+    ax_sa.grid(True)
+
+    # Panel B: 粒子平均散布図
+    ax_sb = axes_s[1]
+    ax_sb.axhline(0, color='#888888', linestyle=':', linewidth=1.2)
+    ax_sb.axvline(0, color='#888888', linestyle=':', linewidth=1.2)
+    for b_item in BEADS_INFO:
+        bname = b_item['name']
+        sub = df_instant[df_instant['bead_name'] == bname].dropna(subset=['Phi_mag', 'cos_i'])
+        if sub.empty:
+            continue
+        sub = sub.copy()
+        sub['unique_pid'] = sub['exp_dir'].astype(str) + '_' + sub['particle'].astype(str)
+        p_agg = sub.groupby('unique_pid').agg({'cos_i': 'mean', 'Phi_mag': 'mean'})
+        corr = p_agg['cos_i'].corr(p_agg['Phi_mag']) if len(p_agg) > 1 else np.nan
+        corr_str = f"$r={corr:.3f}$" if np.isfinite(corr) else "N/A"
+        ax_sb.scatter(p_agg['Phi_mag'], p_agg['cos_i'], color=b_item['color'], marker=b_item['marker'],
+                      alpha=0.85, s=55, edgecolor='black', linewidth=0.6,
+                      label=f"{b_item['label']} ({corr_str}, $N={len(p_agg)}$)")
+    ax_sb.set_xlim(-0.05, 1.05)
+    ax_sb.set_ylim(-0.4, 1.05)
+    ax_sb.set_xlabel(r"Track-Averaged Local Polar Order $\langle \Phi(R_c) \rangle_{\mathrm{track}}$")
+    ax_sb.set_ylabel(r"Track-Averaged Coupling $\langle \langle \cos \theta_i \rangle \rangle_{\mathrm{track}}$")
+    ax_sb.set_title(r"Particle-Averaged: $\langle \cos \theta_i \rangle$ vs $\Phi(R_c)$", fontsize=14, fontweight='bold')
+    ax_sb.legend(loc='upper left', fontsize=10, framealpha=0.9)
+    ax_sb.grid(True)
+
+    fig_single.tight_layout()
+    save_figure(fig_single, "cos_i_vs_phi_scatter", OUT_DIRS)
+    plt.close(fig_single)
 
     # -------------------------------------------------------------
     # 図2: 貨物半径 R_c における 3 指標の比較サマリー
@@ -940,6 +1016,279 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     fig.tight_layout()
     save_figure(fig, "cos_decomposition_master_curve_r_over_xi", OUT_DIRS)
     plt.close(fig)
+
+
+    # -------------------------------------------------------------
+    # 図7: 窓サイズ依存性の 6 パネル分解プロット only <cos \theta_i>
+    # -------------------------------------------------------------
+    fig, axes = plt.subplots(2, 3, figsize=(16.0, 10.0), sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+
+    window_summary_list = []
+
+    for idx, b_item in enumerate(BEADS_INFO):
+        ax = axes_flat[idx]
+        bname = b_item['name']
+        r_c = b_item['radius_um']
+        color = b_item['color']
+        lbl = b_item['label']
+
+        sub = df_window[df_window['bead_name'] == bname]
+        if sub.empty:
+            ax.text(0.5, 0.5, "No Data", ha='center', va='center', transform=ax.transAxes)
+            continue
+
+        sub = sub.copy()
+        sub['unique_pid'] = sub['exp_dir'].astype(str) + '_' + sub['particle'].astype(str)
+
+        agg = sub.groupby('window_radius_um').agg({
+            'cos_i_mean': ['mean', lambda x: np.std(x, ddof=1) / np.sqrt(len(x)) if len(x)>1 else 0.0],
+            'pred_cos_i': ['mean', lambda x: np.std(x, ddof=1) / np.sqrt(len(x)) if len(x)>1 else 0.0],
+            'unique_pid': 'nunique',
+            'exp_dir': 'nunique'
+        }).reset_index()
+
+        r_w = agg['window_radius_um'].values
+        ci_m = agg[('cos_i_mean', 'mean')].values
+        ci_s = agg[('cos_i_mean', '<lambda_0>')].values
+        pred_m = agg[('pred_cos_i', 'mean')].values
+        pred_s = agg[('pred_cos_i', '<lambda_0>')].values
+
+        n_p = agg[('unique_pid', 'nunique')].max()
+        n_e = agg[('exp_dir', 'nunique')].max()
+
+        for i_rw in range(len(r_w)):
+            window_summary_list.append({
+                'bead_name': bname,
+                'window_radius_um': r_w[i_rw],
+                'cos_i_mean': ci_m[i_rw],
+                'cos_i_sem': ci_s[i_rw],
+                'pred_mean': pred_m[i_rw],
+                'pred_sem': pred_s[i_rw],
+            })
+
+        ax.axhline(0.0, color='#888888', linestyle=':', linewidth=1.2, zorder=1)
+        ax.axhline(1.0, color='#333333', linestyle='--', linewidth=1.4, zorder=1)
+        ax.axvline(r_c, color='#cc2222', linestyle=':', linewidth=1.5, zorder=2, label=f'Cargo $R_c = {r_c:.2f}\,\mu\mathrm{{m}}$')
+
+        # 実験相関長 xi
+        exp_names = sub['exp_dir'].unique()
+        xis = [xi_dict[e] for e in exp_names if e in xi_dict and not np.isnan(xi_dict[e])]
+        if xis:
+            xi_mean = float(np.mean(xis))
+            ax.axvline(xi_mean, color='#2b5c8f', linestyle='--', linewidth=1.6, zorder=2,
+                       label=rf'Corr. length $\xi = {xi_mean:.2f}\,\mu\mathrm{{m}}$')
+
+        # 観測各点平均 <cos theta_i>(R)
+        ax.plot(r_w, ci_m, marker=b_item['marker'], markersize=6, color=color, linewidth=2.4,
+                label=rf'$\langle \cos \theta_i \rangle(R)$')
+        ax.fill_between(r_w, ci_m - ci_s, ci_m + ci_s, color=color, alpha=0.2)
+
+        #ax.set_xscale('log')
+        ax.set_xlim(0.0, 40.0)
+        ax.set_ylim(-0.25, 1.05)
+        ax.set_title(f"{lbl}  ($R_c = {r_c:.3f}\,\mu\mathrm{{m}}$, $N={n_p}$)", fontsize=14, fontweight='bold')
+        ax.set_xlabel(r"Window Radius $R$ [$\mu\mathrm{m}$]", fontsize=13)
+        if idx % 3 == 0:
+            ax.set_ylabel(r"$\langle \cos \theta_i \rangle\left(R\right)$", fontsize=14)
+        ax.legend(loc='upper right', fontsize=8.8, framealpha=0.92)
+
+    fig.suptitle(r'Window Dependence: $\langle \cos \theta_i \rangle(R)$',
+                 fontsize=17, y=0.99)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    save_figure(fig, "cos_decomposition_6panels_raw", OUT_DIRS)
+    plt.close(fig)
+
+    # -------------------------------------------------------------
+    # 図8: 窓サイズ依存性の 1 パネルプロット only <cos \theta_i>
+    # -------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(6.0, 6.0))
+
+    window_summary_list = []
+
+    for idx, b_item in enumerate(BEADS_INFO):
+        bname = b_item['name']
+        r_c = b_item['radius_um']
+        color = b_item['color']
+        lbl = b_item['label']
+
+        sub = df_window[df_window['bead_name'] == bname]
+        if sub.empty:
+            continue
+
+        sub = sub.copy()
+        sub['unique_pid'] = sub['exp_dir'].astype(str) + '_' + sub['particle'].astype(str)
+
+        agg = sub.groupby('window_radius_um').agg({
+            'cos_i_mean': ['mean', lambda x: np.std(x, ddof=1) / np.sqrt(len(x)) if len(x)>1 else 0.0],
+            'pred_cos_i': ['mean', lambda x: np.std(x, ddof=1) / np.sqrt(len(x)) if len(x)>1 else 0.0],
+            'unique_pid': 'nunique',
+            'exp_dir': 'nunique'
+        }).reset_index()
+
+        r_w = agg['window_radius_um'].values
+        ci_m = agg[('cos_i_mean', 'mean')].values
+        ci_s = agg[('cos_i_mean', '<lambda_0>')].values
+
+        n_p = agg[('unique_pid', 'nunique')].max()
+        n_e = agg[('exp_dir', 'nunique')].max()
+
+        for i_rw in range(len(r_w)):
+            window_summary_list.append({
+                'bead_name': bname,
+                'window_radius_um': r_w[i_rw],
+                'cos_i_mean': ci_m[i_rw],
+                'cos_i_sem': ci_s[i_rw],
+            })
+        bname = b_item['name']
+        r_c = b_item['radius_um']
+        color = b_item['color']
+        lbl = b_item['label']
+
+        sub = df_window[df_window['bead_name'] == bname]
+        if sub.empty:
+            ax.text(0.5, 0.5, "No Data", ha='center', va='center', transform=ax.transAxes)
+            continue
+
+        sub = sub.copy()
+        sub['unique_pid'] = sub['exp_dir'].astype(str) + '_' + sub['particle'].astype(str)
+
+        agg = sub.groupby('window_radius_um').agg({
+            'cos_i_mean': ['mean', lambda x: np.std(x, ddof=1) / np.sqrt(len(x)) if len(x)>1 else 0.0],
+            'pred_cos_i': ['mean', lambda x: np.std(x, ddof=1) / np.sqrt(len(x)) if len(x)>1 else 0.0],
+            'unique_pid': 'nunique',
+            'exp_dir': 'nunique'
+        }).reset_index()
+
+        r_w = agg['window_radius_um'].values
+        ci_m = agg[('cos_i_mean', 'mean')].values
+        ci_s = agg[('cos_i_mean', '<lambda_0>')].values
+        pred_m = agg[('pred_cos_i', 'mean')].values
+        pred_s = agg[('pred_cos_i', '<lambda_0>')].values
+
+        n_p = agg[('unique_pid', 'nunique')].max()
+        n_e = agg[('exp_dir', 'nunique')].max()
+
+        for i_rw in range(len(r_w)):
+            window_summary_list.append({
+                'bead_name': bname,
+                'window_radius_um': r_w[i_rw],
+                'cos_i_mean': ci_m[i_rw],
+                'cos_i_sem': ci_s[i_rw],
+                'pred_mean': pred_m[i_rw],
+                'pred_sem': pred_s[i_rw],
+            })
+
+        ax.axhline(0.0, color='#888888', linestyle=':', linewidth=1.2, zorder=1)
+        ax.axhline(1.0, color='#333333', linestyle='--', linewidth=1.4, zorder=1)
+
+        # 観測各点平均 <cos theta_i>(R)
+        ax.plot(r_w, ci_m, marker=b_item['marker'], markersize=6, color=color, linewidth=2.4,
+                label=rf'$\langle \cos \theta_i \rangle(R)$')
+        ax.fill_between(r_w, ci_m - ci_s, ci_m + ci_s, color=color, alpha=0.2)
+
+        #ax.set_xscale('log')
+        ax.set_xlim(0.0, 40.0)
+        ax.set_ylim(-0.25, 1.05)
+        ax.set_xlabel(r"Window Radius $R$ [$\mu\mathrm{m}$]", fontsize=13)
+        if idx % 3 == 0:
+            ax.set_ylabel(r"$\langle \cos \theta_i \rangle\left(R\right)$", fontsize=14)
+        ax.legend(loc='upper right', fontsize=8.8, framealpha=0.92)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    save_figure(fig, "cos_decomposition_raw", OUT_DIRS)
+    plt.close(fig)
+
+    # -------------------------------------------------------------
+    # 図9: 貨物半径の無次元化 R_c / \xi における指標プロット (cos_decomposition_vs_rc_over_xi)
+    # -------------------------------------------------------------
+    particle_inst_rows = []
+    for b_item in BEADS_INFO:
+        bname = b_item['name']
+        sub_inst = df_instant[df_instant['bead_name'] == bname]
+        if sub_inst.empty:
+            continue
+        sub_inst = sub_inst.copy()
+        sub_inst['unique_pid'] = sub_inst['exp_dir'].astype(str) + '_' + sub_inst['particle'].astype(str)
+
+        p_agg = sub_inst.groupby('unique_pid').agg({
+            'cos_i': 'mean',
+            'Phi_mag': 'mean',
+            'pred_cos_i': 'mean',
+            'radius_um': 'first',
+            'xi_um': 'first',
+            'bead_name': 'first',
+        })
+        p_agg['rc_over_xi'] = p_agg['radius_um'] / p_agg['xi_um']
+        particle_inst_rows.append(p_agg)
+
+    df_p_inst = pd.concat(particle_inst_rows, ignore_index=True)
+
+    rc_xi_summary = []
+    for b_item in BEADS_INFO:
+        bname = b_item['name']
+        sub_p = df_p_inst[df_p_inst['bead_name'] == bname]
+        if sub_p.empty:
+            continue
+        n_p = len(sub_p)
+        rc_xi_summary.append({
+            'bead_name': bname,
+            'label': b_item['label'],
+            'color': b_item['color'],
+            'marker': b_item['marker'],
+            'radius_um': b_item['radius_um'],
+            'n_particles': n_p,
+            'rc_over_xi_mean': float(sub_p['rc_over_xi'].mean()),
+            'rc_over_xi_sem': float(sub_p['rc_over_xi'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
+            'cos_i_mean': float(sub_p['cos_i'].mean()),
+            'cos_i_sem': float(sub_p['cos_i'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
+            'Phi_mean': float(sub_p['Phi_mag'].mean()),
+            'Phi_sem': float(sub_p['Phi_mag'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
+            'pred_mean': float(sub_p['pred_cos_i'].mean()),
+            'pred_sem': float(sub_p['pred_cos_i'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
+        })
+    df_rc_xi = pd.DataFrame(rc_xi_summary)
+
+    fig, ax = plt.subplots(figsize=(10.5, 6.5))
+    ax.axhline(0, color='#888888', linestyle=':', linewidth=1.2)
+    ax.axhline(1, color='#333333', linestyle='--', linewidth=1.4)
+    ax.axvline(1.0, color='#666666', linestyle='--', linewidth=1.6, label=r'Crossover $R_c / \xi = 1$')
+
+    # 各粒子の個別データ（薄くプロット）
+    for b_item in BEADS_INFO:
+        sub_p = df_p_inst[df_p_inst['bead_name'] == b_item['name']]
+        if not sub_p.empty:
+            ax.scatter(sub_p['rc_over_xi'], sub_p['cos_i'], color=b_item['color'], marker=b_item['marker'],
+                       alpha=0.18, s=28, zorder=2)
+
+    rc_xi_vals = df_rc_xi['rc_over_xi_mean'].values
+
+    # Local polar order Phi(R_c)
+    ax.errorbar(rc_xi_vals, df_rc_xi['Phi_mean'],
+                xerr=df_rc_xi['rc_over_xi_sem'], yerr=df_rc_xi['Phi_sem'],
+                fmt='^-.', color='#EE6677', markersize=8, capsize=4, linewidth=2.0, zorder=4,
+                label=r"Local polar order $\Phi(R_c)$")
+
+    # Actual <cos theta_i> (各点平均)
+    ax.errorbar(rc_xi_vals, df_rc_xi['cos_i_mean'],
+                xerr=df_rc_xi['rc_over_xi_sem'], yerr=df_rc_xi['cos_i_sem'],
+                fmt='o-', color='#228833', markersize=9, capsize=5, linewidth=2.4, zorder=6,
+                label=r"Observed pixel-mean $\langle \cos \theta_i \rangle$")
+
+    #ax.set_xscale('log')
+    ax.set_xlim(0.04, 3.5)
+    ax.set_ylim(-0.2, 1.05)
+    ax.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]")
+    ax.set_ylabel("Coupling / Order Parameter [-]")
+    ax.set_title(r"Decomposition vs Normalized Cargo Radius: $R_c / \xi$",
+                 fontsize=15, fontweight='bold')
+    ax.legend(loc='upper right', fontsize=11, framealpha=0.92)
+    ax.grid(True)
+
+    fig.tight_layout()
+    save_figure(fig, "cos_decomposition_vs_rc_over_xi_raw", OUT_DIRS)
+    plt.close(fig)
+
 
     # CSV 保存
     df_window_summary = pd.DataFrame(window_summary_list)

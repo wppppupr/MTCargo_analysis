@@ -112,6 +112,7 @@
 
 - **[plot_tau_oacf_theory.py](file:///home/sasaki/MTCargo_analysis/plot_tau_oacf_theory.py)**: $\tau_{\mathrm{p}}$ および $\tau_{\mathrm{p}}^{-1}$ の粒子サイズ依存性と理論カーブ可視化
 - **[MSD.py](file:///home/sasaki/MTCargo_analysis/MSD.py)**: アンサンブル MSD, 各種緩和時間比較（$\tau_{\mathrm{p}}, \tau_{\mathrm{bound}}, \tau_{\mathrm{eff}}$ vs $2R_c$）
+- **[MSAD.py](file:///home/sasaki/MTCargo_analysis/MSAD.py)**: アンサンブル平均二乗角度変位 MSAD $\langle (\Delta \theta)^2 \rangle$ および四分位範囲 (IQR) 帯プロット、MSAD(300 s) とスケーリング指数の粒子径依存性
 - **[plot_hmm_acf.py](file:///home/sasaki/MTCargo_analysis/plot_hmm_acf.py)**: HMM 状態別自己相関（VACF, OACF, SACF）および相関時間比率比較
 - **[plot_run_velocity.py](file:///home/sasaki/MTCargo_analysis/plot_run_velocity.py)**: Run 速度 $v_{\mathrm{run}}$ vs $2R_c$（$\xi$ フィッティング）
 - **[run_tumble_analysis.py](file:///home/sasaki/MTCargo_analysis/run_tumble_analysis.py)**: Bound/Unbound dwell 時間分布（PDF, CCDF）
