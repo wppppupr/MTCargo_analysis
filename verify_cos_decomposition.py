@@ -1248,8 +1248,12 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             'pred_sem': float(sub_p['pred_cos_i'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
         })
     df_rc_xi = pd.DataFrame(rc_xi_summary)
+    if not df_rc_xi.empty:
+        df_rc_xi = df_rc_xi.sort_values('rc_over_xi_mean').reset_index(drop=True)
 
     fig, ax = plt.subplots(figsize=(10.5, 6.5))
+    ax2 = ax.twinx()
+
     ax.axhline(0, color='#888888', linestyle=':', linewidth=1.2)
     ax.axhline(1, color='#333333', linestyle='--', linewidth=1.4)
     ax.axvline(1.0, color='#666666', linestyle='--', linewidth=1.6, label=r'Crossover $R_c / \xi = 1$')
@@ -1264,7 +1268,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     rc_xi_vals = df_rc_xi['rc_over_xi_mean'].values
 
     # Local polar order Phi(R_c)
-    ax.errorbar(rc_xi_vals, df_rc_xi['Phi_mean'],
+    ax2.errorbar(rc_xi_vals, df_rc_xi['Phi_mean'],
                 xerr=df_rc_xi['rc_over_xi_sem'], yerr=df_rc_xi['Phi_sem'],
                 fmt='^-.', color='#EE6677', markersize=8, capsize=4, linewidth=2.0, zorder=4,
                 label=r"Local polar order $\Phi(R_c)$")
@@ -1272,17 +1276,28 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     # Actual <cos theta_i> (各点平均)
     ax.errorbar(rc_xi_vals, df_rc_xi['cos_i_mean'],
                 xerr=df_rc_xi['rc_over_xi_sem'], yerr=df_rc_xi['cos_i_sem'],
-                fmt='o-', color='#228833', markersize=9, capsize=5, linewidth=2.4, zorder=6,
+                fmt='o-', color='#1f77b4', markersize=9, capsize=5, linewidth=2.4, zorder=6,
                 label=r"Observed pixel-mean $\langle \cos \theta_i \rangle$")
 
     #ax.set_xscale('log')
-    ax.set_xlim(0.04, 3.5)
+    ax.set_xlim(0.0, 3.5)
     ax.set_ylim(-0.2, 1.05)
+    ax2.set_ylim(-0.2, 1.05)
     ax.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]")
-    ax.set_ylabel("Coupling / Order Parameter [-]")
-    ax.set_title(r"Decomposition vs Normalized Cargo Radius: $R_c / \xi$",
-                 fontsize=15, fontweight='bold')
-    ax.legend(loc='upper right', fontsize=11, framealpha=0.92)
+    ax.set_ylabel(r"$\langle \cos\theta_i\rangle\left(\frac{R_c}{\xi}\right)$", color='#1f77b4')
+    ax2.set_ylabel(r"Local polar order $\Phi\left(\frac{R_c}{\xi}\right)$", color='#EE6677')
+    ax.tick_params(axis='y', colors='#1f77b4', which='both')
+    ax2.tick_params(axis='y', colors='#EE6677', which='both')
+    ax.spines['left'].set_color('#1f77b4')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax2.spines['right'].set_color('#EE6677')
+    ax2.spines['left'].set_visible(False)
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['bottom'].set_visible(False)
+    #ax.set_title(r"Decomposition vs Normalized Cargo Radius: $R_c / \xi$",
+    #             fontsize=15, fontweight='bold')
+    #ax.legend(loc='upper right', fontsize=11, framealpha=0.92)
     ax.grid(True)
 
     fig.tight_layout()

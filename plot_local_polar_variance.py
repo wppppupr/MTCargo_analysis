@@ -522,6 +522,125 @@ def main():
         fig3.savefig(od / "local_polar_variance_per_experiment.pdf", bbox_inches='tight')
     print(f"Saved Figure 3 (6 Panels) to {out_dirs[0] / 'local_polar_variance_per_experiment.png'}")
 
+    # =============================================================
+    # 相関長 xi による規格化プロット (R / xi)
+    # =============================================================
+    print("\n--- Generating normalized plots: chi_Phi(R) vs R / xi ---")
+    
+    # 1. 相関長 xi の読み込み (実験別 CSV & 条件別 xi.csv)
+    xi_per_exp = {}
+    csv_per_exp_path = CURRENT_DIR / "figure" / "bg_angular_correlation" / "bg_angular_correlation_length_per_experiment.csv"
+    if not csv_per_exp_path.exists():
+        csv_per_exp_path = root_dir / "figure" / "bg_angular_correlation" / "bg_angular_correlation_length_per_experiment.csv"
+    if csv_per_exp_path.exists():
+        try:
+            df_xi_exp = pd.read_csv(csv_per_exp_path)
+            for _, row in df_xi_exp.iterrows():
+                e_name = str(row['exp_dir']).strip()
+                if 'xi_um' in row and np.isfinite(row['xi_um']) and row['xi_um'] > 0:
+                    xi_per_exp[e_name] = float(row['xi_um'])
+        except Exception as e:
+            print(f"Warning: Failed loading {csv_per_exp_path}: {e}")
+
+    # 条件ごとの平均相関長
+    cond_mean_xi = {}
+    for b_item in BEADS_INFO:
+        b_name = b_item["name"]
+        matched_xis = [xi_per_exp[e["exp_name"]] for e in all_experiments if e["bead_name"] == b_name and e["exp_name"] in xi_per_exp]
+        if matched_xis:
+            cond_mean_xi[b_name] = float(np.mean(matched_xis))
+        else:
+            cond_mean_xi[b_name] = 5.0  # デフォルトフォールバック
+
+    print("Correlation lengths xi [um] per condition:")
+    for b_name, x_val in cond_mean_xi.items():
+        print(f"  {b_name}: xi = {x_val:.3f} um")
+
+    # 4. 規格化図: 線形プロット chi_Phi(R) vs R / xi
+    fig4, ax4 = plt.subplots(figsize=(8.5, 6.2))
+    for b_item in BEADS_INFO:
+        b_name = b_item["name"]
+        d_um = b_item["diameter_um"]
+        color = b_item["color"]
+        marker = b_item["marker"]
+        sub = df_summary[df_summary["bead_name"] == b_name]
+        if sub.empty:
+            continue
+
+        xi = cond_mean_xi.get(b_name, 5.0)
+        r_norm = sub["radius_um"].values / xi
+        mean_v = sub["chi_phi_mean"].values
+        sem_v = sub["chi_phi_sem"].values
+        q25 = sub["chi_phi_q25"].values
+        q75 = sub["chi_phi_q75"].values
+        n_exp = sub["n_experiments"].iloc[0]
+
+        # 四分位範囲 (IQR) の帯
+        ax4.fill_between(r_norm, q25, q75, color=color, alpha=0.18, edgecolor='none')
+        # エラーバー付き主線 (Mean +- SEM)
+        ax4.errorbar(
+            r_norm, mean_v, yerr=sem_v,
+            marker=marker, linestyle='-', linewidth=2.0, markersize=7.5,
+            label=f'{d_um:.2f} \u03bcm ($\\xi={xi:.2f}\\,\\mu\\mathrm{{m}}$)', color=color,
+            capsize=3.0, elinewidth=1.2
+        )
+
+    # R / xi = 1 の縦線
+    ax4.axvline(1.0, color='#222222', linestyle='--', linewidth=1.8, zorder=2, label=r'$R / \xi = 1$')
+
+    ax4.set_xlabel(r'Normalized Window Radius $R / \xi$', fontsize=13)
+    ax4.set_ylabel(r'Variance $\chi_\Phi(R) \equiv \langle \Phi(R)^2 \rangle_{\mathbf{r}} - \langle \Phi(R) \rangle_{\mathbf{r}}^2$', fontsize=13)
+    ax4.set_title(r'Local Polar Order Variance $\chi_\Phi(R)$ vs $R / \xi$', fontsize=14, pad=12)
+    ax4.legend(fontsize=10.0, loc='upper right', framealpha=0.9, markerscale=0.85, handlelength=1.5, borderpad=0.4)
+    ax4.set_xlim(0, 10.0)
+    ax4.set_ylim(bottom=0)
+
+    for od in out_dirs:
+        fig4.savefig(od / "local_polar_variance_vs_R_over_xi.png", dpi=300, bbox_inches='tight')
+        fig4.savefig(od / "local_polar_variance_vs_R_over_xi.pdf", bbox_inches='tight')
+    print(f"Saved Figure 4 (Normalized Linear) to {out_dirs[0] / 'local_polar_variance_vs_R_over_xi.png'}")
+
+    # 5. 規格化図: 両対数プロット (Log-Log) chi_Phi(R) vs R / xi
+    fig5, ax5 = plt.subplots(figsize=(8.5, 6.2))
+    for b_item in BEADS_INFO:
+        b_name = b_item["name"]
+        d_um = b_item["diameter_um"]
+        color = b_item["color"]
+        marker = b_item["marker"]
+        sub = df_summary[df_summary["bead_name"] == b_name]
+        if sub.empty:
+            continue
+
+        xi = cond_mean_xi.get(b_name, 5.0)
+        r_norm = sub["radius_um"].values / xi
+        mean_v = sub["chi_phi_mean"].values
+        sem_v = sub["chi_phi_sem"].values
+        n_exp = sub["n_experiments"].iloc[0]
+
+        valid = (mean_v > 0) & (r_norm > 0)
+        ax5.errorbar(
+            r_norm[valid], mean_v[valid], yerr=sem_v[valid],
+            marker=marker, linestyle='-', linewidth=2.0, markersize=7.5,
+            label=f'{d_um:.2f} \u03bcm ($\\xi={xi:.2f}\\,\\mu\\mathrm{{m}}$)', color=color,
+            capsize=3.0, elinewidth=1.2
+        )
+
+    # R / xi = 1 の縦線
+    ax5.axvline(1.0, color='#222222', linestyle='--', linewidth=1.8, zorder=2, label=r'$R / \xi = 1$')
+
+    ax5.set_xscale('log')
+    ax5.set_yscale('log')
+    ax5.set_xlabel(r'Normalized Window Radius $R / \xi$', fontsize=13)
+    ax5.set_ylabel(r'Variance $\chi_\Phi(R)$', fontsize=13)
+    ax5.set_title(r'Local Polar Order Variance $\chi_\Phi(R)$ vs $R / \xi$ (Log-Log)', fontsize=14, pad=12)
+    ax5.legend(fontsize=10.0, loc='lower left', framealpha=0.9, markerscale=0.85, handlelength=1.5, borderpad=0.4)
+    ax5.set_xlim(left=0.08, right=15.0)
+
+    for od in out_dirs:
+        fig5.savefig(od / "local_polar_variance_vs_R_over_xi_loglog.png", dpi=300, bbox_inches='tight')
+        fig5.savefig(od / "local_polar_variance_vs_R_over_xi_loglog.pdf", bbox_inches='tight')
+    print(f"Saved Figure 5 (Normalized Log-Log) to {out_dirs[0] / 'local_polar_variance_vs_R_over_xi_loglog.png'}")
+
     print("\nAll processing and plotting successfully finished!")
 
 
