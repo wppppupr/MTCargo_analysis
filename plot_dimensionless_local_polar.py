@@ -675,7 +675,7 @@ def plot_side_by_side_comparison(
             )
 
         ax.set_xlabel(r'Dimensionless Window Radius $R_\mathrm{w}/\xi$')
-        ax.set_xlim(0, 3.0)
+        ax.set_xlim(0, 10.0)
         ax.set_ylim(0, 1.0)
         ax.set_title(title)
         ax.legend(frameon=True, loc='upper right', fontsize=11)
