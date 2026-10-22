@@ -1305,6 +1305,80 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     plt.close(fig)
 
 
+    # -------------------------------------------------------------
+    # 図10: 窓サイズ依存性の 6 パネル分解プロット (横軸 R / \xi)
+    # -------------------------------------------------------------
+    fig, axes = plt.subplots(2, 3, figsize=(16.0, 10.0), sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+
+    for idx, b_item in enumerate(BEADS_INFO):
+        ax = axes_flat[idx]
+        bname = b_item['name']
+        r_c = b_item['radius_um']
+        color = b_item['color']
+        lbl = b_item['label']
+
+        sub = df_window[df_window['bead_name'] == bname]
+        if sub.empty:
+            ax.text(0.5, 0.5, "No Data", ha='center', va='center', transform=ax.transAxes)
+            continue
+
+        sub = sub.copy()
+        sub['r_over_xi'] = sub['window_radius_um'] / sub['xi_um']
+        sub['unique_pid'] = sub['exp_dir'].astype(str) + '_' + sub['particle'].astype(str)
+
+        agg = sub.groupby('window_radius_um').agg({
+            'r_over_xi': 'mean',
+            'cos_i_mean': ['mean', lambda x: np.std(x, ddof=1) / np.sqrt(len(x)) if len(x)>1 else 0.0],
+            'cos_bulk_mean': ['mean', lambda x: np.std(x, ddof=1) / np.sqrt(len(x)) if len(x)>1 else 0.0],
+            'Phi_mag': ['mean', lambda x: np.std(x, ddof=1) / np.sqrt(len(x)) if len(x)>1 else 0.0],
+            'pred_cos_i': ['mean', lambda x: np.std(x, ddof=1) / np.sqrt(len(x)) if len(x)>1 else 0.0],
+            'unique_pid': 'nunique',
+            'exp_dir': 'nunique',
+            'xi_um': 'mean',
+        }).reset_index()
+
+        r_norm = agg[('r_over_xi', 'mean')].values
+        ci_m = agg[('cos_i_mean', 'mean')].values
+        ci_s = agg[('cos_i_mean', '<lambda_0>')].values
+        pred_m = agg[('pred_cos_i', 'mean')].values
+        pred_s = agg[('pred_cos_i', '<lambda_0>')].values
+
+        n_p = agg[('unique_pid', 'nunique')].max()
+        xi_avg = agg[('xi_um', 'mean')].mean()
+        rc_over_xi_avg = r_c / xi_avg if xi_avg > 0 else np.nan
+
+        ax.axhline(0.0, color='#888888', linestyle=':', linewidth=1.2, zorder=1)
+        ax.axhline(1.0, color='#333333', linestyle='--', linewidth=1.4, zorder=1)
+        
+        ax.axvline(1.0, color='#2b5c8f', linestyle='--', linewidth=1.6, zorder=2,
+                   label=r'Correlation length $R / \xi = 1$')
+        ax.axvline(rc_over_xi_avg, color='#cc2222', linestyle=':', linewidth=1.5, zorder=2,
+                   label=rf'Cargo $R_c / \xi = {rc_over_xi_avg:.2f}$')
+
+        # 1. 観測各点平均 <cos theta_i>(R)
+        ax.plot(r_norm, ci_m, marker=b_item['marker'], markersize=6, color=color, linewidth=2.4,
+                label=rf'$\langle \cos \theta_i \rangle(R/\xi)$')
+        ax.fill_between(r_norm, ci_m - ci_s, ci_m + ci_s, color=color, alpha=0.2)
+
+        ax.set_xscale('log')
+        ax.set_xlim(0.08, 25.0)
+        ax.set_ylim(-0.25, 1.05)
+        ax.set_title(rf"{lbl}  ($R_c/\langle\xi\rangle = {rc_over_xi_avg:.2f}$, $N={n_p}$)", fontsize=14, fontweight='bold')
+        ax.set_xlabel(r"Normalized Window Radius $R / \xi$ [-]", fontsize=13)
+        if idx % 3 == 0:
+            ax.set_ylabel("Coupling / Order Parameter", fontsize=14)
+        ax.legend(loc='upper right', fontsize=8.8, framealpha=0.92)
+
+    fig.suptitle(r'Window Dependence Decomposition vs Normalized Radius $R / \xi$',
+                 fontsize=17, y=0.99)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    save_figure(fig, "cos_decomposition_6panels_cos_theta_i_only", OUT_DIRS)
+    plt.close(fig)
+
+
+
+
     # CSV 保存
     df_window_summary = pd.DataFrame(window_summary_list)
     for out_dir in OUT_DIRS:
