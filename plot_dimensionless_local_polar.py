@@ -3,16 +3,16 @@
 plot_dimensionless_local_polar.py
 
 notebooks/local_polar.ipynb で行われている局所ポーラーオーダー (Local Polar Order) の解析・プロットを
-ベースとし、Window Radius R_w [μm] を空間配向相関から実験ごとに求めた相関長 xi [μm] で割って
-無次元化 (R_w / xi) してプロット・フィッティングを行うスクリプト。
+ベースとし、Window Radius R [μm] を空間配向相関から実験ごとに求めた相関長 xi [μm] で割って
+無次元化 (R / xi) してプロット・フィッティングを行うスクリプト。
 
 【仕様と設計方針】
 1. 各実験（フォルダー）ごとに空間配向相関から求めた相関長 xi_um を使用
    (bg_angular_correlation_length_per_experiment.csv)
 2. 無次元化半径 R_norm = (window_size_px * 0.11 μm/px) / xi_exp
 3. 貨物中心 (w/ Cargo):
-   - ビーズ半径内部 (R_w <= R_bead) は微小管が存在しないマスク領域のため、
-     物理的に妥当な外側領域 (R_w > R_bead かつ 非 NaN/inf かつ P > 0.01) のみを有効値としてプロット・フィッティング
+   - ビーズ半径内部 (R <= R_bead) は微小管が存在しないマスク領域のため、
+     物理的に妥当な外側領域 (R > R_bead かつ 非 NaN/inf かつ P > 0.01) のみを有効値としてプロット・フィッティング
 4. 3種類のデータ系列に対応:
    - w/ Cargo (local_polar_w.zarr): 粒子中心の局所ポーラーオーダー
    - w/o Cargo (local_polar_bg.zarr): 貨物なし背景領域の局所ポーラーオーダー
@@ -317,7 +317,7 @@ def plot_condition_dimensionless_zoom(
     out_dir: Path,
 ):
     """
-    各ビーズ条件ごとの個別ズームプロット (R_w / xi で無次元化)
+    各ビーズ条件ごとの個別ズームプロット (R / xi で無次元化)
     notebooks/local_polar.ipynb の Cell 16-21 に対応する図。
     """
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -421,8 +421,9 @@ def plot_condition_dimensionless_zoom(
             zorder=5
         )
 
-    ax.set_xlabel(r'Dimensionless Window Radius $R_\mathrm{w}/\xi$')
-    ax.set_ylabel(r'Polar Order $P$')
+    ax.vlines(1.0, ymin=0, ymax=1.0, color='#333333', linestyle='--', lw=1.5, zorder=100)
+    ax.set_xlabel(r'Dimensionless Window Radius $R/\xi$')
+    ax.set_ylabel(r'Polar Order $\Phi(R/\xi)$')
     ax.set_xlim(0, 2.5)
     ax.set_ylim(0, 1.0)
     ax.set_title(f"Local Polar Order: {cond_info['label']} (Scaled by $\\xi$)")
@@ -444,7 +445,7 @@ def plot_dimensionless_master_curves(
 ):
     """
     全ビーズサイズを重ねた無次元化プロット (w/ Cargo および w/o Cargo)
-    R_w / xi を横軸とし、線形軸・対数軸の両方でプロット・フィッティング
+    R / xi を横軸とし、線形軸・対数軸の両方でプロット・フィッティング
     """
     fit_summary = []
 
@@ -456,7 +457,7 @@ def plot_dimensionless_master_curves(
             continue
 
         # -------------------------------------------------------------
-        # プロット 1: 線形軸 (0 <= R_w / xi <= 3.0)
+        # プロット 1: 線形軸 (0 <= R / xi <= 3.0)
         # -------------------------------------------------------------
         fig, ax = plt.subplots(figsize=(9, 6.5))
 
@@ -530,8 +531,9 @@ def plot_dimensionless_master_curves(
                 except Exception as e:
                     print(f"[WARN] Fit failed for {kind} {cond['key']}: {e}")
 
-        ax.set_xlabel(r'Dimensionless Window Radius $R_\mathrm{w}/\xi$')
-        ax.set_ylabel(r'Polar Order $P$')
+        ax.vlines(1.0, ymin=0, ymax=1.0, color='#333333', linestyle='--', lw=1.5, zorder=100)
+        ax.set_xlabel(r'Dimensionless Window Radius $R/\xi$')
+        ax.set_ylabel(r'Polar Order $\Phi(R/\xi)$')
         ax.set_xlim(0, 10.0)
         ax.set_ylim(0, 1.0)
         ax.set_title(f"Local Polar Order vs Dimensionless Radius ({kind_title})")
@@ -542,7 +544,7 @@ def plot_dimensionless_master_curves(
         plt.close(fig)
 
         # -------------------------------------------------------------
-        # プロット 2: 対数軸 (Log-x scale: 0.05 <= R_w / xi <= 50)
+        # プロット 2: 対数軸 (Log-x scale: 0.05 <= R / xi <= 50)
         # -------------------------------------------------------------
         fig_log, ax_log = plt.subplots(figsize=(9, 6.5))
 
@@ -590,7 +592,8 @@ def plot_dimensionless_master_curves(
                 zorder=3
             )
 
-        ax_log.set_xlabel(r'Dimensionless Window Radius $R_\mathrm{w}/\xi$')
+        ax_log.vlines(1.0, ymin=0, ymax=1.0, color='#333333', linestyle='--', lw=1.5)
+        ax_log.set_xlabel(r'Dimensionless Window Radius $R/\xi$')
         ax_log.set_ylabel(r'Polar Order $P$')
         ax_log.set_xscale('log')
         ax_log.set_xlim(0.05, 50.0)
@@ -674,7 +677,8 @@ def plot_side_by_side_comparison(
                 zorder=3
             )
 
-        ax.set_xlabel(r'Dimensionless Window Radius $R_\mathrm{w}/\xi$')
+        ax.vlines(1.0, ymin=0, ymax=1.0, color='#333333', linestyle='--', lw=1.5, zorder=100)
+        ax.set_xlabel(r'Dimensionless Window Radius $R/\xi$')
         ax.set_xlim(0, 10.0)
         ax.set_ylim(0, 1.0)
         ax.set_title(title)
