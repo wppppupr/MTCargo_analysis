@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import warnings
 warnings.filterwarnings('ignore')
+from scipy.special import i0, i1
+from scipy.optimize import curve_fit
+from scipy.stats import skew
 
 # ワークスペースおよびNASのパス設定
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -472,8 +475,8 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     ax.set_xlim(-1.05, 1.05)
     ax.set_ylim(-1.05, 1.05)
     ax.set_xlabel(r"Bulk Directional Coupling $\cos \Theta_{\mathrm{bulk}} \equiv \frac{\mathbf{v}_{\mathrm{cargo}} \cdot \bar{\mathbf{v}}_{\mathrm{MT}}}{|\mathbf{v}_{\mathrm{cargo}}| |\bar{\mathbf{v}}_{\mathrm{MT}}|}$")
-    ax.set_ylabel(r"Pixel-Averaged Coupling $\langle \cos \theta_i \rangle$")
-    ax.set_title(r"$\langle \cos \theta_i \rangle$ vs $\cos \Theta_{\mathrm{bulk}}$ ($R = R_c$)", fontsize=14, fontweight='bold')
+    ax.set_ylabel(r"Pixel-Averaged Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$")
+    ax.set_title(r"$\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$ vs $\cos \Theta_{\mathrm{bulk}}$ ($R = R_c$)", fontsize=14, fontweight='bold')
     ax.legend(loc='upper left', fontsize=9.5, framealpha=0.9)
     ax.grid(True)
 
@@ -494,8 +497,8 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     ax1.set_xlim(-0.05, 1.05)
     ax1.set_ylim(-1.05, 1.05)
     ax1.set_xlabel(r"Local Polar Order $\Phi(R_c)$ (from local_polar_w.zarr)")
-    ax1.set_ylabel(r"Pixel-Averaged Coupling $\langle \cos \theta_i \rangle$")
-    ax1.set_title(r"Direct Correlation: $\langle \cos \theta_i \rangle$ vs $\Phi(R_c)$", fontsize=14, fontweight='bold')
+    ax1.set_ylabel(r"Pixel-Averaged Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$")
+    ax1.set_title(r"Direct Correlation: $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$ vs $\Phi(R_c)$", fontsize=14, fontweight='bold')
     ax1.legend(loc='upper left', fontsize=9.5, framealpha=0.9)
     ax1.grid(True)
 
@@ -517,8 +520,8 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     ax2.set_xlim(-1.05, 1.05)
     ax2.set_ylim(-1.05, 1.05)
     ax2.set_xlabel(r"Product: $\Phi(R_c) \times \cos \Theta_{\mathrm{bulk}}$")
-    ax2.set_ylabel(r"Pixel-Averaged Coupling $\langle \cos \theta_i \rangle$")
-    ax2.set_title(r"Verification: $\langle \cos \theta_i \rangle$ vs $\Phi(R_c) \times \cos \Theta_{\mathrm{bulk}}$", fontsize=14, fontweight='bold')
+    ax2.set_ylabel(r"Pixel-Averaged Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$")
+    ax2.set_title(r"Verification: $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$ vs $\Phi(R_c) \times \cos \Theta_{\mathrm{bulk}}$", fontsize=14, fontweight='bold')
     ax2.legend(loc='upper left', fontsize=9.5, framealpha=0.9)
     ax2.grid(True)
 
@@ -545,8 +548,8 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     ax_sa.set_xlim(-0.05, 1.05)
     ax_sa.set_ylim(-1.05, 1.05)
     ax_sa.set_xlabel(r"Local Polar Order $\Phi(R_c)$")
-    ax_sa.set_ylabel(r"Pixel-Averaged Coupling $\langle \cos \theta_i \rangle$")
-    ax_sa.set_title(r"Instantaneous: $\langle \cos \theta_i \rangle$ vs $\Phi(R_c)$", fontsize=14, fontweight='bold')
+    ax_sa.set_ylabel(r"Pixel-Averaged Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$")
+    ax_sa.set_title(r"Instantaneous: $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$ vs $\Phi(R_c)$", fontsize=14, fontweight='bold')
     ax_sa.legend(loc='upper left', fontsize=10, framealpha=0.9)
     ax_sa.grid(True)
 
@@ -570,8 +573,8 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     ax_sb.set_xlim(-0.05, 1.05)
     ax_sb.set_ylim(-0.4, 1.05)
     ax_sb.set_xlabel(r"Track-Averaged Local Polar Order $\langle \Phi(R_c) \rangle_{\mathrm{track}}$")
-    ax_sb.set_ylabel(r"Track-Averaged Coupling $\langle \langle \cos \theta_i \rangle \rangle_{\mathrm{track}}$")
-    ax_sb.set_title(r"Particle-Averaged: $\langle \cos \theta_i \rangle$ vs $\Phi(R_c)$", fontsize=14, fontweight='bold')
+    ax_sb.set_ylabel(r"Track-Averaged Coupling $\langle \mathbf{\hat{v}} \cdot \mathbf{\hat{u}} \rangle_{\mathrm{track}}$")
+    ax_sb.set_title(r"Particle-Averaged: $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$ vs $\Phi(R_c)$", fontsize=14, fontweight='bold')
     ax_sb.legend(loc='upper left', fontsize=10, framealpha=0.9)
     ax_sb.grid(True)
 
@@ -600,17 +603,44 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         })
 
         n_p = len(p_agg)
+        cos_i_vals = p_agg['cos_i'].values
+        m_cos_i = float(np.mean(cos_i_vals))
+        phi_vals = p_agg['Phi_mag'].values
+        m_phi = float(np.mean(phi_vals))
+        rng_b = np.random.default_rng(42)
+        if n_p >= 2:
+            bs_m = [np.mean(rng_b.choice(cos_i_vals, size=n_p, replace=True)) for _ in range(1000)]
+            ci_low = float(np.percentile(bs_m, 2.5))
+            ci_high = float(np.percentile(bs_m, 97.5))
+            cos_i_yerr_low = m_cos_i - ci_low
+            cos_i_yerr_high = ci_high - m_cos_i
+
+            bs_phi = [np.mean(rng_b.choice(phi_vals, size=n_p, replace=True)) for _ in range(1000)]
+            ci_phi_low = float(np.percentile(bs_phi, 2.5))
+            ci_phi_high = float(np.percentile(bs_phi, 97.5))
+            phi_yerr_low = m_phi - ci_phi_low
+            phi_yerr_high = ci_phi_high - m_phi
+        else:
+            cos_i_yerr_low = 0.0
+            cos_i_yerr_high = 0.0
+            phi_yerr_low = 0.0
+            phi_yerr_high = 0.0
+
         summary_rows.append({
             'bead_name': bname,
             'label': b_item['label'],
             'radius_um': b_item['radius_um'],
             'n_particles': n_p,
-            'cos_i_mean': float(p_agg['cos_i'].mean()),
+            'cos_i_mean': m_cos_i,
             'cos_i_sem': float(p_agg['cos_i'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
+            'cos_i_yerr_low': cos_i_yerr_low,
+            'cos_i_yerr_high': cos_i_yerr_high,
             'cos_bulk_mean': float(p_agg['cos_bulk'].mean()),
             'cos_bulk_sem': float(p_agg['cos_bulk'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
-            'Phi_mean': float(p_agg['Phi_mag'].mean()),
+            'Phi_mean': m_phi,
             'Phi_sem': float(p_agg['Phi_mag'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
+            'Phi_yerr_low': phi_yerr_low,
+            'Phi_yerr_high': phi_yerr_high,
             'pred_mean': float(p_agg['pred_cos_i'].mean()),
             'pred_sem': float(p_agg['pred_cos_i'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
             'ratio_obs_to_bulk': float(p_agg['cos_i'].mean() / p_agg['cos_bulk'].mean()) if p_agg['cos_bulk'].mean() != 0 else np.nan,
@@ -628,27 +658,29 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
                 fmt='s--', color='#4477AA', markersize=8, capsize=4, linewidth=2.0,
                 label=r"Bulk alignment $\cos \Theta_{\mathrm{bulk}} \equiv \frac{\mathbf{v}_{\mathrm{cargo}} \cdot \bar{\mathbf{v}}_{\mathrm{MT}}}{|\mathbf{v}_{\mathrm{cargo}}| |\bar{\mathbf{v}}_{\mathrm{MT}}|}$")
 
-    # Local polar order Phi(R_c)
-    ax.errorbar(r_vals, df_summary['Phi_mean'], yerr=df_summary['Phi_sem'],
+    # Local polar order Phi(R_c) (粒子間ブートストラップ非対称エラーバー)
+    phi_yerr_summary = [df_summary['Phi_yerr_low'].values, df_summary['Phi_yerr_high'].values]
+    ax.errorbar(r_vals, df_summary['Phi_mean'], yerr=phi_yerr_summary,
                 fmt='^-.', color='#EE6677', markersize=8, capsize=4, linewidth=2.0,
-                label=r"Local polar order $\Phi(R_c)$ (from local_polar_w.zarr)")
+                label=r"Local polar order $\Phi(R_c)$ (95% CI)")
 
     # Product Phi * cos_bulk (理論積)
     ax.errorbar(r_vals * 1.04, df_summary['pred_mean'], yerr=df_summary['pred_sem'],
                 fmt='d:', color='#AA3377', markersize=8, capsize=4, linewidth=2.0,
                 label=r"Decomposition $\Phi(R_c) \times \cos \Theta_{\mathrm{bulk}}$")
 
-    # Actual <cos theta_i> (各点平均)
-    ax.errorbar(r_vals, df_summary['cos_i_mean'], yerr=df_summary['cos_i_sem'],
+    # Actual <cos theta_i> (各点平均: 粒子間ブートストラップ非対称エラーバー)
+    cos_i_yerr = [df_summary['cos_i_yerr_low'].values, df_summary['cos_i_yerr_high'].values]
+    ax.errorbar(r_vals, df_summary['cos_i_mean'], yerr=cos_i_yerr,
                 fmt='o-', color='#228833', markersize=9, capsize=5, linewidth=2.4,
-                label=r"Observed pixel-mean $\langle \cos \theta_i \rangle$")
+                label=r"Observed $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$ (95% CI)")
 
     ax.set_xscale('log')
     ax.set_xlim(0.2, 15.0)
     ax.set_ylim(-0.1, 1.05)
     ax.set_xlabel(r"Cargo Radius $R_c$ [$\mu\mathrm{m}$]")
     ax.set_ylabel("Coupling / Order Parameter [-]")
-    ax.set_title(r"Decomposition of Directional Coupling: $\langle \cos \theta_i \rangle \approx \Phi(R_c) \times \cos \Theta_{\mathrm{bulk}}$",
+    ax.set_title(r"Decomposition of Directional Coupling: $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}} \approx \Phi(R_c) \times \cos \Theta_{\mathrm{bulk}}$",
                  fontsize=15, fontweight='bold')
     ax.legend(loc='upper right', fontsize=11, framealpha=0.92)
     ax.grid(True)
@@ -741,7 +773,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
 
         # 4. 観測各点平均 <cos theta_i>(R)
         ax.plot(r_w, ci_m, marker=b_item['marker'], markersize=6, color=color, linewidth=2.4,
-                label=rf'$\langle \cos \theta_i \rangle(R)$ (Observed)')
+                label=rf'$\mathbf{{\hat{{v}}}} \cdot \mathbf{{\hat{{u}}}}(R)$ (Observed)')
         ax.fill_between(r_w, ci_m - ci_s, ci_m + ci_s, color=color, alpha=0.2)
 
         ax.set_xscale('log')
@@ -753,7 +785,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             ax.set_ylabel("Coupling / Order Parameter", fontsize=14)
         ax.legend(loc='upper right', fontsize=8.8, framealpha=0.92)
 
-    fig.suptitle(r'Window Dependence Decomposition: $\langle \cos \theta_i \rangle(R) \approx \Phi(R) \times \cos \Theta_{\mathrm{bulk}}(R)$',
+    fig.suptitle(r'Window Dependence Decomposition: $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}(R) \approx \Phi(R) \times \cos \Theta_{\mathrm{bulk}}(R)$',
                  fontsize=17, y=0.99)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     save_figure(fig, "cos_decomposition_6panels", OUT_DIRS)
@@ -792,6 +824,29 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         if sub_p.empty:
             continue
         n_p = len(sub_p)
+        cos_i_vals = sub_p['cos_i'].values
+        m_cos_i = float(np.mean(cos_i_vals))
+        phi_vals = sub_p['Phi_mag'].values
+        m_phi = float(np.mean(phi_vals))
+        rng_b = np.random.default_rng(42)
+        if n_p >= 2:
+            bs_m = [np.mean(rng_b.choice(cos_i_vals, size=n_p, replace=True)) for _ in range(1000)]
+            ci_low = float(np.percentile(bs_m, 2.5))
+            ci_high = float(np.percentile(bs_m, 97.5))
+            cos_i_yerr_low = m_cos_i - ci_low
+            cos_i_yerr_high = ci_high - m_cos_i
+
+            bs_phi = [np.mean(rng_b.choice(phi_vals, size=n_p, replace=True)) for _ in range(1000)]
+            ci_phi_low = float(np.percentile(bs_phi, 2.5))
+            ci_phi_high = float(np.percentile(bs_phi, 97.5))
+            phi_yerr_low = m_phi - ci_phi_low
+            phi_yerr_high = ci_phi_high - m_phi
+        else:
+            cos_i_yerr_low = 0.0
+            cos_i_yerr_high = 0.0
+            phi_yerr_low = 0.0
+            phi_yerr_high = 0.0
+
         rc_xi_summary.append({
             'bead_name': bname,
             'label': b_item['label'],
@@ -801,12 +856,16 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             'n_particles': n_p,
             'rc_over_xi_mean': float(sub_p['rc_over_xi'].mean()),
             'rc_over_xi_sem': float(sub_p['rc_over_xi'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
-            'cos_i_mean': float(sub_p['cos_i'].mean()),
+            'cos_i_mean': m_cos_i,
             'cos_i_sem': float(sub_p['cos_i'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
+            'cos_i_yerr_low': cos_i_yerr_low,
+            'cos_i_yerr_high': cos_i_yerr_high,
             'cos_bulk_mean': float(sub_p['cos_bulk'].mean()),
             'cos_bulk_sem': float(sub_p['cos_bulk'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
-            'Phi_mean': float(sub_p['Phi_mag'].mean()),
+            'Phi_mean': m_phi,
             'Phi_sem': float(sub_p['Phi_mag'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
+            'Phi_yerr_low': phi_yerr_low,
+            'Phi_yerr_high': phi_yerr_high,
             'pred_mean': float(sub_p['pred_cos_i'].mean()),
             'pred_sem': float(sub_p['pred_cos_i'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
         })
@@ -832,11 +891,12 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
                 fmt='s--', color='#4477AA', markersize=8, capsize=4, linewidth=2.0, zorder=4,
                 label=r"Bulk alignment $\cos \Theta_{\mathrm{bulk}}$")
 
-    # Local polar order Phi(R_c)
+    # Local polar order Phi(R_c) (粒子間ブートストラップ非対称エラーバー)
+    phi_yerr_rc = [df_rc_xi['Phi_yerr_low'].values, df_rc_xi['Phi_yerr_high'].values]
     ax.errorbar(rc_xi_vals, df_rc_xi['Phi_mean'],
-                xerr=df_rc_xi['rc_over_xi_sem'], yerr=df_rc_xi['Phi_sem'],
+                xerr=df_rc_xi['rc_over_xi_sem'], yerr=phi_yerr_rc,
                 fmt='^-.', color='#EE6677', markersize=8, capsize=4, linewidth=2.0, zorder=4,
-                label=r"Local polar order $\Phi(R_c)$")
+                label=r"Local polar order $\Phi(R_c)$ (95% CI)")
 
     # Product Phi * cos_bulk (理論積)
     ax.errorbar(rc_xi_vals * 1.03, df_rc_xi['pred_mean'],
@@ -844,11 +904,12 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
                 fmt='d:', color='#AA3377', markersize=8, capsize=4, linewidth=2.0, zorder=5,
                 label=r"Decomposition $\Phi(R_c) \times \cos \Theta_{\mathrm{bulk}}$")
 
-    # Actual <cos theta_i> (各点平均)
+    # Actual <cos theta_i> (各点平均: 粒子間ブートストラップ非対称エラーバー)
+    cos_i_yerr_rc = [df_rc_xi['cos_i_yerr_low'].values, df_rc_xi['cos_i_yerr_high'].values]
     ax.errorbar(rc_xi_vals, df_rc_xi['cos_i_mean'],
-                xerr=df_rc_xi['rc_over_xi_sem'], yerr=df_rc_xi['cos_i_sem'],
+                xerr=df_rc_xi['rc_over_xi_sem'], yerr=cos_i_yerr_rc,
                 fmt='o-', color='#228833', markersize=9, capsize=5, linewidth=2.4, zorder=6,
-                label=r"Observed pixel-mean $\langle \cos \theta_i \rangle$")
+                label=r"Observed $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$ (95% CI)")
 
     ax.set_xscale('log')
     ax.set_xlim(0.04, 3.5)
@@ -932,7 +993,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
 
         # 4. 観測各点平均 <cos theta_i>(R)
         ax.plot(r_norm, ci_m, marker=b_item['marker'], markersize=6, color=color, linewidth=2.4,
-                label=rf'$\langle \cos \theta_i \rangle(R)$')
+                label=rf'$\mathbf{{\hat{{v}}}} \cdot \mathbf{{\hat{{u}}}}(R)$')
         ax.fill_between(r_norm, ci_m - ci_s, ci_m + ci_s, color=color, alpha=0.2)
 
         ax.set_xscale('log')
@@ -979,7 +1040,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     ax.set_xlim(0.08, 25.0)
     ax.set_ylim(-0.15, 1.05)
     ax.set_xlabel(r"Normalized Window Radius $R / \xi$ [-]")
-    ax.set_ylabel(r"Observed Coupling $\langle \cos \theta_i \rangle(R)$")
+    ax.set_ylabel(r"Observed Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}(R)$")
     ax.set_title(r"Observed Coupling vs $R / \xi$ (All Cargo Sizes)", fontsize=14, fontweight='bold')
     ax.legend(loc='upper right', fontsize=10, framealpha=0.9)
     ax.grid(True)
@@ -1081,7 +1142,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
 
         # 観測各点平均 <cos theta_i>(R)
         ax.plot(r_w, ci_m, marker=b_item['marker'], markersize=6, color=color, linewidth=2.4,
-                label=rf'$\langle \cos \theta_i \rangle(R)$')
+                label=rf'$\mathbf{{\hat{{v}}}} \cdot \mathbf{{\hat{{u}}}}(R)$')
         ax.fill_between(r_w, ci_m - ci_s, ci_m + ci_s, color=color, alpha=0.2)
 
         #ax.set_xscale('log')
@@ -1090,10 +1151,10 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         ax.set_title(f"{lbl}  ($R_c = {r_c:.3f}\,\mu\mathrm{{m}}$, $N={n_p}$)", fontsize=14, fontweight='bold')
         ax.set_xlabel(r"Window Radius $R$ [$\mu\mathrm{m}$]", fontsize=13)
         if idx % 3 == 0:
-            ax.set_ylabel(r"$\langle \cos \theta_i \rangle\left(R\right)$", fontsize=14)
+            ax.set_ylabel(r"$\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}\left(R\right)$", fontsize=14)
         ax.legend(loc='upper right', fontsize=8.8, framealpha=0.92)
 
-    fig.suptitle(r'Window Dependence: $\langle \cos \theta_i \rangle(R)$',
+    fig.suptitle(r'Window Dependence: $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}(R)$',
                  fontsize=17, y=0.99)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     save_figure(fig, "cos_decomposition_6panels_raw", OUT_DIRS)
@@ -1184,7 +1245,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
 
         # 観測各点平均 <cos theta_i>(R)
         ax.plot(r_w, ci_m, marker=b_item['marker'], markersize=6, color=color, linewidth=2.4,
-                label=rf'$\langle \cos \theta_i \rangle(R)$')
+                label=rf'$\mathbf{{\hat{{v}}}} \cdot \mathbf{{\hat{{u}}}}(R)$')
         ax.fill_between(r_w, ci_m - ci_s, ci_m + ci_s, color=color, alpha=0.2)
 
         #ax.set_xscale('log')
@@ -1192,7 +1253,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         ax.set_ylim(-0.25, 1.05)
         ax.set_xlabel(r"Window Radius $R$ [$\mu\mathrm{m}$]", fontsize=13)
         if idx % 3 == 0:
-            ax.set_ylabel(r"$\langle \cos \theta_i \rangle\left(R\right)$", fontsize=14)
+            ax.set_ylabel(r"$\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}\left(R\right)$", fontsize=14)
         ax.legend(loc='upper right', fontsize=8.8, framealpha=0.92)
 
     fig.tight_layout(rect=[0, 0, 1, 0.96])
@@ -1231,6 +1292,29 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         if sub_p.empty:
             continue
         n_p = len(sub_p)
+        cos_i_vals = sub_p['cos_i'].values
+        m_cos_i = float(np.mean(cos_i_vals))
+        phi_vals = sub_p['Phi_mag'].values
+        m_phi = float(np.mean(phi_vals))
+        rng_b = np.random.default_rng(42)
+        if n_p >= 2:
+            bs_m = [np.mean(rng_b.choice(cos_i_vals, size=n_p, replace=True)) for _ in range(1000)]
+            ci_low = float(np.percentile(bs_m, 2.5))
+            ci_high = float(np.percentile(bs_m, 97.5))
+            cos_i_yerr_low = m_cos_i - ci_low
+            cos_i_yerr_high = ci_high - m_cos_i
+
+            bs_phi = [np.mean(rng_b.choice(phi_vals, size=n_p, replace=True)) for _ in range(1000)]
+            ci_phi_low = float(np.percentile(bs_phi, 2.5))
+            ci_phi_high = float(np.percentile(bs_phi, 97.5))
+            phi_yerr_low = m_phi - ci_phi_low
+            phi_yerr_high = ci_phi_high - m_phi
+        else:
+            cos_i_yerr_low = 0.0
+            cos_i_yerr_high = 0.0
+            phi_yerr_low = 0.0
+            phi_yerr_high = 0.0
+
         rc_xi_summary.append({
             'bead_name': bname,
             'label': b_item['label'],
@@ -1240,10 +1324,14 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             'n_particles': n_p,
             'rc_over_xi_mean': float(sub_p['rc_over_xi'].mean()),
             'rc_over_xi_sem': float(sub_p['rc_over_xi'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
-            'cos_i_mean': float(sub_p['cos_i'].mean()),
+            'cos_i_mean': m_cos_i,
             'cos_i_sem': float(sub_p['cos_i'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
-            'Phi_mean': float(sub_p['Phi_mag'].mean()),
+            'cos_i_yerr_low': cos_i_yerr_low,
+            'cos_i_yerr_high': cos_i_yerr_high,
+            'Phi_mean': m_phi,
             'Phi_sem': float(sub_p['Phi_mag'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
+            'Phi_yerr_low': phi_yerr_low,
+            'Phi_yerr_high': phi_yerr_high,
             'pred_mean': float(sub_p['pred_cos_i'].mean()),
             'pred_sem': float(sub_p['pred_cos_i'].std() / np.sqrt(n_p)) if n_p > 1 else 0.0,
         })
@@ -1267,24 +1355,26 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
 
     rc_xi_vals = df_rc_xi['rc_over_xi_mean'].values
 
-    # Local polar order Phi(R_c)
+    # Local polar order Phi(R_c) (粒子間ブートストラップ非対称エラーバー)
+    phi_yerr_raw = [df_rc_xi['Phi_yerr_low'].values, df_rc_xi['Phi_yerr_high'].values]
     ax2.errorbar(rc_xi_vals, df_rc_xi['Phi_mean'],
-                xerr=df_rc_xi['rc_over_xi_sem'], yerr=df_rc_xi['Phi_sem'],
+                xerr=df_rc_xi['rc_over_xi_sem'], yerr=phi_yerr_raw,
                 fmt='^-.', color='#EE6677', markersize=8, capsize=4, linewidth=2.0, zorder=4,
-                label=r"Local polar order $\Phi(R_c)$")
+                label=r"Local polar order $\Phi(R_c)$ (95% CI)")
 
-    # Actual <cos theta_i> (各点平均)
+    # Actual <cos theta_i> (各点平均: 粒子間ブートストラップ非対称エラーバー)
+    cos_i_yerr_raw = [df_rc_xi['cos_i_yerr_low'].values, df_rc_xi['cos_i_yerr_high'].values]
     ax.errorbar(rc_xi_vals, df_rc_xi['cos_i_mean'],
-                xerr=df_rc_xi['rc_over_xi_sem'], yerr=df_rc_xi['cos_i_sem'],
+                xerr=df_rc_xi['rc_over_xi_sem'], yerr=cos_i_yerr_raw,
                 fmt='o-', color='#1f77b4', markersize=9, capsize=5, linewidth=2.4, zorder=6,
-                label=r"Observed pixel-mean $\langle \cos \theta_i \rangle$")
+                label=r"Observed $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$ (95% CI)")
 
     #ax.set_xscale('log')
     ax.set_xlim(0.0, 3.5)
     ax.set_ylim(-0.2, 1.05)
     ax2.set_ylim(-0.2, 1.05)
     ax.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]")
-    ax.set_ylabel(r"$\langle \cos\theta_i\rangle\left(\frac{R_c}{\xi}\right)$", color='#1f77b4')
+    ax.set_ylabel(r"$\langle \mathbf{\hat{v}} \cdot \mathbf{\hat{u}} \rangle\left(\frac{R_c}{\xi}\right)$", color='#1f77b4')
     ax2.set_ylabel(r"Local polar order $\Phi\left(\frac{R_c}{\xi}\right)$", color='#EE6677')
     ax.tick_params(axis='y', colors='#1f77b4', which='both')
     ax2.tick_params(axis='y', colors='#EE6677', which='both')
@@ -1295,9 +1385,11 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     ax2.spines['left'].set_visible(False)
     ax2.spines['top'].set_visible(False)
     ax2.spines['bottom'].set_visible(False)
-    #ax.set_title(r"Decomposition vs Normalized Cargo Radius: $R_c / \xi$",
-    #             fontsize=15, fontweight='bold')
-    #ax.legend(loc='upper right', fontsize=11, framealpha=0.92)
+
+    # 凡例統合
+    lines_1, labels_1 = ax.get_legend_handles_labels()
+    lines_2, labels_2 = ax2.get_legend_handles_labels()
+    ax.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper right', fontsize=10.0, framealpha=0.92)
     ax.grid(True)
 
     fig.tight_layout()
@@ -1358,7 +1450,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
 
         # 1. 観測各点平均 <cos theta_i>(R)
         ax.plot(r_norm, ci_m, marker=b_item['marker'], markersize=6, color=color, linewidth=2.4,
-                label=rf'$\langle \cos \theta_i \rangle(R/\xi)$')
+                label=rf'$\mathbf{{\hat{{v}}}} \cdot \mathbf{{\hat{{u}}}}(R/\xi)$')
         ax.fill_between(r_norm, ci_m - ci_s, ci_m + ci_s, color=color, alpha=0.2)
 
         ax.set_xscale('log')
@@ -1367,7 +1459,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         ax.set_title(rf"{lbl}  ($R_c/\langle\xi\rangle = {rc_over_xi_avg:.2f}$, $N={n_p}$)", fontsize=14, fontweight='bold')
         ax.set_xlabel(r"Normalized Window Radius $R / \xi$ [-]", fontsize=13)
         if idx % 3 == 0:
-            ax.set_ylabel("Coupling / Order Parameter", fontsize=14)
+            ax.set_ylabel(r"$\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=14)
         ax.legend(loc='upper right', fontsize=8.8, framealpha=0.92)
 
     fig.suptitle(r'Window Dependence Decomposition vs Normalized Radius $R / \xi$',
@@ -1376,8 +1468,604 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     save_figure(fig, "cos_decomposition_6panels_cos_theta_i_only", OUT_DIRS)
     plt.close(fig)
 
+    # -------------------------------------------------------------
+    # 7. 全ビーズサイズ統合 1 パネルプロット: <cos theta_i>(R/xi)
+    # -------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(10.0, 7.0))
+    ax.axhline(0.0, color='#888888', linestyle=':', linewidth=1.2, zorder=1)
+    ax.axhline(1.0, color='#333333', linestyle='--', linewidth=1.4, zorder=1)
+    ax.axvline(1.0, color='#2b5c8f', linestyle='--', linewidth=1.8, zorder=2,
+               label=r'Correlation length $R / \xi = 1$')
 
+    for idx, b_item in enumerate(BEADS_INFO):
+        bname = b_item['name']
+        r_c = b_item['radius_um']
+        color = b_item['color']
+        lbl = b_item['label']
 
+        sub = df_window[df_window['bead_name'] == bname]
+        if sub.empty:
+            continue
+
+        sub = sub.copy()
+        sub['r_over_xi'] = sub['window_radius_um'] / sub['xi_um']
+        sub['unique_pid'] = sub['exp_dir'].astype(str) + '_' + sub['particle'].astype(str)
+
+        agg = sub.groupby('window_radius_um').agg({
+            'r_over_xi': 'mean',
+            'cos_i_mean': ['mean', lambda x: np.std(x, ddof=1) / np.sqrt(len(x)) if len(x)>1 else 0.0],
+            'unique_pid': 'nunique',
+            'xi_um': 'mean',
+        }).reset_index()
+
+        r_norm = agg[('r_over_xi', 'mean')].values
+        ci_m = agg[('cos_i_mean', 'mean')].values
+        ci_s = agg[('cos_i_mean', '<lambda_0>')].values
+
+        n_p = agg[('unique_pid', 'nunique')].max()
+        xi_avg = agg[('xi_um', 'mean')].mean()
+        rc_over_xi_avg = r_c / xi_avg if xi_avg > 0 else np.nan
+
+        line_lbl = rf"{lbl} ($R_c/\langle\xi\rangle = {rc_over_xi_avg:.2f}$, $N={n_p}$)"
+        ax.plot(r_norm, ci_m, marker=b_item['marker'], markersize=7, color=color, linewidth=2.5,
+                label=line_lbl, zorder=3 + idx)
+        ax.fill_between(r_norm, ci_m - ci_s, ci_m + ci_s, color=color, alpha=0.15, zorder=2)
+
+    ax.set_xscale('log')
+    ax.set_xlim(0.08, 25.0)
+    ax.set_ylim(-0.15, 0.65)
+    ax.set_xlabel(r"Normalized Window Radius $R / \xi$ [-]", fontsize=14, labelpad=8)
+    ax.set_ylabel(r"Pixel-Averaged Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}(R/\xi)$", fontsize=14, labelpad=8)
+    ax.set_title(r"Cargo-Flow Coupling Decay $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$ vs $R / \xi$ (All Cargo Sizes)",
+                 fontsize=15, fontweight='bold', pad=12)
+    ax.grid(True, which='both', linestyle=':', color='#dddddd', alpha=0.8, zorder=0)
+    ax.legend(loc='upper right', fontsize=10.0, framealpha=0.92)
+    fig.tight_layout()
+    save_figure(fig, "cos_decomposition_1panel_cos_theta_i_only", OUT_DIRS)
+    plt.close(fig)
+
+    # -------------------------------------------------------------
+    # 8. 方向一致度 cos theta_i の確率密度ヒストグラム P(cos theta_i)
+    # -------------------------------------------------------------
+    fig, axes = plt.subplots(2, 3, figsize=(16.0, 10.0), sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+
+    bins_cos = np.linspace(-1.0, 1.0, 29) # 28ビン (-1から1)
+    cos_grid = np.linspace(-0.9999, 0.9999, 400)
+
+    for idx, b_item in enumerate(BEADS_INFO):
+        ax = axes_flat[idx]
+        bname = b_item['name']
+        color = b_item['color']
+        lbl = b_item['label']
+
+        sub_inst = df_instant[df_instant['bead_name'] == bname]
+        if sub_inst.empty:
+            ax.text(0.5, 0.5, "No Data", ha='center', va='center', transform=ax.transAxes)
+            continue
+
+        cos_vals = sub_inst['cos_i'].dropna().values
+        phi_mean_val = float(df_rc_xi[df_rc_xi['bead_name'] == bname]['Phi_mean'].values[0]) if not df_rc_xi.empty else np.nan
+        ci_mean_val = float(np.mean(cos_vals)) if len(cos_vals) > 0 else np.nan
+
+        # 実測ヒストグラム (確率密度 normalized)
+        ax.hist(cos_vals, bins=bins_cos, density=True, color=color, alpha=0.45,
+                edgecolor=color, linewidth=1.2, label=rf"Observed ($N = {len(cos_vals)}$)")
+
+        # 代表粒子平均値の縦線
+        ax.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2)
+        ax.axvline(ci_mean_val, color=color, linestyle='-', linewidth=2.0,
+                   label=rf"Mean $\mathbf{{\hat{{v}}}} \cdot \mathbf{{\hat{{u}}}} = {ci_mean_val:.2f}$")
+
+        ax.set_xlim(-1.05, 1.05)
+        ax.set_ylim(0.0, 4.0)
+        ax.set_title(rf"{lbl}  ($\Phi = {phi_mean_val:.2f}$)", fontsize=14, fontweight='bold')
+        ax.set_xlabel(r"Directional Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=13)
+        if idx % 3 == 0:
+            ax.set_ylabel(r"Probability Density $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$", fontsize=14)
+        ax.grid(True, linestyle=':', alpha=0.6)
+        ax.legend(loc='upper left', fontsize=9.2, framealpha=0.92)
+
+    fig.suptitle(r'Probability Density of Directional Coupling $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$',
+                 fontsize=17, y=0.99)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    save_figure(fig, "cos_i_probability_density_histograms", OUT_DIRS)
+    plt.close(fig)
+
+    # 全粒子統合の 1 パネル版ヒストグラム (KDE / ヒストグラム重ね合わせ)
+    fig, ax = plt.subplots(figsize=(10.0, 7.0))
+    ax.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2)
+
+    for idx, b_item in enumerate(BEADS_INFO):
+        bname = b_item['name']
+        color = b_item['color']
+        lbl = b_item['label']
+
+        sub_inst = df_instant[df_instant['bead_name'] == bname]
+        if sub_inst.empty:
+            continue
+
+        cos_vals = sub_inst['cos_i'].dropna().values
+        counts, bin_edges = np.histogram(cos_vals, bins=bins_cos, density=True)
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        ax.plot(bin_centers, counts, marker=b_item['marker'], markersize=6, color=color,
+                linewidth=2.2, label=lbl)
+
+    ax.set_xlim(-1.05, 1.05)
+    ax.set_ylim(0.0, 4.0)
+    ax.set_xlabel(r"Directional Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=14, labelpad=8)
+    ax.set_ylabel(r"Probability Density $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$", fontsize=14, labelpad=8)
+    ax.set_title(r"Probability Density of Cargo-Flow Coupling $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$ (All Cargo Sizes)",
+                 fontsize=15, fontweight='bold', pad=12)
+    ax.grid(True, linestyle=':', alpha=0.7)
+    ax.legend(loc='upper left', fontsize=10.5, framealpha=0.92)
+    fig.tight_layout()
+    save_figure(fig, "cos_i_probability_density_1panel", OUT_DIRS)
+    plt.close(fig)
+
+    # -------------------------------------------------------------
+    # 9. 貨物粒子単位の歪度 \gamma_{1, i} およびその平均 <\gamma_1> の算出と可視化
+    #    1. 貨物 i の全ピクセルデータ（各フレーム）から通常の平均 mu_i, 標準偏差 sigma_i, 歪度 \gamma_{1, i} を計算
+    #    2. 各サイズごとに全貨物平均 <\gamma_1> = (1 / N_cargo) * sum(\gamma_{1, i}) を算出
+    #    3. エラーバーは貨物間のばらつき（\gamma_{1, i} のブートストラップ信頼区間 / SEM）から決定
+    # -------------------------------------------------------------
+    df_instant['cargo_id'] = df_instant['exp_dir'].astype(str) + '_' + df_instant['particle'].astype(str)
+
+    cargo_stat_records = []
+    skew_records = []
+
+    for b_item in BEADS_INFO:
+        bname = b_item['name']
+        sub_inst = df_instant[df_instant['bead_name'] == bname]
+        if sub_inst.empty:
+            continue
+
+        row_rc = df_rc_xi[df_rc_xi['bead_name'] == bname]
+        phi_mean_val = float(row_rc['Phi_mean'].values[0]) if not row_rc.empty else np.nan
+        rc_xi_m = float(row_rc['rc_over_xi_mean'].values[0]) if not row_rc.empty else np.nan
+        rc_xi_s = float(row_rc['rc_over_xi_sem'].values[0]) if not row_rc.empty else 0.0
+
+        # 各貨物粒子ごとの集計
+        cargo_skews = []
+        cargo_means = []
+        cargo_stds = []
+        cargo_m2_centrals = []
+        cargo_m2_raws = []
+        cargo_m3_centrals = []
+        cargo_m3_raws = []
+        cargo_m5_centrals = []
+        cargo_m5_raws = []
+
+        for cid, grp in sub_inst.groupby('cargo_id'):
+            c_vals = grp['cos_i'].dropna().values
+            n_c_pts = len(c_vals)
+            if n_c_pts < 3:
+                continue
+
+            mu_i = float(np.mean(c_vals))
+            sigma_i = float(np.std(c_vals, ddof=1)) if n_c_pts > 1 else 0.0
+            gamma1_i = float(skew(c_vals, bias=False))
+
+            # 2次中心モーメント mu_{2, i} = Var(X) = 1/(n-1) * sum((x-mu)^2)
+            mu2_central_i = float(np.var(c_vals, ddof=1)) if n_c_pts > 1 else 0.0
+            # 2次原点モーメント m_{2, i} = E[X^2]
+            m2_raw_i = float(np.mean(c_vals**2))
+
+            # 3次中心モーメント mu_{3, i} = E[(X - mu)^3] (不偏推定量: n / ((n-1)(n-2)) * sum((x-mu)^3))
+            mu3_central_i = float(np.sum((c_vals - mu_i)**3) * n_c_pts / ((n_c_pts - 1) * (n_c_pts - 2))) if n_c_pts > 2 else float(np.mean((c_vals - mu_i)**3))
+            # 3次原点モーメント m_{3, i} = E[X^3]
+            m3_raw_i = float(np.mean(c_vals**3))
+
+            # 5次中心モーメント mu_{5, i} = E[(X - mu)^5]
+            mu5_central_i = float(np.mean((c_vals - mu_i)**5))
+            # 5次原点モーメント m_{5, i} = E[X^5]
+            m5_raw_i = float(np.mean(c_vals**5))
+
+            if np.isfinite(gamma1_i):
+                cargo_skews.append(gamma1_i)
+                cargo_means.append(mu_i)
+                cargo_stds.append(sigma_i)
+                cargo_m2_centrals.append(mu2_central_i)
+                cargo_m2_raws.append(m2_raw_i)
+                cargo_m3_centrals.append(mu3_central_i)
+                cargo_m3_raws.append(m3_raw_i)
+                cargo_m5_centrals.append(mu5_central_i)
+                cargo_m5_raws.append(m5_raw_i)
+
+                cargo_stat_records.append({
+                    'bead_name': bname,
+                    'label': b_item['label'],
+                    'cargo_id': cid,
+                    'n_frames': n_c_pts,
+                    'mu_i': mu_i,
+                    'sigma_i': sigma_i,
+                    'gamma1_i': gamma1_i,
+                    'mu2_central_i': mu2_central_i,
+                    'm2_raw_i': m2_raw_i,
+                    'mu3_central_i': mu3_central_i,
+                    'm3_raw_i': m3_raw_i,
+                    'mu5_central_i': mu5_central_i,
+                    'm5_raw_i': m5_raw_i,
+                })
+
+        cargo_skews = np.array(cargo_skews)
+        cargo_m2_centrals = np.array(cargo_m2_centrals)
+        cargo_m2_raws = np.array(cargo_m2_raws)
+        cargo_m3_centrals = np.array(cargo_m3_centrals)
+        cargo_m3_raws = np.array(cargo_m3_raws)
+        cargo_m5_centrals = np.array(cargo_m5_centrals)
+        cargo_m5_raws = np.array(cargo_m5_raws)
+        n_cargos = len(cargo_skews)
+        if n_cargos == 0:
+            continue
+
+        # 2. 全貨物での平均 <\gamma_1> = 1/N_cargo * sum(\gamma_{1, i})
+        mean_skew = float(np.mean(cargo_skews))
+        std_skew = float(np.std(cargo_skews, ddof=1)) if n_cargos > 1 else 0.0
+        sem_skew = std_skew / np.sqrt(n_cargos) if n_cargos > 0 else 0.0
+
+        # 2次中心モーメント平均 <\mu_2> (分散)
+        mean_m2_central = float(np.mean(cargo_m2_centrals))
+        std_m2_central = float(np.std(cargo_m2_centrals, ddof=1)) if n_cargos > 1 else 0.0
+        sem_m2_central = std_m2_central / np.sqrt(n_cargos) if n_cargos > 0 else 0.0
+
+        # 2次原点モーメント平均 <m_2> = <(\hat{v}\cdot\hat{u})^2>
+        mean_m2_raw = float(np.mean(cargo_m2_raws))
+        std_m2_raw = float(np.std(cargo_m2_raws, ddof=1)) if n_cargos > 1 else 0.0
+        sem_m2_raw = std_m2_raw / np.sqrt(n_cargos) if n_cargos > 0 else 0.0
+
+        # 3次中心モーメント平均 <\mu_3>
+        mean_m3_central = float(np.mean(cargo_m3_centrals))
+        std_m3_central = float(np.std(cargo_m3_centrals, ddof=1)) if n_cargos > 1 else 0.0
+        sem_m3_central = std_m3_central / np.sqrt(n_cargos) if n_cargos > 0 else 0.0
+
+        # 3次原点モーメント平均 <m_3> = <(\hat{v}\cdot\hat{u})^3>
+        mean_m3_raw = float(np.mean(cargo_m3_raws))
+        std_m3_raw = float(np.std(cargo_m3_raws, ddof=1)) if n_cargos > 1 else 0.0
+        sem_m3_raw = std_m3_raw / np.sqrt(n_cargos) if n_cargos > 0 else 0.0
+
+        # 5次中心モーメント平均 <\mu_5>
+        mean_m5_central = float(np.mean(cargo_m5_centrals))
+        std_m5_central = float(np.std(cargo_m5_centrals, ddof=1)) if n_cargos > 1 else 0.0
+        sem_m5_central = std_m5_central / np.sqrt(n_cargos) if n_cargos > 0 else 0.0
+
+        # 5次原点モーメント平均 <m_5> = <(\hat{v}\cdot\hat{u})^5>
+        mean_m5_raw = float(np.mean(cargo_m5_raws))
+        std_m5_raw = float(np.std(cargo_m5_raws, ddof=1)) if n_cargos > 1 else 0.0
+        sem_m5_raw = std_m5_raw / np.sqrt(n_cargos) if n_cargos > 0 else 0.0
+
+        # 3. 貨物間のばらつきからブートストラップ法（N=1000）で信頼区間（95% CI）および SEM を決定
+        rng = np.random.default_rng(42)
+        if n_cargos >= 2:
+            def calc_bs_ci(arr):
+                bs_vals = [np.mean(rng.choice(arr, size=n_cargos, replace=True)) for _ in range(1000)]
+                c_low = float(np.percentile(bs_vals, 2.5))
+                c_high = float(np.percentile(bs_vals, 97.5))
+                b_sem = float(np.std(bs_vals, ddof=1))
+                return c_low, c_high, b_sem
+
+            ci_low, ci_high, bs_sem = calc_bs_ci(cargo_skews)
+            ci_m2_c_low, ci_m2_c_high, bs_m2_c_sem = calc_bs_ci(cargo_m2_centrals)
+            ci_m2_r_low, ci_m2_r_high, bs_m2_r_sem = calc_bs_ci(cargo_m2_raws)
+            ci_m3_c_low, ci_m3_c_high, bs_m3_c_sem = calc_bs_ci(cargo_m3_centrals)
+            ci_m3_r_low, ci_m3_r_high, bs_m3_r_sem = calc_bs_ci(cargo_m3_raws)
+            ci_m5_c_low, ci_m5_c_high, bs_m5_c_sem = calc_bs_ci(cargo_m5_centrals)
+            ci_m5_r_low, ci_m5_r_high, bs_m5_r_sem = calc_bs_ci(cargo_m5_raws)
+        else:
+            ci_low, ci_high, bs_sem = mean_skew, mean_skew, 0.0
+            ci_m2_c_low, ci_m2_c_high, bs_m2_c_sem = mean_m2_central, mean_m2_central, 0.0
+            ci_m2_r_low, ci_m2_r_high, bs_m2_r_sem = mean_m2_raw, mean_m2_raw, 0.0
+            ci_m3_c_low, ci_m3_c_high, bs_m3_c_sem = mean_m3_central, mean_m3_central, 0.0
+            ci_m3_r_low, ci_m3_r_high, bs_m3_r_sem = mean_m3_raw, mean_m3_raw, 0.0
+            ci_m5_c_low, ci_m5_c_high, bs_m5_c_sem = mean_m5_central, mean_m5_central, 0.0
+            ci_m5_r_low, ci_m5_r_high, bs_m5_r_sem = mean_m5_raw, mean_m5_raw, 0.0
+
+        # エラーバーの非対称幅（yerr 用）
+        yerr_low = mean_skew - ci_low
+        yerr_high = ci_high - mean_skew
+
+        yerr_m2_c_low = mean_m2_central - ci_m2_c_low
+        yerr_m2_c_high = ci_m2_c_high - mean_m2_central
+        yerr_m2_r_low = mean_m2_raw - ci_m2_r_low
+        yerr_m2_r_high = ci_m2_r_high - mean_m2_raw
+
+        yerr_m3_c_low = mean_m3_central - ci_m3_c_low
+        yerr_m3_c_high = ci_m3_c_high - mean_m3_central
+        yerr_m3_r_low = mean_m3_raw - ci_m3_r_low
+        yerr_m3_r_high = ci_m3_r_high - mean_m3_raw
+
+        yerr_m5_c_low = mean_m5_central - ci_m5_c_low
+        yerr_m5_c_high = ci_m5_c_high - mean_m5_central
+        yerr_m5_r_low = mean_m5_raw - ci_m5_r_low
+        yerr_m5_r_high = ci_m5_r_high - mean_m5_raw
+
+        skew_records.append({
+            'bead_name': bname,
+            'label': b_item['label'],
+            'color': b_item['color'],
+            'marker': b_item['marker'],
+            'radius_um': b_item['radius_um'],
+            'n_cargos': n_cargos,
+            'rc_over_xi_mean': rc_xi_m,
+            'rc_over_xi_sem': rc_xi_s,
+            'mean_skew': mean_skew,
+            'std_skew': std_skew,
+            'sem_skew': sem_skew,
+            'bs_sem': bs_sem,
+            'ci_95_low': ci_low,
+            'ci_95_high': ci_high,
+            'yerr_low': yerr_low,
+            'yerr_high': yerr_high,
+            # 2次モーメント
+            'mean_m2_central': mean_m2_central,
+            'std_m2_central': std_m2_central,
+            'sem_m2_central': sem_m2_central,
+            'bs_m2_c_sem': bs_m2_c_sem,
+            'ci_m2_c_low': ci_m2_c_low,
+            'ci_m2_c_high': ci_m2_c_high,
+            'yerr_m2_c_low': yerr_m2_c_low,
+            'yerr_m2_c_high': yerr_m2_c_high,
+            'mean_m2_raw': mean_m2_raw,
+            'std_m2_raw': std_m2_raw,
+            'sem_m2_raw': sem_m2_raw,
+            'bs_m2_r_sem': bs_m2_r_sem,
+            'ci_m2_r_low': ci_m2_r_low,
+            'ci_m2_r_high': ci_m2_r_high,
+            'yerr_m2_r_low': yerr_m2_r_low,
+            'yerr_m2_r_high': yerr_m2_r_high,
+            # 3次モーメント
+            'mean_m3_central': mean_m3_central,
+            'std_m3_central': std_m3_central,
+            'sem_m3_central': sem_m3_central,
+            'bs_m3_c_sem': bs_m3_c_sem,
+            'ci_m3_c_low': ci_m3_c_low,
+            'ci_m3_c_high': ci_m3_c_high,
+            'yerr_m3_c_low': yerr_m3_c_low,
+            'yerr_m3_c_high': yerr_m3_c_high,
+            'mean_m3_raw': mean_m3_raw,
+            'std_m3_raw': std_m3_raw,
+            'sem_m3_raw': sem_m3_raw,
+            'bs_m3_r_sem': bs_m3_r_sem,
+            'ci_m3_r_low': ci_m3_r_low,
+            'ci_m3_r_high': ci_m3_r_high,
+            'yerr_m3_r_low': yerr_m3_r_low,
+            'yerr_m3_r_high': yerr_m3_r_high,
+            # 5次モーメント
+            'mean_m5_central': mean_m5_central,
+            'std_m5_central': std_m5_central,
+            'sem_m5_central': sem_m5_central,
+            'bs_m5_c_sem': bs_m5_c_sem,
+            'ci_m5_c_low': ci_m5_c_low,
+            'ci_m5_c_high': ci_m5_c_high,
+            'yerr_m5_c_low': yerr_m5_c_low,
+            'yerr_m5_c_high': yerr_m5_c_high,
+            'mean_m5_raw': mean_m5_raw,
+            'std_m5_raw': std_m5_raw,
+            'sem_m5_raw': sem_m5_raw,
+            'bs_m5_r_sem': bs_m5_r_sem,
+            'ci_m5_r_low': ci_m5_r_low,
+            'ci_m5_r_high': ci_m5_r_high,
+            'yerr_m5_r_low': yerr_m5_r_low,
+            'yerr_m5_r_high': yerr_m5_r_high,
+        })
+
+    df_cargo_stats = pd.DataFrame(cargo_stat_records)
+    df_skew = pd.DataFrame(skew_records)
+    if not df_skew.empty:
+        df_skew = df_skew.sort_values('rc_over_xi_mean').reset_index(drop=True)
+
+    # グラフ描画: <\gamma_1> vs R_c / \xi
+    fig, ax = plt.subplots(figsize=(9.5, 6.5))
+    ax.axhline(0.0, color='#888888', linestyle=':', linewidth=1.2, zorder=1, label=r'Symmetric ($\gamma_1 = 0$)')
+    ax.axvline(1.0, color='#666666', linestyle='--', linewidth=1.6, zorder=1,
+               label=r'Crossover $R_c / \xi = 1$')
+
+    # 各貨物のプロット (半透明散布図で分布・ばらつきを可視化)
+    for _, r_sk in df_skew.iterrows():
+        bname = r_sk['bead_name']
+        sub_c = df_cargo_stats[df_cargo_stats['bead_name'] == bname]
+        rc_val = r_sk['rc_over_xi_mean']
+        # 貨物ごとの \gamma_{1, i} をプロット (ジッターをわずかに加えて見やすくする)
+        jitter = np.linspace(0.95, 1.05, len(sub_c)) if len(sub_c) > 1 else np.array([1.0])
+        ax.scatter(rc_val * jitter, sub_c['gamma1_i'], color=r_sk['color'], marker=r_sk['marker'],
+                   alpha=0.35, s=28, zorder=2)
+
+    # 貨物間ブートストラップ信頼区間によるエラーバー付き平均 <\gamma_1>
+    for _, r_sk in df_skew.iterrows():
+        yerr_bar = [[r_sk['yerr_low']], [r_sk['yerr_high']]]
+        ax.errorbar(r_sk['rc_over_xi_mean'], r_sk['mean_skew'],
+                    xerr=r_sk['rc_over_xi_sem'], yerr=yerr_bar,
+                    fmt=r_sk['marker'], color=r_sk['color'], markersize=9, capsize=5,
+                    linewidth=2.2, zorder=4)
+
+    ax.plot(df_skew['rc_over_xi_mean'], df_skew['mean_skew'], color='#2b5c8f', linestyle='-',
+            linewidth=2.4, zorder=3,
+            label=r"Per-Cargo Ensemble Mean $\langle \gamma_1 \rangle$ (95% CI)")
+
+    ax.set_xscale('log')
+    ax.set_xlim(0.04, 3.5)
+    ax.set_ylim(-2.2, 0.8)
+
+    ax.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]", fontsize=14, labelpad=8)
+    ax.set_ylabel(r"Cargo Skewness $\langle \gamma_1 \rangle = \frac{1}{N_{\mathrm{cargo}}} \sum \gamma_{1, i}$ [-]", fontsize=14, labelpad=8)
+    ax.set_title(r"Ensemble Cargo Skewness $\langle \gamma_1 \rangle$ vs $R_c / \xi$",
+                 fontsize=15, fontweight='bold', pad=12)
+    ax.grid(True, which='both', linestyle=':', color='#dddddd', alpha=0.8)
+    ax.legend(loc='lower left', fontsize=10.5, framealpha=0.92)
+
+    fig.tight_layout()
+    save_figure(fig, "cos_i_skewness_vs_rc_over_xi", OUT_DIRS)
+    plt.close(fig)
+
+    # -------------------------------------------------------------
+    # 10. 3次中心モーメント <\mu_3> = <(\hat{v}\cdot\hat{u} - \mu)^3> vs R_c / \xi
+    # -------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(9.5, 6.5))
+    ax.axhline(0.0, color='#888888', linestyle=':', linewidth=1.2, zorder=1, label=r'Symmetric ($\mu_3 = 0$)')
+    ax.axvline(1.0, color='#666666', linestyle='--', linewidth=1.6, zorder=1,
+               label=r'Crossover $R_c / \xi = 1$')
+
+    # 各貨物のプロット (半透明散布図で分布・ばらつきを可視化)
+    for _, r_sk in df_skew.iterrows():
+        bname = r_sk['bead_name']
+        sub_c = df_cargo_stats[df_cargo_stats['bead_name'] == bname]
+        rc_val = r_sk['rc_over_xi_mean']
+        jitter = np.linspace(0.95, 1.05, len(sub_c)) if len(sub_c) > 1 else np.array([1.0])
+        ax.scatter(rc_val * jitter, sub_c['mu3_central_i'], color=r_sk['color'], marker=r_sk['marker'],
+                   alpha=0.35, s=28, zorder=2)
+
+    # 貨物間ブートストラップ信頼区間によるエラーバー付き平均 <\mu_3>
+    for _, r_sk in df_skew.iterrows():
+        yerr_bar = [[r_sk['yerr_m3_c_low']], [r_sk['yerr_m3_c_high']]]
+        ax.errorbar(r_sk['rc_over_xi_mean'], r_sk['mean_m3_central'],
+                    xerr=r_sk['rc_over_xi_sem'], yerr=yerr_bar,
+                    fmt=r_sk['marker'], color=r_sk['color'], markersize=9, capsize=5,
+                    linewidth=2.2, zorder=4)
+
+    ax.plot(df_skew['rc_over_xi_mean'], df_skew['mean_m3_central'], color='#2b5c8f', linestyle='-',
+            linewidth=2.4, zorder=3,
+            label=r"Per-Cargo Ensemble Mean $\langle \mu_3 \rangle$ (95% CI)")
+
+    ax.set_xscale('log')
+    ax.set_xlim(0.04, 3.5)
+    ax.set_ylim(-0.45, 0.15)
+
+    ax.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]", fontsize=14, labelpad=8)
+    ax.set_ylabel(r"3rd Central Moment $\langle \mu_3 \rangle = \frac{1}{N_{\mathrm{cargo}}} \sum \mu_{3, i}$ [-]", fontsize=14, labelpad=8)
+    ax.set_title(r"Ensemble Cargo 3rd Central Moment $\langle \mu_3 \rangle$ vs $R_c / \xi$",
+                 fontsize=15, fontweight='bold', pad=12)
+    ax.grid(True, which='both', linestyle=':', color='#dddddd', alpha=0.8)
+    ax.legend(loc='lower left', fontsize=10.5, framealpha=0.92)
+
+    fig.tight_layout()
+    save_figure(fig, "cos_i_third_central_moment_vs_rc_over_xi", OUT_DIRS)
+    plt.close(fig)
+
+    # -------------------------------------------------------------
+    # 11. 3次原点モーメント <m_3> = <(\hat{v}\cdot\hat{u})^3> vs R_c / \xi
+    # -------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(9.5, 6.5))
+    ax.axhline(0.0, color='#888888', linestyle=':', linewidth=1.2, zorder=1, label=r'Zero line ($m_3 = 0$)')
+    ax.axvline(1.0, color='#666666', linestyle='--', linewidth=1.6, zorder=1,
+               label=r'Crossover $R_c / \xi = 1$')
+
+    # 各貨物のプロット (半透明散布図で分布・ばらつきを可視化)
+    for _, r_sk in df_skew.iterrows():
+        bname = r_sk['bead_name']
+        sub_c = df_cargo_stats[df_cargo_stats['bead_name'] == bname]
+        rc_val = r_sk['rc_over_xi_mean']
+        jitter = np.linspace(0.95, 1.05, len(sub_c)) if len(sub_c) > 1 else np.array([1.0])
+        ax.scatter(rc_val * jitter, sub_c['m3_raw_i'], color=r_sk['color'], marker=r_sk['marker'],
+                   alpha=0.35, s=28, zorder=2)
+
+    # 貨物間ブートストラップ信頼区間によるエラーバー付き平均 <m_3>
+    for _, r_sk in df_skew.iterrows():
+        yerr_bar = [[r_sk['yerr_m3_r_low']], [r_sk['yerr_m3_r_high']]]
+        ax.errorbar(r_sk['rc_over_xi_mean'], r_sk['mean_m3_raw'],
+                    xerr=r_sk['rc_over_xi_sem'], yerr=yerr_bar,
+                    fmt=r_sk['marker'], color=r_sk['color'], markersize=9, capsize=5,
+                    linewidth=2.2, zorder=4)
+
+    ax.plot(df_skew['rc_over_xi_mean'], df_skew['mean_m3_raw'], color='#2b5c8f', linestyle='-',
+            linewidth=2.4, zorder=3,
+            label=r"Per-Cargo Ensemble Mean $\langle (\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})^3 \rangle$ (95% CI)")
+
+    ax.set_xscale('log')
+    ax.set_xlim(0.04, 3.5)
+    ax.set_ylim(-0.2, 1.0)
+
+    ax.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]", fontsize=14, labelpad=8)
+    ax.set_ylabel(r"3rd Raw Moment $\langle (\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})^3 \rangle$ [-]", fontsize=14, labelpad=8)
+    ax.set_title(r"Ensemble Cargo 3rd Moment $\langle (\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})^3 \rangle$ vs $R_c / \xi$",
+                 fontsize=15, fontweight='bold', pad=12)
+    ax.grid(True, which='both', linestyle=':', color='#dddddd', alpha=0.8)
+    ax.legend(loc='lower left', fontsize=10.5, framealpha=0.92)
+
+    fig.tight_layout()
+    save_figure(fig, "cos_i_third_moment_vs_rc_over_xi", OUT_DIRS)
+    plt.close(fig)
+
+    # -------------------------------------------------------------
+    # 13. 2次原点モーメント <m_2> = <(\hat{v}\cdot\hat{u})^2> vs R_c / \xi
+    # -------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(9.5, 6.5))
+    ax.axhline(0.5, color='#888888', linestyle=':', linewidth=1.2, zorder=1, label=r'Isotropic 2D ($\langle\cos^2\rangle = 0.5$)')
+    ax.axvline(1.0, color='#666666', linestyle='--', linewidth=1.6, zorder=1,
+               label=r'Crossover $R_c / \xi = 1$')
+
+    for _, r_sk in df_skew.iterrows():
+        bname = r_sk['bead_name']
+        sub_c = df_cargo_stats[df_cargo_stats['bead_name'] == bname]
+        rc_val = r_sk['rc_over_xi_mean']
+        jitter = np.linspace(0.95, 1.05, len(sub_c)) if len(sub_c) > 1 else np.array([1.0])
+        ax.scatter(rc_val * jitter, sub_c['m2_raw_i'], color=r_sk['color'], marker=r_sk['marker'],
+                   alpha=0.35, s=28, zorder=2)
+
+    for _, r_sk in df_skew.iterrows():
+        yerr_bar = [[r_sk['yerr_m2_r_low']], [r_sk['yerr_m2_r_high']]]
+        ax.errorbar(r_sk['rc_over_xi_mean'], r_sk['mean_m2_raw'],
+                    xerr=r_sk['rc_over_xi_sem'], yerr=yerr_bar,
+                    fmt=r_sk['marker'], color=r_sk['color'], markersize=9, capsize=5,
+                    linewidth=2.2, zorder=4)
+
+    ax.plot(df_skew['rc_over_xi_mean'], df_skew['mean_m2_raw'], color='#2b5c8f', linestyle='-',
+            linewidth=2.4, zorder=3,
+            label=r"Per-Cargo Ensemble Mean $\langle (\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})^2 \rangle$ (95% CI)")
+
+    ax.set_xscale('log')
+    ax.set_xlim(0.04, 3.5)
+    ax.set_ylim(-0.2, 1.0)
+    ax.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]", fontsize=14, labelpad=8)
+    ax.set_ylabel(r"2nd Raw Moment $\langle (\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})^2 \rangle$ [-]", fontsize=14, labelpad=8)
+    ax.set_title(r"Ensemble Cargo 2nd Moment $\langle (\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})^2 \rangle$ vs $R_c / \xi$",
+                 fontsize=15, fontweight='bold', pad=12)
+    ax.grid(True, which='both', linestyle=':', color='#dddddd', alpha=0.8)
+    ax.legend(loc='lower left', fontsize=10.5, framealpha=0.92)
+
+    fig.tight_layout()
+    save_figure(fig, "cos_i_second_moment_vs_rc_over_xi", OUT_DIRS)
+    plt.close(fig)
+
+    # -------------------------------------------------------------
+    # 15. 5次原点モーメント <m_5> = <(\hat{v}\cdot\hat{u})^5> vs R_c / \xi
+    # -------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(9.5, 6.5))
+    ax.axhline(0.0, color='#888888', linestyle=':', linewidth=1.2, zorder=1, label=r'Zero line ($m_5 = 0$)')
+    ax.axvline(1.0, color='#666666', linestyle='--', linewidth=1.6, zorder=1,
+               label=r'Crossover $R_c / \xi = 1$')
+
+    for _, r_sk in df_skew.iterrows():
+        bname = r_sk['bead_name']
+        sub_c = df_cargo_stats[df_cargo_stats['bead_name'] == bname]
+        rc_val = r_sk['rc_over_xi_mean']
+        jitter = np.linspace(0.95, 1.05, len(sub_c)) if len(sub_c) > 1 else np.array([1.0])
+        ax.scatter(rc_val * jitter, sub_c['m5_raw_i'], color=r_sk['color'], marker=r_sk['marker'],
+                   alpha=0.35, s=28, zorder=2)
+
+    for _, r_sk in df_skew.iterrows():
+        yerr_bar = [[r_sk['yerr_m5_r_low']], [r_sk['yerr_m5_r_high']]]
+        ax.errorbar(r_sk['rc_over_xi_mean'], r_sk['mean_m5_raw'],
+                    xerr=r_sk['rc_over_xi_sem'], yerr=yerr_bar,
+                    fmt=r_sk['marker'], color=r_sk['color'], markersize=9, capsize=5,
+                    linewidth=2.2, zorder=4)
+
+    ax.plot(df_skew['rc_over_xi_mean'], df_skew['mean_m5_raw'], color='#2b5c8f', linestyle='-',
+            linewidth=2.4, zorder=3,
+            label=r"Per-Cargo Ensemble Mean $\langle (\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})^5 \rangle$ (95% CI)")
+
+    ax.set_xscale('log')
+    ax.set_xlim(0.04, 3.5)
+    ax.set_ylim(-0.2, 1.0)
+    ax.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]", fontsize=14, labelpad=8)
+    ax.set_ylabel(r"5th Raw Moment $\langle (\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})^5 \rangle$ [-]", fontsize=14, labelpad=8)
+    ax.set_title(r"Ensemble Cargo 5th Moment $\langle (\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})^5 \rangle$ vs $R_c / \xi$",
+                 fontsize=15, fontweight='bold', pad=12)
+    ax.grid(True, which='both', linestyle=':', color='#dddddd', alpha=0.8)
+    ax.legend(loc='lower left', fontsize=10.5, framealpha=0.92)
+
+    fig.tight_layout()
+    save_figure(fig, "cos_i_fifth_moment_vs_rc_over_xi", OUT_DIRS)
+    plt.close(fig)
 
     # CSV 保存
     df_window_summary = pd.DataFrame(window_summary_list)
@@ -1385,7 +2073,9 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         out_dir.mkdir(parents=True, exist_ok=True)
         df_summary.to_csv(out_dir / "cos_decomposition_summary_by_radius.csv", index=False)
         df_window_summary.to_csv(out_dir / "cos_decomposition_summary_by_window.csv", index=False)
-    print("Saved decomposition summary CSVs.")
+        df_skew.to_csv(out_dir / "cos_i_skewness_summary.csv", index=False)
+        df_cargo_stats.to_csv(out_dir / "cos_i_cargo_individual_stats.csv", index=False)
+    print("Saved decomposition and skewness summary CSVs.")
 
     return df_summary
 
