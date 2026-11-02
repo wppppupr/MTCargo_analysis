@@ -451,11 +451,21 @@ def _plot_all_beads_ngp(beads_results, out_dirs, component, frame_interval, xlim
                 edgecolor='none'
             )
 
-        # ブートストラップ エラーバー
+        # ブートストラップ 95% 信頼区間によるエラーバー
+        if ci_low is not None and ci_high is not None:
+            yerr_ci = [
+                np.clip(y_val[valid] - ci_low[valid], 0, None),
+                np.clip(ci_high[valid] - y_val[valid], 0, None)
+            ]
+        elif y_err is not None:
+            yerr_ci = y_err[valid]
+        else:
+            yerr_ci = None
+
         ax.errorbar(
             x_val[valid],
             y_val[valid],
-            yerr=y_err[valid] if y_err is not None else None,
+            yerr=yerr_ci,
             marker=item["marker"],
             color=item["color"],
             label=label_text,
@@ -489,11 +499,11 @@ def _plot_all_beads_ngp(beads_results, out_dirs, component, frame_interval, xlim
 
 def _plot_all_beads_ngp_loglog(beads_results, out_dirs, component, frame_interval, xlim):
     """
-    全ビーズサイズの NGP(Δt) 比較プロットを作成・保存する（両対数 log-log プロット、ブートストラップ誤差バー付き）。
+    全ビーズサイズの NGP(Δt) 比較プロットを作成・保存する（片対数 log-linear プロット、ブートストラップ誤差バー付き）。
     """
     fig, ax = plt.subplots(figsize=(7.0, 5.2))
     ylabel, title = _get_ylabel_and_title(component)
-    title = f"{title} (log-log, Bootstrap Error)"
+    title = f"{title} (log-linear, Bootstrap Error)"
 
     for item in BEADS_INFO:
         b_name = item["name"]
@@ -533,7 +543,7 @@ def _plot_all_beads_ngp_loglog(beads_results, out_dirs, component, frame_interva
                 edgecolor='none'
             )
 
-        # 代表点にキャップ付きエラーバーを描画
+        # 代表点にキャップ付きエラーバーを描画 (95% CI に統一)
         n_pts = np.sum(valid)
         valid_indices = np.where(valid)[0]
         if n_pts > 16:
@@ -542,7 +552,24 @@ def _plot_all_beads_ngp_loglog(beads_results, out_dirs, component, frame_interva
         else:
             err_sub_idx = valid_indices
 
-        if y_err is not None:
+        if ci_low is not None and ci_high is not None:
+            yerr_rep = [
+                np.clip(y_val[err_sub_idx] - ci_low[err_sub_idx], 0, None),
+                np.clip(ci_high[err_sub_idx] - y_val[err_sub_idx], 0, None)
+            ]
+            ax.errorbar(
+                x_val[err_sub_idx],
+                y_val[err_sub_idx],
+                yerr=yerr_rep,
+                fmt='none',
+                ecolor=item["color"],
+                elinewidth=1.3,
+                capsize=3.0,
+                capthick=1.0,
+                alpha=0.85,
+                zorder=3
+            )
+        elif y_err is not None:
             ax.errorbar(
                 x_val[err_sub_idx],
                 y_val[err_sub_idx],
@@ -570,7 +597,7 @@ def _plot_all_beads_ngp_loglog(beads_results, out_dirs, component, frame_interva
         )
 
     ax.set_xscale('log')
-    ax.set_yscale('log')
+    ax.set_yscale('linear')
     ax.set_xlabel(r'Lag time $\Delta t$ [s]')
     ax.set_ylabel(ylabel)
     ax.set_title(title)
@@ -579,8 +606,8 @@ def _plot_all_beads_ngp_loglog(beads_results, out_dirs, component, frame_interva
 
     plt.tight_layout()
     for d in out_dirs:
-        svg_path = d / f"NGP_loglog_{component}.svg"
-        png_path = d / f"NGP_loglog_{component}.png"
+        svg_path = d / f"NGP_semilog_{component}.svg"
+        png_path = d / f"NGP_semilog_{component}.png"
         fig.savefig(svg_path, bbox_inches='tight')
         fig.savefig(png_path, dpi=300, bbox_inches='tight')
         print(f"  [保存完了] NGP 両対数プロット: {svg_path}")

@@ -1526,12 +1526,92 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
 
     # -------------------------------------------------------------
     # 8. 方向一致度 cos theta_i の確率密度ヒストグラム P(cos theta_i)
+    #    および 軌道単位ブートストラップ（Cluster Bootstrap, B=1000）による95%信頼区間評価
     # -------------------------------------------------------------
-    fig, axes = plt.subplots(2, 3, figsize=(16.0, 10.0), sharex=True, sharey=True)
-    axes_flat = axes.flatten()
+    df_instant['cargo_id'] = df_instant['exp_dir'].astype(str) + '_' + df_instant['particle'].astype(str)
 
     bins_cos = np.linspace(-1.0, 1.0, 29) # 28ビン (-1から1)
-    cos_grid = np.linspace(-0.9999, 0.9999, 400)
+    bin_centers = 0.5 * (bins_cos[:-1] + bins_cos[1:])
+    B_BOOT = 1000
+    rng_boot = np.random.default_rng(42)
+
+    # 各ビーズごとに代表値ヒストグラムおよびクラスターブートストラップ分布を計算
+    # boot_results[bname] = { 'obs_p', 'ci_low_p', 'ci_high_p',
+    #                         'obs_peven', 'ci_low_peven', 'ci_high_peven',
+    #                         'obs_podd', 'ci_low_podd', 'ci_high_podd',
+    #                         'n_cargos', 'n_points', 'mean_val' }
+    boot_hist_dict = {}
+
+    for b_item in BEADS_INFO:
+        bname = b_item['name']
+        sub_inst = df_instant[df_instant['bead_name'] == bname]
+        if sub_inst.empty:
+            continue
+
+        cos_vals_all = sub_inst['cos_i'].dropna().values
+        if len(cos_vals_all) == 0:
+            continue
+
+        # 代表値の作成（全データ点をプールして正規化）
+        counts_obs, _ = np.histogram(cos_vals_all, bins=bins_cos, density=True)
+        P_obs = counts_obs
+        P_obs_neg = counts_obs[::-1]
+        P_even_obs = 0.5 * (P_obs + P_obs_neg)
+        P_odd_obs = 0.5 * (P_obs - P_obs_neg)
+
+        # 軌道単位のデータ分割
+        cargos_data = []
+        for _, grp in sub_inst.groupby('cargo_id'):
+            c_vals = grp['cos_i'].dropna().values
+            if len(c_vals) > 0:
+                cargos_data.append(c_vals)
+
+        n_cargos = len(cargos_data)
+        boot_P = np.zeros((B_BOOT, len(bin_centers)))
+        boot_Peven = np.zeros((B_BOOT, len(bin_centers)))
+        boot_Podd = np.zeros((B_BOOT, len(bin_centers)))
+
+        if n_cargos >= 2:
+            for b_idx in range(B_BOOT):
+                sel_indices = rng_boot.choice(n_cargos, size=n_cargos, replace=True)
+                sample_pts = np.concatenate([cargos_data[i] for i in sel_indices])
+                c_boot, _ = np.histogram(sample_pts, bins=bins_cos, density=True)
+                c_boot_neg = c_boot[::-1]
+                boot_P[b_idx] = c_boot
+                boot_Peven[b_idx] = 0.5 * (c_boot + c_boot_neg)
+                boot_Podd[b_idx] = 0.5 * (c_boot - c_boot_neg)
+
+            ci_low_p = np.percentile(boot_P, 2.5, axis=0)
+            ci_high_p = np.percentile(boot_P, 97.5, axis=0)
+
+            ci_low_peven = np.percentile(boot_Peven, 2.5, axis=0)
+            ci_high_peven = np.percentile(boot_Peven, 97.5, axis=0)
+
+            ci_low_podd = np.percentile(boot_Podd, 2.5, axis=0)
+            ci_high_podd = np.percentile(boot_Podd, 97.5, axis=0)
+        else:
+            ci_low_p, ci_high_p = P_obs, P_obs
+            ci_low_peven, ci_high_peven = P_even_obs, P_even_obs
+            ci_low_podd, ci_high_podd = P_odd_obs, P_odd_obs
+
+        boot_hist_dict[bname] = {
+            'P_obs': P_obs,
+            'ci_low_p': ci_low_p,
+            'ci_high_p': ci_high_p,
+            'P_even_obs': P_even_obs,
+            'ci_low_peven': ci_low_peven,
+            'ci_high_peven': ci_high_peven,
+            'P_odd_obs': P_odd_obs,
+            'ci_low_podd': ci_low_podd,
+            'ci_high_podd': ci_high_podd,
+            'n_cargos': n_cargos,
+            'n_points': len(cos_vals_all),
+            'mean_val': float(np.mean(cos_vals_all)),
+        }
+
+    # (1) 6 パネル版 P(\hat{v}\cdot\hat{u}) ヒストグラム（クラスターブートストラップ 95% 信頼区間帯付き）
+    fig, axes = plt.subplots(2, 3, figsize=(16.0, 10.0), sharex=True, sharey=True)
+    axes_flat = axes.flatten()
 
     for idx, b_item in enumerate(BEADS_INFO):
         ax = axes_flat[idx]
@@ -1539,23 +1619,25 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         color = b_item['color']
         lbl = b_item['label']
 
-        sub_inst = df_instant[df_instant['bead_name'] == bname]
-        if sub_inst.empty:
+        if bname not in boot_hist_dict:
             ax.text(0.5, 0.5, "No Data", ha='center', va='center', transform=ax.transAxes)
             continue
 
-        cos_vals = sub_inst['cos_i'].dropna().values
+        res = boot_hist_dict[bname]
         phi_mean_val = float(df_rc_xi[df_rc_xi['bead_name'] == bname]['Phi_mean'].values[0]) if not df_rc_xi.empty else np.nan
-        ci_mean_val = float(np.mean(cos_vals)) if len(cos_vals) > 0 else np.nan
+        ci_mean_val = res['mean_val']
 
-        # 実測ヒストグラム (確率密度 normalized)
-        ax.hist(cos_vals, bins=bins_cos, density=True, color=color, alpha=0.45,
-                edgecolor=color, linewidth=1.2, label=rf"Observed ($N = {len(cos_vals)}$)")
+        # 代表値ヒストグラム（ステップ線＋マーカー）
+        ax.plot(bin_centers, res['P_obs'], color=color, linewidth=2.4, marker=b_item['marker'], markersize=5,
+                label=rf"Observed ($N = {res['n_points']}$, $N_{{\mathrm{{cargo}}}} = {res['n_cargos']}$)", zorder=3)
+        # クラスターブートストラップ 95% 信頼区間帯
+        ax.fill_between(bin_centers, res['ci_low_p'], res['ci_high_p'], color=color, alpha=0.25,
+                        label=r"95% CI (Cluster Bootstrap)", zorder=2)
 
         # 代表粒子平均値の縦線
-        ax.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2)
-        ax.axvline(ci_mean_val, color=color, linestyle='-', linewidth=2.0,
-                   label=rf"Mean $\mathbf{{\hat{{v}}}} \cdot \mathbf{{\hat{{u}}}} = {ci_mean_val:.2f}$")
+        ax.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2, zorder=1)
+        ax.axvline(ci_mean_val, color=color, linestyle='--', linewidth=1.8,
+                   label=rf"Mean $\mathbf{{\hat{{v}}}} \cdot \mathbf{{\hat{{u}}}} = {ci_mean_val:.2f}$", zorder=2)
 
         ax.set_xlim(-1.05, 1.05)
         ax.set_ylim(0.0, 4.0)
@@ -1566,36 +1648,34 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         ax.grid(True, linestyle=':', alpha=0.6)
         ax.legend(loc='upper left', fontsize=9.2, framealpha=0.92)
 
-    fig.suptitle(r'Probability Density of Directional Coupling $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$',
+    fig.suptitle(r'Probability Density of Directional Coupling $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$ (Cluster Bootstrap 95% CI)',
                  fontsize=17, y=0.99)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     save_figure(fig, "cos_i_probability_density_histograms", OUT_DIRS)
     plt.close(fig)
 
-    # 全粒子統合の 1 パネル版ヒストグラム (KDE / ヒストグラム重ね合わせ)
+    # (2) 全粒子統合の 1 パネル版ヒストグラム（代表曲線＋信頼区間帯）
     fig, ax = plt.subplots(figsize=(10.0, 7.0))
-    ax.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2)
+    ax.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2, zorder=1)
 
     for idx, b_item in enumerate(BEADS_INFO):
         bname = b_item['name']
         color = b_item['color']
         lbl = b_item['label']
 
-        sub_inst = df_instant[df_instant['bead_name'] == bname]
-        if sub_inst.empty:
+        if bname not in boot_hist_dict:
             continue
 
-        cos_vals = sub_inst['cos_i'].dropna().values
-        counts, bin_edges = np.histogram(cos_vals, bins=bins_cos, density=True)
-        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-        ax.plot(bin_centers, counts, marker=b_item['marker'], markersize=6, color=color,
-                linewidth=2.2, label=lbl)
+        res = boot_hist_dict[bname]
+        ax.plot(bin_centers, res['P_obs'], marker=b_item['marker'], markersize=6, color=color,
+                linewidth=2.2, label=rf"{lbl} ($N={res['n_cargos']}$)", zorder=3 + idx)
+        ax.fill_between(bin_centers, res['ci_low_p'], res['ci_high_p'], color=color, alpha=0.15, zorder=2)
 
     ax.set_xlim(-1.05, 1.05)
     ax.set_ylim(0.0, 4.0)
     ax.set_xlabel(r"Directional Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=14, labelpad=8)
     ax.set_ylabel(r"Probability Density $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$", fontsize=14, labelpad=8)
-    ax.set_title(r"Probability Density of Cargo-Flow Coupling $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$ (All Cargo Sizes)",
+    ax.set_title(r"Probability Density of Cargo-Flow Coupling $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$ (Cluster Bootstrap 95% CI)",
                  fontsize=15, fontweight='bold', pad=12)
     ax.grid(True, linestyle=':', alpha=0.7)
     ax.legend(loc='upper left', fontsize=10.5, framealpha=0.92)
@@ -1607,6 +1687,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     # 8b. 偶関数成分 P_even と 奇関数成分 P_odd の分解と可視化
     #     P_even(x) = (P(x) + P(-x)) / 2
     #     P_odd(x)  = (P(x) - P(-x)) / 2  (x = \hat{v} \cdot \hat{u})
+    #     信頼区間も同様に軌道単位ブートストラップ試行ごとに算出
     # -------------------------------------------------------------
     # (1) 6パネル版: 各粒子サイズごとに P, P_even, P_odd を比較
     fig, axes = plt.subplots(2, 3, figsize=(16.0, 10.0), sharex=True, sharey=True)
@@ -1620,56 +1701,60 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         color = b_item['color']
         lbl = b_item['label']
 
-        sub_inst = df_instant[df_instant['bead_name'] == bname]
-        if sub_inst.empty:
+        if bname not in boot_hist_dict:
             ax.text(0.5, 0.5, "No Data", ha='center', va='center', transform=ax.transAxes)
             continue
 
-        cos_vals = sub_inst['cos_i'].dropna().values
-        counts, bin_edges = np.histogram(cos_vals, bins=bins_cos, density=True)
-        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        res = boot_hist_dict[bname]
 
-        # bins_cos は [-1, 1] で 0 を中心に対称に配置されているため、
-        # bin_centers[::-1] は正確に -bin_centers に対応する
-        P_x = counts
-        P_neg_x = counts[::-1]
-
-        P_even = 0.5 * (P_x + P_neg_x)
-        P_odd = 0.5 * (P_x - P_neg_x)
-
-        for bc, px, pe, po in zip(bin_centers, P_x, P_even, P_odd):
+        for bc, px, pe, po, px_l, px_h, pe_l, pe_h, po_l, po_h in zip(
+                bin_centers, res['P_obs'], res['P_even_obs'], res['P_odd_obs'],
+                res['ci_low_p'], res['ci_high_p'],
+                res['ci_low_peven'], res['ci_high_peven'],
+                res['ci_low_podd'], res['ci_high_podd']):
             peven_podd_records.append({
                 'bead_name': bname,
                 'label': lbl,
                 'cos_val': bc,
                 'P': px,
+                'P_ci_low': px_l,
+                'P_ci_high': px_h,
                 'P_even': pe,
+                'P_even_ci_low': pe_l,
+                'P_even_ci_high': pe_h,
                 'P_odd': po,
+                'P_odd_ci_low': po_l,
+                'P_odd_ci_high': po_h,
             })
 
         ax.axhline(0.0, color='#888888', linestyle='-', linewidth=0.9, alpha=0.7)
         ax.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2)
 
-        # 実測 P, 偶関数成分 P_even, 奇関数成分 P_odd をプロット
-        ax.plot(bin_centers, P_x, color='#444444', linestyle=':', linewidth=2.0,
-                label=r"$P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$ (Observed)")
-        ax.plot(bin_centers, P_even, color='#1b7837', linestyle='-', linewidth=2.4,
+        # 実測 P, 偶関数成分 P_even, 奇関数成分 P_odd をプロット（信頼区間帯付き）
+        ax.plot(bin_centers, res['P_obs'], color='#444444', linestyle=':', linewidth=2.0,
+                label=r"$P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$ (Observed)", zorder=4)
+        ax.fill_between(bin_centers, res['ci_low_p'], res['ci_high_p'], color='#888888', alpha=0.15, zorder=1)
+
+        ax.plot(bin_centers, res['P_even_obs'], color='#1b7837', linestyle='-', linewidth=2.4,
                 marker='o', markersize=4.5,
-                label=r"$P_{\mathrm{even}} = \frac{P(x) + P(-x)}{2}$")
-        ax.plot(bin_centers, P_odd, color='#d95f02', linestyle='--', linewidth=2.4,
+                label=r"$P_{\mathrm{even}} = \frac{P(x) + P(-x)}{2}$", zorder=5)
+        ax.fill_between(bin_centers, res['ci_low_peven'], res['ci_high_peven'], color='#1b7837', alpha=0.20, zorder=2)
+
+        ax.plot(bin_centers, res['P_odd_obs'], color='#d95f02', linestyle='--', linewidth=2.4,
                 marker='s', markersize=4.5,
-                label=r"$P_{\mathrm{odd}} = \frac{P(x) - P(-x)}{2}$")
+                label=r"$P_{\mathrm{odd}} = \frac{P(x) - P(-x)}{2}$", zorder=5)
+        ax.fill_between(bin_centers, res['ci_low_podd'], res['ci_high_podd'], color='#d95f02', alpha=0.20, zorder=2)
 
         ax.set_xlim(-1.05, 1.05)
-        ax.set_ylim(-1.5, 3.8)
-        ax.set_title(rf"{lbl}", fontsize=14, fontweight='bold')
+        ax.set_ylim(-2.0, 3.0)
+        ax.set_title(rf"{lbl} ($N_{{\mathrm{{cargo}}}} = {res['n_cargos']}$)", fontsize=14, fontweight='bold')
         ax.set_xlabel(r"Directional Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=13)
         if idx % 3 == 0:
             ax.set_ylabel(r"Probability Density / Component", fontsize=14)
         ax.grid(True, linestyle=':', alpha=0.6)
         ax.legend(loc='upper left', fontsize=9.2, framealpha=0.92)
 
-    fig.suptitle(r'Decomposition into Even and Odd Components: $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}) = P_{\mathrm{even}} + P_{\mathrm{odd}}$',
+    fig.suptitle(r'Decomposition into Even and Odd Components: $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}) = P_{\mathrm{even}} + P_{\mathrm{odd}}$ (95% CI)',
                  fontsize=16, y=0.99)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     save_figure(fig, "cos_i_peven_podd_histograms_6panels", OUT_DIRS)
@@ -1687,29 +1772,26 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         color = b_item['color']
         lbl = b_item['label']
 
-        sub_inst = df_instant[df_instant['bead_name'] == bname]
-        if sub_inst.empty:
+        if bname not in boot_hist_dict:
             continue
 
-        cos_vals = sub_inst['cos_i'].dropna().values
-        counts, bin_edges = np.histogram(cos_vals, bins=bins_cos, density=True)
-        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        res = boot_hist_dict[bname]
 
-        P_x = counts
-        P_neg_x = counts[::-1]
-        P_even = 0.5 * (P_x + P_neg_x)
-        P_odd = 0.5 * (P_x - P_neg_x)
+        ax_even.plot(bin_centers, res['P_even_obs'], marker=b_item['marker'], markersize=6,
+                     color=color, linewidth=2.2, label=lbl, zorder=3 + idx)
+        ax_even.fill_between(bin_centers, res['ci_low_peven'], res['ci_high_peven'],
+                             color=color, alpha=0.15, zorder=2)
 
-        ax_even.plot(bin_centers, P_even, marker=b_item['marker'], markersize=6,
-                     color=color, linewidth=2.2, label=lbl)
-        ax_odd.plot(bin_centers, P_odd, marker=b_item['marker'], markersize=6,
-                    color=color, linewidth=2.2, label=lbl)
+        ax_odd.plot(bin_centers, res['P_odd_obs'], marker=b_item['marker'], markersize=6,
+                    color=color, linewidth=2.2, label=lbl, zorder=3 + idx)
+        ax_odd.fill_between(bin_centers, res['ci_low_podd'], res['ci_high_podd'],
+                            color=color, alpha=0.15, zorder=2)
 
     ax_even.set_xlim(-1.05, 1.05)
     ax_even.set_ylim(-1.5, 3.8)
     ax_even.set_xlabel(r"Directional Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=14, labelpad=8)
     ax_even.set_ylabel(r"Even Component $P_{\mathrm{even}}(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$", fontsize=14, labelpad=8)
-    ax_even.set_title(r"Even Component $P_{\mathrm{even}} = \frac{P(x) + P(-x)}{2}$ (Symmetric / Alignment)",
+    ax_even.set_title(r"Even Component $P_{\mathrm{even}} = \frac{P(x) + P(-x)}{2}$ (Cluster Bootstrap 95% CI)",
                       fontsize=14, fontweight='bold', pad=10)
     ax_even.grid(True, linestyle=':', alpha=0.7)
     ax_even.legend(loc='upper right', fontsize=10.0, framealpha=0.92)
@@ -1717,7 +1799,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     ax_odd.set_xlim(-1.05, 1.05)
     ax_odd.set_xlabel(r"Directional Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=14, labelpad=8)
     ax_odd.set_ylabel(r"Odd Component $P_{\mathrm{odd}}(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$", fontsize=14, labelpad=8)
-    ax_odd.set_title(r"Odd Component $P_{\mathrm{odd}} = \frac{P(x) - P(-x)}{2}$ (Antisymmetric / Polarity)",
+    ax_odd.set_title(r"Odd Component $P_{\mathrm{odd}} = \frac{P(x) - P(-x)}{2}$ (Cluster Bootstrap 95% CI)",
                      fontsize=14, fontweight='bold', pad=10)
     ax_odd.grid(True, linestyle=':', alpha=0.7)
     ax_odd.legend(loc='upper left', fontsize=10.0, framealpha=0.92)

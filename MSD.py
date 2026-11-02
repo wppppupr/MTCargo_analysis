@@ -471,7 +471,8 @@ def main():
             edgecolor='none'
         )
 
-        # 2. ブートストラップ法によるエラーバー (Bootstrap Error Bars)
+        # 2. ブートストラップ 95% 信頼区間によるエラーバー (Bootstrap 95% CI Error Bars)
+        # エラーバーの長さを淡色シェード帯と同じ 95% 信頼区間に統一 ([mean - ci_low, ci_high - mean])
         # 両対数プロットで点同士が密集して見づらくなるのを防ぐため、対数等間隔に配置される代表点にクッキリとエラーバーを描画
         n_pts = len(lags)
         if n_pts > 20:
@@ -480,10 +481,15 @@ def main():
         else:
             sub_idx = np.arange(n_pts)
 
+        yerr_ci_rep = [
+            np.clip(mean_v[sub_idx] - boot_ci_low[sub_idx], 0, None),
+            np.clip(boot_ci_high[sub_idx] - mean_v[sub_idx], 0, None)
+        ]
+
         ax1.errorbar(
             lags[sub_idx],
             mean_v[sub_idx],
-            yerr=boot_sem[sub_idx],
+            yerr=yerr_ci_rep,
             fmt='none',
             ecolor=color,
             elinewidth=1.4,
@@ -494,15 +500,19 @@ def main():
         )
 
         # 全点にも細いエラーバーを薄く付与
+        yerr_ci_all = [
+            np.clip(mean_v - boot_ci_low, 0, None),
+            np.clip(boot_ci_high - mean_v, 0, None)
+        ]
         ax1.errorbar(
             lags,
             mean_v,
-            yerr=boot_sem,
+            yerr=yerr_ci_all,
             fmt='none',
             ecolor=color,
             elinewidth=0.7,
             capsize=0,
-            alpha=0.4,
+            alpha=0.35,
             zorder=2
         )
 
@@ -591,29 +601,39 @@ def main():
 
     d_vals = df_msd300_slope["diameter_um"].to_numpy(dtype=float)
     msd300_mean = df_msd300_slope["msd_300s_mean_um2"].to_numpy(dtype=float)
-    msd300_err = df_msd300_slope["msd_300s_boot_sem_um2"].to_numpy(dtype=float)
+    msd300_ci_low = df_msd300_slope["msd_300s_boot_ci_low_um2"].to_numpy(dtype=float)
+    msd300_ci_high = df_msd300_slope["msd_300s_boot_ci_high_um2"].to_numpy(dtype=float)
+    msd300_yerr = [
+        np.clip(msd300_mean - msd300_ci_low, 0, None),
+        np.clip(msd300_ci_high - msd300_mean, 0, None)
+    ]
     
     alpha_mean = df_msd300_slope["alpha_300_1000s_mean"].to_numpy(dtype=float)
-    alpha_err = df_msd300_slope["alpha_300_1000s_boot_sem"].to_numpy(dtype=float)
+    alpha_ci_low = df_msd300_slope["alpha_300_1000s_boot_ci_low"].to_numpy(dtype=float)
+    alpha_ci_high = df_msd300_slope["alpha_300_1000s_boot_ci_high"].to_numpy(dtype=float)
+    alpha_yerr = [
+        np.clip(alpha_mean - alpha_ci_low, 0, None),
+        np.clip(alpha_ci_high - alpha_mean, 0, None)
+    ]
     n_long_vals = df_msd300_slope["alpha_300_1000s_n_long_particles"].to_numpy(dtype=int)
 
     # 第1軸 (左軸): MSD(300 s) [um^2] (log scale, 青系)
     color_msd = '#1f77b4'
     line1 = ax_msd.errorbar(
-        d_vals, msd300_mean, yerr=msd300_err,
+        d_vals, msd300_mean, yerr=msd300_yerr,
         fmt='o-', color=color_msd, ecolor=color_msd, elinewidth=1.6,
         capsize=4.5, capthick=1.2, markersize=8.5, linewidth=2.0,
-        label=r'$\mathrm{MSD}(\Delta t = 300\,\mathrm{s})$ (Bootstrap Error)',
+        label=r'$\mathrm{MSD}(\Delta t = 300\,\mathrm{s})$ (Bootstrap 95% CI)',
         zorder=4
     )
 
     # 第2軸 (右軸): MSD 傾き alpha (300s-1000s, tracks >= 1000s) (linear scale, 赤系)
     color_slope = '#d62728'
     line2 = ax_slope.errorbar(
-        d_vals, alpha_mean, yerr=alpha_err,
+        d_vals, alpha_mean, yerr=alpha_yerr,
         fmt='s--', color=color_slope, ecolor=color_slope, elinewidth=1.6,
         capsize=4.5, capthick=1.2, markersize=8.0, linewidth=2.0,
-        label=r'Slope $\alpha$ ($\Delta t \in [300, 1000]\,\mathrm{s}$, Bootstrap Error)',
+        label=r'Slope $\alpha$ ($\Delta t \in [300, 1000]\,\mathrm{s}$, Bootstrap 95% CI)',
         zorder=5
     )
 

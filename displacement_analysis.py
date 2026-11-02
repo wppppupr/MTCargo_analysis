@@ -497,12 +497,16 @@ def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, ou
                 edgecolor='none'
             )
 
-        # 2. ブートストラップ法によるエラーバー (Bootstrap Error Bars)
+        # 2. ブートストラップ 95% 信頼区間によるエラーバー (Bootstrap 95% CI Error Bars)
         if error_style in ['bootstrap', 'bootstrap_both', 'bootstrap_bar']:
+            yerr_ci = [
+                np.clip(mean_pdf[valid] - boot_ci_low[valid], 0, None),
+                np.clip(boot_ci_high[valid] - mean_pdf[valid], 0, None)
+            ]
             ax.errorbar(
                 centers[valid],
                 mean_pdf[valid],
-                yerr=boot_sem[valid],
+                yerr=yerr_ci,
                 fmt='none',
                 ecolor=color,
                 elinewidth=1.2,
@@ -697,12 +701,16 @@ def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_dirs
                     edgecolor='none'
                 )
 
-            # ブートストラップ法によるエラーバー
+            # ブートストラップ 95% 信頼区間によるエラーバー
             if error_style in ['bootstrap', 'bootstrap_both', 'bootstrap_bar']:
+                yerr_ci = [
+                    np.clip(mean_pdf[valid] - boot_ci_low[valid], 0, None),
+                    np.clip(boot_ci_high[valid] - mean_pdf[valid], 0, None)
+                ]
                 ax.errorbar(
                     centers[valid],
                     mean_pdf[valid],
-                    yerr=boot_sem[valid],
+                    yerr=yerr_ci,
                     fmt='none',
                     ecolor=color,
                     elinewidth=1.0,
