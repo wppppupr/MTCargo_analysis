@@ -155,6 +155,83 @@ def calc_ngp_from_displacements(displacements, component='2d'):
     }
 
 
+def calc_bootstrap_ngp(displacements, component='2d', n_bootstraps=1000, ci=0.95, random_state=42):
+    """
+    変位配列からブートストラップ法 (復元抽出) により NGP (alpha_2) の
+    標準誤差 (Bootstrap SEM) および信頼区間 (CI) を算出する。
+
+    Parameters
+    ----------
+    displacements : array-like
+        変位配列
+    component : str
+        '2d', 'x', 'y', 'parallel', 'perpendicular'
+    n_bootstraps : int
+        ブートストラップ反復回数
+    ci : float
+        信頼係数 (デフォルト: 0.95)
+    random_state : int
+        乱数シード
+
+    Returns
+    -------
+    dict
+        'ngp', 'boot_mean', 'boot_sem', 'boot_ci_low', 'boot_ci_high', 'count'
+    """
+    arr = np.asarray(displacements, dtype=float)
+    arr = arr[~np.isnan(arr) & np.isfinite(arr)]
+    n = len(arr)
+    if n < 4:
+        return {
+            'ngp': np.nan, 'boot_mean': np.nan, 'boot_sem': np.nan,
+            'boot_ci_low': np.nan, 'boot_ci_high': np.nan, 'count': n
+        }
+
+    comp = component.lower()
+    dim = 2 if comp in ['2d', 'norm', 'magnitude', 'r'] else 1
+    factor = 0.5 if dim == 2 else (1.0 / 3.0)
+
+    r2 = arr ** 2
+    r4 = arr ** 4
+    mean_r2 = np.mean(r2)
+    mean_r4 = np.mean(r4)
+    if mean_r2 <= 0:
+        return {
+            'ngp': np.nan, 'boot_mean': np.nan, 'boot_sem': np.nan,
+            'boot_ci_low': np.nan, 'boot_ci_high': np.nan, 'count': n
+        }
+    ngp_val = factor * (mean_r4 / (mean_r2 ** 2)) - 1.0
+
+    # ブートストラップサンプリング
+    rng = np.random.default_rng(random_state)
+    boot_idx = rng.integers(0, n, size=(n_bootstraps, n))
+    b_r2 = np.mean(r2[boot_idx], axis=1)
+    b_r4 = np.mean(r4[boot_idx], axis=1)
+
+    valid_b = b_r2 > 0
+    if not np.any(valid_b):
+        return {
+            'ngp': float(ngp_val), 'boot_mean': np.nan, 'boot_sem': np.nan,
+            'boot_ci_low': np.nan, 'boot_ci_high': np.nan, 'count': n
+        }
+
+    boot_ngp = factor * (b_r4[valid_b] / (b_r2[valid_b] ** 2)) - 1.0
+    alpha_ci = (1.0 - ci) / 2.0
+    boot_sem = float(np.std(boot_ngp, ddof=1))
+    ci_low = float(np.percentile(boot_ngp, 100.0 * alpha_ci))
+    ci_high = float(np.percentile(boot_ngp, 100.0 * (1.0 - alpha_ci)))
+    boot_mean = float(np.mean(boot_ngp))
+
+    return {
+        'ngp': float(ngp_val),
+        'boot_mean': boot_mean,
+        'boot_sem': boot_sem,
+        'boot_ci_low': ci_low,
+        'boot_ci_high': ci_high,
+        'count': int(n)
+    }
+
+
 def calc_ngp_evolution(df, max_tau=50, scale=0.11, frame_interval=4.0, component='2d',
                        theta_array=None, min_samples=5):
     """

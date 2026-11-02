@@ -124,13 +124,68 @@ def concat_pooled_particles_MSD(folder, interval_list, scale = 0.11, alpha_thres
     return df_filtered, df_pool, n_total, n_filtered
 
 
-def calc_pooled_MSD_stats(df_pool: pd.DataFrame, min_particles: int = 1) -> pd.DataFrame:
+def calc_bootstrap_ci(
+    data: np.ndarray,
+    n_bootstraps: int = 1000,
+    ci: float = 0.95,
+    random_state: int = 42
+) -> Tuple[float, float, float]:
+    """
+    ブートストラップ法 (復元抽出) により標本平均の標準誤差 (Bootstrap SEM) および信頼区間 (CI) を算出する。
+
+    Parameters
+    ----------
+    data : array-like
+        観測データ (1次元配列)
+    n_bootstraps : int
+        ブートストラップ反復回数 (デフォルト: 1000)
+    ci : float
+        信頼係数 (デフォルト: 0.95 -> 95%信頼区間)
+    random_state : int
+        乱数シード
+
+    Returns
+    -------
+    boot_sem : float
+        ブートストラップ標準誤差 (標本平均の標準偏差)
+    ci_low : float
+        信頼区間下限 (例: 95% CI なら 2.5%タイル)
+    ci_high : float
+        信頼区間上限 (例: 95% CI なら 97.5%タイル)
+    """
+    arr = np.asarray(data, dtype=float)
+    arr = arr[~np.isnan(arr) & np.isfinite(arr)]
+    n = len(arr)
+    if n == 0:
+        return np.nan, np.nan, np.nan
+    if n == 1:
+        return 0.0, float(arr[0]), float(arr[0])
+
+    rng = np.random.default_rng(random_state)
+    alpha = (1.0 - ci) / 2.0
+
+    # 高速ベクトル化サンプリング
+    boot_idx = rng.integers(0, n, size=(n_bootstraps, n))
+    boot_means = np.mean(arr[boot_idx], axis=1)
+
+    boot_sem = float(np.std(boot_means, ddof=1))
+    ci_low = float(np.percentile(boot_means, 100.0 * alpha))
+    ci_high = float(np.percentile(boot_means, 100.0 * (1.0 - alpha)))
+    return boot_sem, ci_low, ci_high
+
+
+def calc_pooled_MSD_stats(df_pool: pd.DataFrame, min_particles: int = 1,
+                          n_bootstraps: int = 1000, ci: float = 0.95) -> pd.DataFrame:
     """
     プールされた全粒子MSDから、lag timeごとのアンサンブル平均値 (mean)、
+    ブートストラップ法による標準誤差 (boot_sem) および信頼区間 (boot_ci_low, boot_ci_high)、
     四分位範囲 IQR (25%, 75%タイル)、10%, 90%タイル、標準偏差、粒子数を算出する。
     """
     if df_pool.empty:
-        return pd.DataFrame(columns=['mean', 'q25', 'q75', 'q10', 'q90', 'median', 'std', 'count'])
+        return pd.DataFrame(columns=[
+            'mean', 'boot_sem', 'boot_ci_low', 'boot_ci_high',
+            'q25', 'q75', 'q10', 'q90', 'median', 'std', 'count'
+        ])
     grouped = df_pool.groupby('lag time')['MSD']
     stats_df = pd.DataFrame({
         'mean': grouped.mean(),
@@ -142,14 +197,31 @@ def calc_pooled_MSD_stats(df_pool: pd.DataFrame, min_particles: int = 1) -> pd.D
         'std': grouped.std(),
         'count': grouped.count()
     })
+
+    # 各 lag time についてブートストラップ信頼区間と標準誤差を算出
+    boot_sems = []
+    boot_ci_lows = []
+    boot_ci_highs = []
+    for lag_val, grp_vals in grouped:
+        arr_vals = grp_vals.to_numpy(dtype=float)
+        b_sem, c_low, c_high = calc_bootstrap_ci(arr_vals, n_bootstraps=n_bootstraps, ci=ci)
+        boot_sems.append(b_sem)
+        boot_ci_lows.append(c_low)
+        boot_ci_highs.append(c_high)
+
+    stats_df['boot_sem'] = boot_sems
+    stats_df['boot_ci_low'] = boot_ci_lows
+    stats_df['boot_ci_high'] = boot_ci_highs
+
     if min_particles > 1:
         stats_df = stats_df[stats_df['count'] >= min_particles]
     return stats_df
 
 
-def extract_msd_at_lag(df_pool: pd.DataFrame, target_t: float = 300.0, tol: float = 12.0) -> dict:
+def extract_msd_at_lag(df_pool: pd.DataFrame, target_t: float = 300.0, tol: float = 12.0,
+                       n_bootstraps: int = 1000, ci: float = 0.95) -> dict:
     """
-    個別粒子データから target_t 近傍の MSD 値を集計し、統計量を返す。
+    個別粒子データから target_t 近傍の MSD 値を集計し、ブートストラップ誤差を含む統計量を返す。
     """
     records = []
     for pid, grp in df_pool.groupby('unique_particle_id'):
@@ -162,16 +234,24 @@ def extract_msd_at_lag(df_pool: pd.DataFrame, target_t: float = 300.0, tol: floa
         mean_val = float(np.mean(arr))
         std_val = float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0
         sem_val = float(std_val / np.sqrt(len(arr))) if len(arr) > 1 else 0.0
+        boot_sem, boot_ci_low, boot_ci_high = calc_bootstrap_ci(arr, n_bootstraps=n_bootstraps, ci=ci)
         return {
             'mean': mean_val,
             'std': std_val,
             'sem': sem_val,
+            'boot_sem': boot_sem,
+            'boot_ci_low': boot_ci_low,
+            'boot_ci_high': boot_ci_high,
             'median': float(np.median(arr)),
             'q25': float(np.percentile(arr, 25)),
             'q75': float(np.percentile(arr, 75)),
             'n': len(arr)
         }
-    return {'mean': np.nan, 'std': np.nan, 'sem': np.nan, 'median': np.nan, 'q25': np.nan, 'q75': np.nan, 'n': 0}
+    return {
+        'mean': np.nan, 'std': np.nan, 'sem': np.nan,
+        'boot_sem': np.nan, 'boot_ci_low': np.nan, 'boot_ci_high': np.nan,
+        'median': np.nan, 'q25': np.nan, 'q75': np.nan, 'n': 0
+    }
 
 
 def calc_msd_slope_range(
@@ -179,7 +259,9 @@ def calc_msd_slope_range(
     min_t: float = 300.0,
     max_t: float = 1000.0,
     min_total_track_length: float = 1000.0,
-    min_points: int = 3
+    min_points: int = 3,
+    n_bootstraps: int = 1000,
+    ci: float = 0.95
 ) -> dict:
     """
     長時間 (max lag time >= min_total_track_length, 既定: 1000s) 追跡できた個別粒子それぞれの
@@ -207,10 +289,14 @@ def calc_msd_slope_range(
         mean_val = float(np.mean(arr))
         std_val = float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0
         sem_val = float(std_val / np.sqrt(len(arr))) if len(arr) > 1 else 0.0
+        boot_sem, boot_ci_low, boot_ci_high = calc_bootstrap_ci(arr, n_bootstraps=n_bootstraps, ci=ci)
         return {
             'mean': mean_val,
             'std': std_val,
             'sem': sem_val,
+            'boot_sem': boot_sem,
+            'boot_ci_low': boot_ci_low,
+            'boot_ci_high': boot_ci_high,
             'median': float(np.median(arr)),
             'q25': float(np.percentile(arr, 25)),
             'q75': float(np.percentile(arr, 75)),
@@ -219,6 +305,7 @@ def calc_msd_slope_range(
         }
     return {
         'mean': np.nan, 'std': np.nan, 'sem': np.nan, 
+        'boot_sem': np.nan, 'boot_ci_low': np.nan, 'boot_ci_high': np.nan,
         'median': np.nan, 'q25': np.nan, 'q75': np.nan, 
         'n': 0, 'particle_ids': []
     }
@@ -340,6 +427,9 @@ def main():
                 "diameter_um": d_um,
                 "lag_time_s": lag_val,
                 "mean_msd_um2": row['mean'],
+                "boot_sem_msd_um2": row['boot_sem'],
+                "boot_ci_low_msd_um2": row['boot_ci_low'],
+                "boot_ci_high_msd_um2": row['boot_ci_high'],
                 "q25_msd_um2": row['q25'],
                 "q75_msd_um2": row['q75'],
                 "q10_msd_um2": row['q10'],
@@ -354,7 +444,7 @@ def main():
     save_csv_to_all(df_pooled_summary, "msd_pooled_mean_iqr_summary.csv", out_dirs)
 
     # ---------------------------------------------------------
-    # 図1: MSD プロット (代表値: Ensemble Mean, エラー帯: 25-75% IQR & 10-90%)
+    # 図1: MSD プロット (代表値: Ensemble Mean, エラーバー & エラー帯: ブートストラップ法)
     # ---------------------------------------------------------
     fig1, ax1 = plt.subplots(figsize=(8.5, 6.2))
     for item in beads_data:
@@ -365,20 +455,60 @@ def main():
         n_filt = item["n_filt"]
         
         valid = st['count'] >= 2
-        lags = st.index[valid]
-        mean_v = st['mean'][valid]
-        q25 = st['q25'][valid]
-        q75 = st['q75'][valid]
-        q10 = st['q10'][valid]
-        q90 = st['q90'][valid]
+        lags = st.index[valid].to_numpy(dtype=float)
+        mean_v = st['mean'][valid].to_numpy(dtype=float)
+        boot_sem = st['boot_sem'][valid].to_numpy(dtype=float)
+        boot_ci_low = st['boot_ci_low'][valid].to_numpy(dtype=float)
+        boot_ci_high = st['boot_ci_high'][valid].to_numpy(dtype=float)
         
-        # 10% - 90% タイル帯 (淡色)
-        ax1.fill_between(lags, q10, q90, color=color, alpha=0.08, edgecolor='none')
-        # 25% - 75% 四分位範囲 (IQR) 帯 (中間色)
-        ax1.fill_between(lags, q25, q75, color=color, alpha=0.22, edgecolor='none')
-        # 主線: アンサンブル平均 Mean (実線 + マーカー)
+        # 1. ブートストラップ 95% 信頼区間帯 (Bootstrap 95% CI band)
+        ax1.fill_between(
+            lags,
+            np.clip(boot_ci_low, 1e-4, None),
+            boot_ci_high,
+            color=color,
+            alpha=0.18,
+            edgecolor='none'
+        )
+
+        # 2. ブートストラップ法によるエラーバー (Bootstrap Error Bars)
+        # 両対数プロットで点同士が密集して見づらくなるのを防ぐため、対数等間隔に配置される代表点にクッキリとエラーバーを描画
+        n_pts = len(lags)
+        if n_pts > 20:
+            target_lags = np.geomspace(lags[0], lags[-1], num=18)
+            sub_idx = np.unique([np.argmin(np.abs(lags - tg)) for tg in target_lags])
+        else:
+            sub_idx = np.arange(n_pts)
+
+        ax1.errorbar(
+            lags[sub_idx],
+            mean_v[sub_idx],
+            yerr=boot_sem[sub_idx],
+            fmt='none',
+            ecolor=color,
+            elinewidth=1.4,
+            capsize=3.5,
+            capthick=1.0,
+            alpha=0.85,
+            zorder=3
+        )
+
+        # 全点にも細いエラーバーを薄く付与
+        ax1.errorbar(
+            lags,
+            mean_v,
+            yerr=boot_sem,
+            fmt='none',
+            ecolor=color,
+            elinewidth=0.7,
+            capsize=0,
+            alpha=0.4,
+            zorder=2
+        )
+
+        # 3. 主線: アンサンブル平均 Mean (実線 + マーカー)
         ax1.plot(lags, mean_v, marker=marker, linestyle='-', linewidth=2.0, markersize=7.5,
-                 label=f'{d_um:.2f} \u03bcm ($N={n_filt}$)', color=color)
+                 label=f'{d_um:.2f} \u03bcm ($N={n_filt}$)', color=color, zorder=4)
 
     # ガイド線
     t_g1, t_g2 = 80.0, 200.0
@@ -395,7 +525,7 @@ def main():
         yscale='log',
         xlabel='Lag time $\\Delta t$ [s]',
         ylabel='MSD $\\langle \\Delta \\boldsymbol{r}^2 \\rangle$ [$\\mu\\mathrm{m}^2$]',
-        title='Ensemble Mean MSD \u00b1 IQR (Filtered: $\\alpha > 0.5$)'
+        title='Ensemble Mean MSD with Bootstrap Error Bars (Filtered: $\\alpha > 0.5$)'
     )
     save_figure_to_all(fig1, "MSD", out_dirs)
 
@@ -426,6 +556,9 @@ def main():
             # MSD(300s)
             "msd_300s_mean_um2": msd_300_res["mean"],
             "msd_300s_sem_um2": msd_300_res["sem"],
+            "msd_300s_boot_sem_um2": msd_300_res["boot_sem"],
+            "msd_300s_boot_ci_low_um2": msd_300_res["boot_ci_low"],
+            "msd_300s_boot_ci_high_um2": msd_300_res["boot_ci_high"],
             "msd_300s_std_um2": msd_300_res["std"],
             "msd_300s_median_um2": msd_300_res["median"],
             "msd_300s_q25_um2": msd_300_res["q25"],
@@ -434,6 +567,9 @@ def main():
             # Slope alpha (300s~1000s, tracks >= 1000s)
             "alpha_300_1000s_mean": slope_res["mean"],
             "alpha_300_1000s_sem": slope_res["sem"],
+            "alpha_300_1000s_boot_sem": slope_res["boot_sem"],
+            "alpha_300_1000s_boot_ci_low": slope_res["boot_ci_low"],
+            "alpha_300_1000s_boot_ci_high": slope_res["boot_ci_high"],
             "alpha_300_1000s_std": slope_res["std"],
             "alpha_300_1000s_median": slope_res["median"],
             "alpha_300_1000s_q25": slope_res["q25"],
@@ -442,7 +578,7 @@ def main():
         })
         
         n_long = slope_res["n"]
-        print(f"  {b_name} ({d_um} um): MSD(300s) = {msd_300_res['mean']:.2f} \u00b1 {msd_300_res['sem']:.2f} um^2 (N={msd_300_res['n']}) | alpha(300-1000s) = {slope_res['mean']:.2f} \u00b1 {slope_res['sem']:.2f} (N_long={n_long})")
+        print(f"  {b_name} ({d_um} um): MSD(300s) = {msd_300_res['mean']:.2f} \u00b1 {msd_300_res['boot_sem']:.2f} um^2 (Bootstrap SEM, N={msd_300_res['n']}) | alpha(300-1000s) = {slope_res['mean']:.2f} \u00b1 {slope_res['boot_sem']:.2f} (N_long={n_long})")
 
     df_msd300_slope = pd.DataFrame(summary_rows)
     save_csv_to_all(df_msd300_slope, "msd300_and_slope_summary.csv", out_dirs)
@@ -455,29 +591,29 @@ def main():
 
     d_vals = df_msd300_slope["diameter_um"].to_numpy(dtype=float)
     msd300_mean = df_msd300_slope["msd_300s_mean_um2"].to_numpy(dtype=float)
-    msd300_sem = df_msd300_slope["msd_300s_sem_um2"].to_numpy(dtype=float)
+    msd300_err = df_msd300_slope["msd_300s_boot_sem_um2"].to_numpy(dtype=float)
     
     alpha_mean = df_msd300_slope["alpha_300_1000s_mean"].to_numpy(dtype=float)
-    alpha_sem = df_msd300_slope["alpha_300_1000s_sem"].to_numpy(dtype=float)
+    alpha_err = df_msd300_slope["alpha_300_1000s_boot_sem"].to_numpy(dtype=float)
     n_long_vals = df_msd300_slope["alpha_300_1000s_n_long_particles"].to_numpy(dtype=int)
 
     # 第1軸 (左軸): MSD(300 s) [um^2] (log scale, 青系)
     color_msd = '#1f77b4'
     line1 = ax_msd.errorbar(
-        d_vals, msd300_mean, yerr=msd300_sem,
+        d_vals, msd300_mean, yerr=msd300_err,
         fmt='o-', color=color_msd, ecolor=color_msd, elinewidth=1.6,
         capsize=4.5, capthick=1.2, markersize=8.5, linewidth=2.0,
-        label=r'$\mathrm{MSD}(\Delta t = 300\,\mathrm{s})$',
+        label=r'$\mathrm{MSD}(\Delta t = 300\,\mathrm{s})$ (Bootstrap Error)',
         zorder=4
     )
 
     # 第2軸 (右軸): MSD 傾き alpha (300s-1000s, tracks >= 1000s) (linear scale, 赤系)
     color_slope = '#d62728'
     line2 = ax_slope.errorbar(
-        d_vals, alpha_mean, yerr=alpha_sem,
+        d_vals, alpha_mean, yerr=alpha_err,
         fmt='s--', color=color_slope, ecolor=color_slope, elinewidth=1.6,
         capsize=4.5, capthick=1.2, markersize=8.0, linewidth=2.0,
-        label=r'Slope $\alpha$ ($\Delta t \in [300, 1000]\,\mathrm{s}$, tracks $\geq 1000\,\mathrm{s}$)',
+        label=r'Slope $\alpha$ ($\Delta t \in [300, 1000]\,\mathrm{s}$, Bootstrap Error)',
         zorder=5
     )
 

@@ -1604,6 +1604,131 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     plt.close(fig)
 
     # -------------------------------------------------------------
+    # 8b. 偶関数成分 P_even と 奇関数成分 P_odd の分解と可視化
+    #     P_even(x) = (P(x) + P(-x)) / 2
+    #     P_odd(x)  = (P(x) - P(-x)) / 2  (x = \hat{v} \cdot \hat{u})
+    # -------------------------------------------------------------
+    # (1) 6パネル版: 各粒子サイズごとに P, P_even, P_odd を比較
+    fig, axes = plt.subplots(2, 3, figsize=(16.0, 10.0), sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+
+    peven_podd_records = []
+
+    for idx, b_item in enumerate(BEADS_INFO):
+        ax = axes_flat[idx]
+        bname = b_item['name']
+        color = b_item['color']
+        lbl = b_item['label']
+
+        sub_inst = df_instant[df_instant['bead_name'] == bname]
+        if sub_inst.empty:
+            ax.text(0.5, 0.5, "No Data", ha='center', va='center', transform=ax.transAxes)
+            continue
+
+        cos_vals = sub_inst['cos_i'].dropna().values
+        counts, bin_edges = np.histogram(cos_vals, bins=bins_cos, density=True)
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+        # bins_cos は [-1, 1] で 0 を中心に対称に配置されているため、
+        # bin_centers[::-1] は正確に -bin_centers に対応する
+        P_x = counts
+        P_neg_x = counts[::-1]
+
+        P_even = 0.5 * (P_x + P_neg_x)
+        P_odd = 0.5 * (P_x - P_neg_x)
+
+        for bc, px, pe, po in zip(bin_centers, P_x, P_even, P_odd):
+            peven_podd_records.append({
+                'bead_name': bname,
+                'label': lbl,
+                'cos_val': bc,
+                'P': px,
+                'P_even': pe,
+                'P_odd': po,
+            })
+
+        ax.axhline(0.0, color='#888888', linestyle='-', linewidth=0.9, alpha=0.7)
+        ax.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2)
+
+        # 実測 P, 偶関数成分 P_even, 奇関数成分 P_odd をプロット
+        ax.plot(bin_centers, P_x, color='#444444', linestyle=':', linewidth=2.0,
+                label=r"$P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$ (Observed)")
+        ax.plot(bin_centers, P_even, color='#1b7837', linestyle='-', linewidth=2.4,
+                marker='o', markersize=4.5,
+                label=r"$P_{\mathrm{even}} = \frac{P(x) + P(-x)}{2}$")
+        ax.plot(bin_centers, P_odd, color='#d95f02', linestyle='--', linewidth=2.4,
+                marker='s', markersize=4.5,
+                label=r"$P_{\mathrm{odd}} = \frac{P(x) - P(-x)}{2}$")
+
+        ax.set_xlim(-1.05, 1.05)
+        ax.set_ylim(-1.5, 3.8)
+        ax.set_title(rf"{lbl}", fontsize=14, fontweight='bold')
+        ax.set_xlabel(r"Directional Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=13)
+        if idx % 3 == 0:
+            ax.set_ylabel(r"Probability Density / Component", fontsize=14)
+        ax.grid(True, linestyle=':', alpha=0.6)
+        ax.legend(loc='upper left', fontsize=9.2, framealpha=0.92)
+
+    fig.suptitle(r'Decomposition into Even and Odd Components: $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}) = P_{\mathrm{even}} + P_{\mathrm{odd}}$',
+                 fontsize=16, y=0.99)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    save_figure(fig, "cos_i_peven_podd_histograms_6panels", OUT_DIRS)
+    plt.close(fig)
+
+    # (2) 全サイズ比較用の 1 パネル版 (P_even と P_odd を並列して 1 画面で比較)
+    fig, (ax_even, ax_odd) = plt.subplots(1, 2, figsize=(16.0, 6.5), sharey=True)
+
+    ax_even.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2)
+    ax_odd.axhline(0.0, color='#888888', linestyle='-', linewidth=0.9, alpha=0.7)
+    ax_odd.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2)
+
+    for idx, b_item in enumerate(BEADS_INFO):
+        bname = b_item['name']
+        color = b_item['color']
+        lbl = b_item['label']
+
+        sub_inst = df_instant[df_instant['bead_name'] == bname]
+        if sub_inst.empty:
+            continue
+
+        cos_vals = sub_inst['cos_i'].dropna().values
+        counts, bin_edges = np.histogram(cos_vals, bins=bins_cos, density=True)
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+        P_x = counts
+        P_neg_x = counts[::-1]
+        P_even = 0.5 * (P_x + P_neg_x)
+        P_odd = 0.5 * (P_x - P_neg_x)
+
+        ax_even.plot(bin_centers, P_even, marker=b_item['marker'], markersize=6,
+                     color=color, linewidth=2.2, label=lbl)
+        ax_odd.plot(bin_centers, P_odd, marker=b_item['marker'], markersize=6,
+                    color=color, linewidth=2.2, label=lbl)
+
+    ax_even.set_xlim(-1.05, 1.05)
+    ax_even.set_ylim(-1.5, 3.8)
+    ax_even.set_xlabel(r"Directional Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=14, labelpad=8)
+    ax_even.set_ylabel(r"Even Component $P_{\mathrm{even}}(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$", fontsize=14, labelpad=8)
+    ax_even.set_title(r"Even Component $P_{\mathrm{even}} = \frac{P(x) + P(-x)}{2}$ (Symmetric / Alignment)",
+                      fontsize=14, fontweight='bold', pad=10)
+    ax_even.grid(True, linestyle=':', alpha=0.7)
+    ax_even.legend(loc='upper right', fontsize=10.0, framealpha=0.92)
+
+    ax_odd.set_xlim(-1.05, 1.05)
+    ax_odd.set_xlabel(r"Directional Coupling $\mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=14, labelpad=8)
+    ax_odd.set_ylabel(r"Odd Component $P_{\mathrm{odd}}(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$", fontsize=14, labelpad=8)
+    ax_odd.set_title(r"Odd Component $P_{\mathrm{odd}} = \frac{P(x) - P(-x)}{2}$ (Antisymmetric / Polarity)",
+                     fontsize=14, fontweight='bold', pad=10)
+    ax_odd.grid(True, linestyle=':', alpha=0.7)
+    ax_odd.legend(loc='upper left', fontsize=10.0, framealpha=0.92)
+
+    fig.suptitle(r'Comparison of Even and Odd Components across All Cargo Sizes',
+                 fontsize=16, y=0.99)
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    save_figure(fig, "cos_i_peven_podd_comparison_1panel", OUT_DIRS)
+    plt.close(fig)
+
+    # -------------------------------------------------------------
     # 9. 貨物粒子単位の歪度 \gamma_{1, i} およびその平均 <\gamma_1> の算出と可視化
     #    1. 貨物 i の全ピクセルデータ（各フレーム）から通常の平均 mu_i, 標準偏差 sigma_i, 歪度 \gamma_{1, i} を計算
     #    2. 各サイズごとに全貨物平均 <\gamma_1> = (1 / N_cargo) * sum(\gamma_{1, i}) を算出
@@ -2069,12 +2194,15 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
 
     # CSV 保存
     df_window_summary = pd.DataFrame(window_summary_list)
+    df_peven_podd = pd.DataFrame(peven_podd_records)
     for out_dir in OUT_DIRS:
         out_dir.mkdir(parents=True, exist_ok=True)
         df_summary.to_csv(out_dir / "cos_decomposition_summary_by_radius.csv", index=False)
         df_window_summary.to_csv(out_dir / "cos_decomposition_summary_by_window.csv", index=False)
         df_skew.to_csv(out_dir / "cos_i_skewness_summary.csv", index=False)
         df_cargo_stats.to_csv(out_dir / "cos_i_cargo_individual_stats.csv", index=False)
+        if not df_peven_podd.empty:
+            df_peven_podd.to_csv(out_dir / "cos_i_peven_podd_summary.csv", index=False)
     print("Saved decomposition and skewness summary CSVs.")
 
     return df_summary

@@ -69,6 +69,29 @@ def find_default_root():
     return POSSIBLE_ROOTS[0]
 
 
+def calc_bootstrap_ci(data, n_bootstraps=1000, ci=0.95, random_state=42):
+    """
+    ブートストラップ法 (復元抽出) により標本平均の標準誤差 (Bootstrap SEM) および信頼区間 (CI) を算出する。
+    """
+    arr = np.asarray(data, dtype=float)
+    arr = arr[~np.isnan(arr) & np.isfinite(arr)]
+    n = len(arr)
+    if n == 0:
+        return np.nan, np.nan, np.nan
+    if n == 1:
+        return 0.0, float(arr[0]), float(arr[0])
+
+    rng = np.random.default_rng(random_state)
+    alpha = (1.0 - ci) / 2.0
+    boot_idx = rng.integers(0, n, size=(n_bootstraps, n))
+    boot_means = np.mean(arr[boot_idx], axis=1)
+
+    boot_sem = float(np.std(boot_means, ddof=1))
+    ci_low = float(np.percentile(boot_means, 100.0 * alpha))
+    ci_high = float(np.percentile(boot_means, 100.0 * (1.0 - alpha)))
+    return boot_sem, ci_low, ci_high
+
+
 _THETA_CACHE = {}
 
 def load_theta_array(exp_dir):
@@ -157,36 +180,54 @@ def analyze_single_bead_condition(target_dir, max_tau=50, scale=0.11, frame_inte
             if len(disp) > 0:
                 pooled_disps[tau].extend(disp)
 
-    # 全粒子プールでの NGP 算出
+    # 全粒子プールでの NGP 算出 (ブートストラップ誤差を含む)
     pooled_records = []
     for tau in range(1, max_tau + 1):
         disp_arr = np.asarray(pooled_disps[tau])
         if len(disp_arr) < min_samples:
             continue
-        res = ngp.calc_ngp_from_displacements(disp_arr, component=component)
-        if not np.isnan(res['ngp']):
+        res_disp = ngp.calc_ngp_from_displacements(disp_arr, component=component)
+        boot_res = ngp.calc_bootstrap_ngp(disp_arr, component=component, n_bootstraps=1000)
+        if not np.isnan(res_disp['ngp']):
             pooled_records.append({
                 'tau': tau,
                 'lag_time': tau * frame_interval,
-                'ngp': res['ngp'],
-                'msd': res['msd'],
-                'm4': res['m4'],
-                'count': res['count']
+                'ngp': res_disp['ngp'],
+                'ngp_boot_sem': boot_res['boot_sem'],
+                'ngp_boot_ci_low': boot_res['boot_ci_low'],
+                'ngp_boot_ci_high': boot_res['boot_ci_high'],
+                'msd': res_disp['msd'],
+                'm4': res_disp['m4'],
+                'count': res_disp['count']
             })
 
     pooled_ngp_df = pd.DataFrame(pooled_records)
 
-    # 実験ごとの平均 NGP と標準偏差 (実験間エラーバー用)
+    # 実験ごとの平均 NGP と標準偏差・ブートストラップ誤差 (実験間エラーバー用)
     if per_exp_ngp:
         combined_exp_ngp = pd.concat(per_exp_ngp, ignore_index=True)
         exp_mean = combined_exp_ngp.groupby(['tau', 'lag_time'])['ngp'].mean().reset_index()
         exp_std = combined_exp_ngp.groupby(['tau', 'lag_time'])['ngp'].std().fillna(0.0).reset_index()
         exp_cnt = combined_exp_ngp.groupby(['tau', 'lag_time'])['ngp'].count().reset_index()
 
+        # 各 tau について実験間ブートストラップ誤差を算出
+        boot_sems = []
+        boot_ci_lows = []
+        boot_ci_highs = []
+        for tau_val in exp_mean['tau']:
+            vals = combined_exp_ngp.loc[combined_exp_ngp['tau'] == tau_val, 'ngp'].dropna().to_numpy()
+            b_sem, c_low, c_high = calc_bootstrap_ci(vals, n_bootstraps=1000)
+            boot_sems.append(b_sem)
+            boot_ci_lows.append(c_low)
+            boot_ci_highs.append(c_high)
+
         exp_ngp_summary = pd.DataFrame({
             'tau': exp_mean['tau'],
             'lag_time': exp_mean['lag_time'],
             'ngp_mean': exp_mean['ngp'],
+            'ngp_boot_sem': boot_sems,
+            'ngp_boot_ci_low': boot_ci_lows,
+            'ngp_boot_ci_high': boot_ci_highs,
             'ngp_std': exp_std['ngp'],
             'ngp_sem': exp_std['ngp'] / np.sqrt(exp_cnt['ngp']),
             'n_experiments': exp_cnt['ngp']
@@ -210,16 +251,22 @@ def run_all_beads_ngp_analysis(root_dir, out_dir=None, component='2d', max_tau=5
     グラフ（SVG/PNG）および CSV を出力する。
     """
     root = Path(root_dir)
+    workspace_dir = Path(__file__).resolve().parent.parent
     if out_dir is None:
-        out = root / 'figure' / 'ngp'
+        out_dirs = [
+            workspace_dir / 'figure' / 'ngp',
+            root / 'figure' / 'ngp'
+        ]
     else:
-        out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
+        out_dirs = [Path(out_dir)]
+
+    for d in out_dirs:
+        d.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'='*70}")
     print(f"ノンガウシアンパラメータ (NGP / α_2) 一括解析開始")
     print(f"ルートディレクトリ: {root}")
-    print(f"出力先ディレクトリ: {out}")
+    print(f"出力先ディレクトリ群: {[str(d) for d in out_dirs]}")
     print(f"成分: {component}")
     print(f"パラメータ: max_tau={max_tau} frames, frame_interval={frame_interval}s, scale={scale} um/px")
     print(f"{'='*70}\n")
@@ -259,6 +306,9 @@ def run_all_beads_ngp_analysis(root_dir, out_dir=None, component='2d', max_tau=5
             tau_val = int(row['tau'])
             lag_t = row['lag_time']
             ngp_p = row['ngp']
+            ngp_p_boot_sem = row.get('ngp_boot_sem', np.nan)
+            ngp_p_ci_low = row.get('ngp_boot_ci_low', np.nan)
+            ngp_p_ci_high = row.get('ngp_boot_ci_high', np.nan)
             msd_val = row['msd']
             m4_val = row['m4']
             n_disp = int(row['count'])
@@ -266,12 +316,20 @@ def run_all_beads_ngp_analysis(root_dir, out_dir=None, component='2d', max_tau=5
             ngp_exp_mean = np.nan
             ngp_exp_std = np.nan
             ngp_exp_sem = np.nan
+            ngp_exp_boot_sem = np.nan
+            ngp_exp_boot_ci_low = np.nan
+            ngp_exp_boot_ci_high = np.nan
+
             if not exp_sum.empty:
                 match_exp = exp_sum[exp_sum['tau'] == tau_val]
                 if not match_exp.empty:
                     ngp_exp_mean = match_exp['ngp_mean'].iloc[0]
                     ngp_exp_std = match_exp['ngp_std'].iloc[0]
                     ngp_exp_sem = match_exp['ngp_sem'].iloc[0]
+                    if 'ngp_boot_sem' in match_exp.columns:
+                        ngp_exp_boot_sem = match_exp['ngp_boot_sem'].iloc[0]
+                        ngp_exp_boot_ci_low = match_exp['ngp_boot_ci_low'].iloc[0]
+                        ngp_exp_boot_ci_high = match_exp['ngp_boot_ci_high'].iloc[0]
 
             summary_rows.append({
                 'bead_name': b_name,
@@ -280,7 +338,13 @@ def run_all_beads_ngp_analysis(root_dir, out_dir=None, component='2d', max_tau=5
                 'tau_frame': tau_val,
                 'lag_time_s': lag_t,
                 'ngp_pooled': ngp_p,
+                'ngp_pooled_boot_sem': ngp_p_boot_sem,
+                'ngp_pooled_boot_ci_low': ngp_p_ci_low,
+                'ngp_pooled_boot_ci_high': ngp_p_ci_high,
                 'ngp_exp_mean': ngp_exp_mean,
+                'ngp_exp_boot_sem': ngp_exp_boot_sem,
+                'ngp_exp_boot_ci_low': ngp_exp_boot_ci_low,
+                'ngp_exp_boot_ci_high': ngp_exp_boot_ci_high,
                 'ngp_exp_std': ngp_exp_std,
                 'ngp_exp_sem': ngp_exp_sem,
                 'msd_um2': msd_val,
@@ -295,22 +359,23 @@ def run_all_beads_ngp_analysis(root_dir, out_dir=None, component='2d', max_tau=5
 
     # サマリー CSV の保存
     df_summary = pd.DataFrame(summary_rows)
-    csv_path = out / f"NGP_summary_{component}.csv"
-    df_summary.to_csv(csv_path, index=False)
-    print(f"\n[保存完了] サマリー CSV: {csv_path}")
+    for d in out_dirs:
+        csv_path = d / f"NGP_summary_{component}.csv"
+        df_summary.to_csv(csv_path, index=False)
+        print(f"[保存完了] サマリー CSV: {csv_path}")
 
     # ==========================================
     # プロット 1: 全ビーズ NGP(Δt) 比較 (線形 x, 線形 y)
     # ==========================================
-    _plot_all_beads_ngp(beads_results, out, component, frame_interval, xlim)
+    _plot_all_beads_ngp(beads_results, out_dirs, component, frame_interval, xlim)
 
     # ==========================================
     # プロット 2: 全ビーズ NGP(Δt) 比較 (両対数 log-log)
     # ==========================================
-    _plot_all_beads_ngp_loglog(beads_results, out, component, frame_interval, xlim)
+    _plot_all_beads_ngp_loglog(beads_results, out_dirs, component, frame_interval, xlim)
 
     print(f"\n{'='*70}")
-    print(f"ノンガウシアンパラメータ解析が完了しました。出力先: {out}")
+    print(f"ノンガウシアンパラメータ解析が完了しました。")
     print(f"{'='*70}\n")
     return beads_results
 
@@ -338,12 +403,13 @@ def _get_ylabel_and_title(component):
     return ylabel, title
 
 
-def _plot_all_beads_ngp(beads_results, out_dir, component, frame_interval, xlim):
+def _plot_all_beads_ngp(beads_results, out_dirs, component, frame_interval, xlim):
     """
-    全ビーズサイズの NGP(Δt) 比較プロットを作成・保存する（線形プロット）。
+    全ビーズサイズの NGP(Δt) 比較プロットを作成・保存する（線形プロット、ブートストラップ誤差バー付き）。
     """
     fig, ax = plt.subplots(figsize=(7.0, 5.2))
     ylabel, title = _get_ylabel_and_title(component)
+    title = f"{title} (Bootstrap Error)"
 
     for item in BEADS_INFO:
         b_name = item["name"]
@@ -354,14 +420,18 @@ def _plot_all_beads_ngp(beads_results, out_dir, component, frame_interval, xlim)
         pooled_df = res['pooled_ngp']
 
         if not exp_sum.empty and len(exp_sum) > 0:
-            x_val = exp_sum['lag_time']
-            y_val = exp_sum['ngp_mean']
-            y_err = exp_sum['ngp_sem']
+            x_val = exp_sum['lag_time'].to_numpy(dtype=float)
+            y_val = exp_sum['ngp_mean'].to_numpy(dtype=float)
+            y_err = exp_sum['ngp_boot_sem'].to_numpy(dtype=float) if 'ngp_boot_sem' in exp_sum.columns else exp_sum['ngp_sem'].to_numpy(dtype=float)
+            ci_low = exp_sum['ngp_boot_ci_low'].to_numpy(dtype=float) if 'ngp_boot_ci_low' in exp_sum.columns else (y_val - y_err)
+            ci_high = exp_sum['ngp_boot_ci_high'].to_numpy(dtype=float) if 'ngp_boot_ci_high' in exp_sum.columns else (y_val + y_err)
             n_exp = res['n_experiments']
         else:
-            x_val = pooled_df['lag_time']
-            y_val = pooled_df['ngp']
-            y_err = None
+            x_val = pooled_df['lag_time'].to_numpy(dtype=float)
+            y_val = pooled_df['ngp'].to_numpy(dtype=float)
+            y_err = pooled_df['ngp_boot_sem'].to_numpy(dtype=float) if 'ngp_boot_sem' in pooled_df.columns else None
+            ci_low = pooled_df['ngp_boot_ci_low'].to_numpy(dtype=float) if 'ngp_boot_ci_low' in pooled_df.columns else None
+            ci_high = pooled_df['ngp_boot_ci_high'].to_numpy(dtype=float) if 'ngp_boot_ci_high' in pooled_df.columns else None
             n_exp = 1
 
         valid = np.isfinite(x_val) & np.isfinite(y_val)
@@ -369,6 +439,19 @@ def _plot_all_beads_ngp(beads_results, out_dir, component, frame_interval, xlim)
             continue
 
         label_text = f'{item["label"]} ($N={n_exp}$)'
+
+        # ブートストラップ 95% 信頼区間帯
+        if ci_low is not None and ci_high is not None:
+            ax.fill_between(
+                x_val[valid],
+                ci_low[valid],
+                ci_high[valid],
+                color=item["color"],
+                alpha=0.15,
+                edgecolor='none'
+            )
+
+        # ブートストラップ エラーバー
         ax.errorbar(
             x_val[valid],
             y_val[valid],
@@ -377,9 +460,10 @@ def _plot_all_beads_ngp(beads_results, out_dir, component, frame_interval, xlim)
             color=item["color"],
             label=label_text,
             capsize=3,
-            elinewidth=1.0,
+            elinewidth=1.2,
             markersize=5.5,
-            alpha=0.9
+            alpha=0.9,
+            zorder=3
         )
 
     max_x = xlim[1] if xlim is not None else 50.0
@@ -394,20 +478,22 @@ def _plot_all_beads_ngp(beads_results, out_dir, component, frame_interval, xlim)
     ax.grid(True, which="both", ls="--", alpha=0.3)
 
     plt.tight_layout()
-    svg_path = out_dir / f"NGP_linear_{component}.svg"
-    png_path = out_dir / f"NGP_linear_{component}.png"
-    fig.savefig(svg_path, bbox_inches='tight')
-    fig.savefig(png_path, dpi=300, bbox_inches='tight')
+    for d in out_dirs:
+        svg_path = d / f"NGP_linear_{component}.svg"
+        png_path = d / f"NGP_linear_{component}.png"
+        fig.savefig(svg_path, bbox_inches='tight')
+        fig.savefig(png_path, dpi=300, bbox_inches='tight')
+        print(f"  [保存完了] NGP 線形プロット: {svg_path}")
     plt.close(fig)
-    print(f"  [保存完了] NGP 線形プロット: {svg_path}")
 
 
-def _plot_all_beads_ngp_loglog(beads_results, out_dir, component, frame_interval, xlim):
+def _plot_all_beads_ngp_loglog(beads_results, out_dirs, component, frame_interval, xlim):
     """
-    全ビーズサイズの NGP(Δt) 比較プロットを作成・保存する（両対数 log-log プロット）。
+    全ビーズサイズの NGP(Δt) 比較プロットを作成・保存する（両対数 log-log プロット、ブートストラップ誤差バー付き）。
     """
     fig, ax = plt.subplots(figsize=(7.0, 5.2))
     ylabel, title = _get_ylabel_and_title(component)
+    title = f"{title} (log-log, Bootstrap Error)"
 
     for item in BEADS_INFO:
         b_name = item["name"]
@@ -418,30 +504,69 @@ def _plot_all_beads_ngp_loglog(beads_results, out_dir, component, frame_interval
         pooled_df = res['pooled_ngp']
 
         if not exp_sum.empty and len(exp_sum) > 0:
-            x_val = exp_sum['lag_time']
-            y_val = exp_sum['ngp_mean']
-            y_err = exp_sum['ngp_sem']
+            x_val = exp_sum['lag_time'].to_numpy(dtype=float)
+            y_val = exp_sum['ngp_mean'].to_numpy(dtype=float)
+            y_err = exp_sum['ngp_boot_sem'].to_numpy(dtype=float) if 'ngp_boot_sem' in exp_sum.columns else exp_sum['ngp_sem'].to_numpy(dtype=float)
+            ci_low = exp_sum['ngp_boot_ci_low'].to_numpy(dtype=float) if 'ngp_boot_ci_low' in exp_sum.columns else (y_val - y_err)
+            ci_high = exp_sum['ngp_boot_ci_high'].to_numpy(dtype=float) if 'ngp_boot_ci_high' in exp_sum.columns else (y_val + y_err)
         else:
-            x_val = pooled_df['lag_time']
-            y_val = pooled_df['ngp']
-            y_err = None
+            x_val = pooled_df['lag_time'].to_numpy(dtype=float)
+            y_val = pooled_df['ngp'].to_numpy(dtype=float)
+            y_err = pooled_df['ngp_boot_sem'].to_numpy(dtype=float) if 'ngp_boot_sem' in pooled_df.columns else None
+            ci_low = pooled_df['ngp_boot_ci_low'].to_numpy(dtype=float) if 'ngp_boot_ci_low' in pooled_df.columns else None
+            ci_high = pooled_df['ngp_boot_ci_high'].to_numpy(dtype=float) if 'ngp_boot_ci_high' in pooled_df.columns else None
 
         valid = (x_val > 0) & (y_val > 0) & np.isfinite(x_val) & np.isfinite(y_val)
         if not np.any(valid):
             continue
 
         label_text = f'{item["label"]}'
-        ax.errorbar(
+
+        # ブートストラップ 95% 信頼区間帯
+        if ci_low is not None and ci_high is not None:
+            ax.fill_between(
+                x_val[valid],
+                np.clip(ci_low[valid], 1e-4, None),
+                ci_high[valid],
+                color=item["color"],
+                alpha=0.15,
+                edgecolor='none'
+            )
+
+        # 代表点にキャップ付きエラーバーを描画
+        n_pts = np.sum(valid)
+        valid_indices = np.where(valid)[0]
+        if n_pts > 16:
+            sub_idx = np.unique(np.round(np.geomspace(1, n_pts, num=14)).astype(int) - 1)
+            err_sub_idx = valid_indices[sub_idx]
+        else:
+            err_sub_idx = valid_indices
+
+        if y_err is not None:
+            ax.errorbar(
+                x_val[err_sub_idx],
+                y_val[err_sub_idx],
+                yerr=y_err[err_sub_idx],
+                fmt='none',
+                ecolor=item["color"],
+                elinewidth=1.3,
+                capsize=3.0,
+                capthick=1.0,
+                alpha=0.85,
+                zorder=3
+            )
+
+        # 主データ線
+        ax.plot(
             x_val[valid],
             y_val[valid],
-            yerr=y_err[valid] if y_err is not None else None,
             marker=item["marker"],
             color=item["color"],
             label=label_text,
-            capsize=3,
-            elinewidth=1.0,
             markersize=5.5,
-            alpha=0.9
+            linewidth=1.8,
+            alpha=0.9,
+            zorder=4
         )
 
     ax.set_xscale('log')
@@ -453,12 +578,13 @@ def _plot_all_beads_ngp_loglog(beads_results, out_dir, component, frame_interval
     ax.grid(True, which="both", ls="--", alpha=0.3)
 
     plt.tight_layout()
-    svg_path = out_dir / f"NGP_loglog_{component}.svg"
-    png_path = out_dir / f"NGP_loglog_{component}.png"
-    fig.savefig(svg_path, bbox_inches='tight')
-    fig.savefig(png_path, dpi=300, bbox_inches='tight')
+    for d in out_dirs:
+        svg_path = d / f"NGP_loglog_{component}.svg"
+        png_path = d / f"NGP_loglog_{component}.png"
+        fig.savefig(svg_path, bbox_inches='tight')
+        fig.savefig(png_path, dpi=300, bbox_inches='tight')
+        print(f"  [保存完了] NGP 両対数プロット: {svg_path}")
     plt.close(fig)
-    print(f"  [保存完了] NGP 両対数プロット: {svg_path}")
 
 
 def main():

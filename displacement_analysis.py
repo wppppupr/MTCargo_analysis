@@ -195,15 +195,75 @@ def collect_displacements(exp_dirs, tau, scale=0.11, component='norm', signed=Fa
     }
 
 
-def calc_ensemble_pdf(exp_disp_list, bins=50, bin_range=None, density=True):
+def calc_bootstrap_pdf_ci(
+    exp_disp_list,
+    bin_edges,
+    density=True,
+    n_bootstraps=1000,
+    ci=0.95,
+    random_state=42
+):
+    """
+    実験ごとの変位データからブートストラップ法 (復元抽出) により
+    各ビンの平均PDF、ブートストラップ標準誤差 (Bootstrap SEM)、信頼区間 (CI) を算出する。
+    """
+    n_exp = len(exp_disp_list)
+    n_bins = len(bin_edges) - 1
+    if n_exp == 0:
+        return np.zeros(n_bins), np.zeros(n_bins), np.zeros(n_bins), np.zeros(n_bins)
+
+    rng = np.random.default_rng(random_state)
+    alpha = (1.0 - ci) / 2.0
+
+    if n_exp >= 2:
+        # 実験単位でのブートストラップ (Hierarchical / Cluster Bootstrap)
+        pdf_list = []
+        for exp_disp in exp_disp_list:
+            if len(exp_disp) > 0:
+                counts, _ = np.histogram(exp_disp, bins=bin_edges, density=density)
+                pdf_list.append(counts)
+            else:
+                pdf_list.append(np.zeros(n_bins))
+        pdf_mat = np.array(pdf_list)  # (n_exp, n_bins)
+
+        boot_idx = rng.integers(0, n_exp, size=(n_bootstraps, n_exp))
+        boot_means = np.mean(pdf_mat[boot_idx], axis=1)  # (n_bootstraps, n_bins)
+    else:
+        # 単一実験の場合: 全変位データからのブートストラップ
+        all_d = np.concatenate(exp_disp_list)
+        n_pts = len(all_d)
+        if n_pts < 2:
+            single_h, _ = np.histogram(all_d, bins=bin_edges, density=density)
+            return single_h, np.zeros(n_bins), single_h.copy(), single_h.copy()
+
+        boot_means = []
+        for _ in range(n_bootstraps):
+            sub_d = rng.choice(all_d, size=n_pts, replace=True)
+            cnts, _ = np.histogram(sub_d, bins=bin_edges, density=density)
+            boot_means.append(cnts)
+        boot_means = np.array(boot_means)
+
+    boot_mean = np.mean(boot_means, axis=0)
+    boot_sem = np.std(boot_means, axis=0, ddof=1)
+    ci_low = np.percentile(boot_means, 100.0 * alpha, axis=0)
+    ci_high = np.percentile(boot_means, 100.0 * (1.0 - alpha), axis=0)
+    return boot_mean, boot_sem, ci_low, ci_high
+
+
+def calc_ensemble_pdf(exp_disp_list, bins=50, bin_range=None, density=True,
+                      n_bootstraps=1000, ci=0.95):
     """
     実験ごとの変位データリストから、実験間アンサンブル統計量
-    （平均値 mean, 中央値 median, 四分位範囲 IQR q25/q75, 10%/90%タイル, 標準偏差 std）を算出する。
+    （平均値 mean, 中央値 median, 四分位範囲 IQR q25/q75, 10%/90%タイル, 標準偏差 std,
+      およびブートストラップ法による標準誤差 boot_sem, 信頼区間 boot_ci_low/boot_ci_high）を算出する。
     """
     empty_res = {
         'centers': np.array([]),
         'mean': np.array([]),
         'median': np.array([]),
+        'boot_sem': np.array([]),
+        'boot_ci_low': np.array([]),
+        'boot_ci_high': np.array([]),
         'q25': np.array([]),
         'q75': np.array([]),
         'q10': np.array([]),
@@ -242,10 +302,18 @@ def calc_ensemble_pdf(exp_disp_list, bins=50, bin_range=None, density=True):
     q90_pdf = np.nanpercentile(pdf_matrix, 90, axis=0) if len(pdf_matrix) > 1 else mean_pdf.copy()
     std_pdf = np.nanstd(pdf_matrix, axis=0, ddof=1) if len(pdf_matrix) > 1 else np.zeros_like(mean_pdf)
 
+    # ブートストラップ統計量の算出
+    _, boot_sem, boot_ci_low, boot_ci_high = calc_bootstrap_pdf_ci(
+        exp_disp_list, bin_edges, density=density, n_bootstraps=n_bootstraps, ci=ci
+    )
+
     return {
         'centers': bin_centers,
         'mean': mean_pdf,
         'median': median_pdf,
+        'boot_sem': boot_sem,
+        'boot_ci_low': boot_ci_low,
+        'boot_ci_high': boot_ci_high,
         'q25': q25_pdf,
         'q75': q75_pdf,
         'q10': q10_pdf,
@@ -380,6 +448,9 @@ def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, ou
         pdf_res = calc_ensemble_pdf(exp_list, bins=bins, bin_range=bin_range, density=True)
         centers = pdf_res['centers']
         mean_pdf = pdf_res['mean']
+        boot_sem = pdf_res['boot_sem']
+        boot_ci_low = pdf_res['boot_ci_low']
+        boot_ci_high = pdf_res['boot_ci_high']
         q25 = pdf_res['q25']
         q75 = pdf_res['q75']
         q10 = pdf_res['q10']
@@ -415,7 +486,33 @@ def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, ou
         color = item["color"]
         marker = item["marker"]
 
-        # 1. 10% - 90% タイル帯 (淡色)
+        # 1. ブートストラップ 95% 信頼区間帯 (Bootstrap 95% CI band)
+        if error_style in ['bootstrap', 'bootstrap_both', 'bootstrap_band']:
+            ax.fill_between(
+                centers[valid],
+                np.clip(boot_ci_low[valid], 1e-6 if yscale == 'log' else 0, None),
+                boot_ci_high[valid],
+                color=color,
+                alpha=0.18,
+                edgecolor='none'
+            )
+
+        # 2. ブートストラップ法によるエラーバー (Bootstrap Error Bars)
+        if error_style in ['bootstrap', 'bootstrap_both', 'bootstrap_bar']:
+            ax.errorbar(
+                centers[valid],
+                mean_pdf[valid],
+                yerr=boot_sem[valid],
+                fmt='none',
+                ecolor=color,
+                elinewidth=1.2,
+                capsize=3,
+                capthick=1.0,
+                alpha=0.85,
+                zorder=3
+            )
+
+        # 3. 従来の IQR 帯
         if error_style in ['band', 'both']:
             ax.fill_between(
                 centers[valid],
@@ -425,7 +522,6 @@ def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, ou
                 alpha=0.08,
                 edgecolor='none'
             )
-            # 2. 25% - 75% 四分位範囲 (IQR) 帯 (中間色)
             ax.fill_between(
                 centers[valid],
                 np.clip(q25[valid], 1e-6 if yscale == 'log' else 0, None),
@@ -435,7 +531,7 @@ def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, ou
                 edgecolor='none'
             )
 
-        # 3. エラーバー (bar スタイル指定時: IQR 非対称エラーバー)
+        # 4. 従来の IQR エラーバー
         if error_style in ['bar', 'both']:
             yerr_low = np.clip(mean_pdf[valid] - q25[valid], 0, None)
             yerr_high = np.clip(q75[valid] - mean_pdf[valid], 0, None)
@@ -502,7 +598,10 @@ def plot_pdf_across_beads(beads_data, tau, frame_interval, component, signed, ou
             y_top = 10.0 ** (np.ceil(np.log10(y_max_data * 2.5)))
             ax.set_ylim(bottom=y_bottom, top=y_top)
 
-    ax.set_title(f'Displacement PDF $\\pm$ IQR ($\\Delta t = {tau_sec:.1f}\\,\\mathrm{{s}}$, $\\tau = {tau}$ frames)')
+    if error_style.startswith('bootstrap'):
+        ax.set_title(f'Displacement PDF with Bootstrap Error Bars ($\\Delta t = {tau_sec:.1f}\\,\\mathrm{{s}}$, $\\tau = {tau}$ frames)')
+    else:
+        ax.set_title(f'Displacement PDF $\\pm$ IQR ($\\Delta t = {tau_sec:.1f}\\,\\mathrm{{s}}$, $\\tau = {tau}$ frames)')
     ax.legend(fontsize=9.5, loc='upper right', framealpha=0.88, markerscale=0.85, handlelength=1.4, borderpad=0.35, labelspacing=0.28)
     ax.grid(True, which="both", ls="--", alpha=0.35)
 
@@ -553,6 +652,9 @@ def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_dirs
             pdf_res = calc_ensemble_pdf(exp_list, bins=bins, bin_range=bin_range, density=True)
             centers = pdf_res['centers']
             mean_pdf = pdf_res['mean']
+            boot_sem = pdf_res['boot_sem']
+            boot_ci_low = pdf_res['boot_ci_low']
+            boot_ci_high = pdf_res['boot_ci_high']
             q25 = pdf_res['q25']
             q75 = pdf_res['q75']
             q10 = pdf_res['q10']
@@ -583,6 +685,31 @@ def plot_multitau_grid(all_tau_data, frame_interval, component, signed, out_dirs
 
             color = item["color"]
             marker = item["marker"]
+
+            # ブートストラップ 95% 信頼区間帯
+            if error_style in ['bootstrap', 'bootstrap_both', 'bootstrap_band']:
+                ax.fill_between(
+                    centers[valid],
+                    np.clip(boot_ci_low[valid], 1e-6 if yscale == 'log' else 0, None),
+                    boot_ci_high[valid],
+                    color=color,
+                    alpha=0.18,
+                    edgecolor='none'
+                )
+
+            # ブートストラップ法によるエラーバー
+            if error_style in ['bootstrap', 'bootstrap_both', 'bootstrap_bar']:
+                ax.errorbar(
+                    centers[valid],
+                    mean_pdf[valid],
+                    yerr=boot_sem[valid],
+                    fmt='none',
+                    ecolor=color,
+                    elinewidth=1.0,
+                    capsize=2,
+                    alpha=0.75,
+                    zorder=3
+                )
 
             # 10%-90% 帯 & 25%-75% IQR 帯
             if error_style in ['band', 'both']:
@@ -935,6 +1062,19 @@ def plot_scaled_pdf_per_bead(all_tau_data, df_fits, frame_interval, component, s
             t_color = tau_colors[t_idx]
             label_text = f'$\\Delta t = {tau_sec:.0f}\\mathrm{{s}}$'
 
+            # ブートストラップ 95% 信頼区間帯
+            if error_style in ['bootstrap', 'bootstrap_both', 'bootstrap_band']:
+                boot_ci_low = pdf_res['boot_ci_low']
+                boot_ci_high = pdf_res['boot_ci_high']
+                ax.fill_between(
+                    x_scaled,
+                    np.clip(boot_ci_low[valid] * lambda_val, 1e-6, None),
+                    boot_ci_high[valid] * lambda_val,
+                    color=t_color,
+                    alpha=0.18,
+                    edgecolor='none'
+                )
+
             # IQR スケーリングバンド
             if error_style in ['band', 'both']:
                 ax.fill_between(
@@ -1029,8 +1169,9 @@ def main():
                         help="Minimum r value for fitting exponential tail (default: None, all r >= 0).")
     parser.add_argument('--fit_rmax', type=float, default=None,
                         help="Maximum r value for fitting exponential tail (default: None).")
-    parser.add_argument('--error_style', type=str, default='band', choices=['band', 'bar', 'both', 'none'],
-                        help="Error representation across experiments: 'band' (shaded IQR fill_between like MSD.py, default), 'bar' (IQR error bars), 'both', or 'none'.")
+    parser.add_argument('--error_style', type=str, default='bootstrap',
+                        choices=['bootstrap', 'bootstrap_both', 'bootstrap_bar', 'bootstrap_band', 'band', 'bar', 'both', 'none'],
+                        help="Error representation across experiments: 'bootstrap' (bootstrap error bars + 95%% CI shaded band, default), 'bootstrap_bar', 'bootstrap_band', 'band' (shaded IQR), 'bar' (IQR bars), 'both', or 'none'.")
     parser.add_argument('--show_reference', action='store_true', default=True,
                         help="Show subtle Gaussian and Exponential reference guide lines on PDF plots to highlight heavy tails (default: True).")
     parser.add_argument('--no_reference', dest='show_reference', action='store_false',
