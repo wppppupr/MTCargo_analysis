@@ -651,12 +651,14 @@ def compute_mean_u_bar_sq(
     frame_stride: int = 1,
     max_frames: Optional[int] = None,
     min_flow_mag: float = 1e-4,
-    max_sample_frames: int = 50,
+    max_sample_frames: int = 30,
     cached_val: Optional[float] = None,
 ) -> float:
     """
     GFP_flows.h5 から各フレームの空間平均配向ベクトル u_bar(t) を求め、
-    その自乗の時間平均 <|u_bar(t)|^2>_t を高速に算出する（HDF5一括読み込み & 最大 max_sample_frames で等間隔サンプリング）。
+    その自乗の時間平均 <|u_bar(t)|^2>_t を算出する。
+    cached_val が指定されている場合は HDF5 I/O を行わず即座にそれを返す。
+    HDF5 読み込み時は NAS 帯域負荷を避けるためフレームごとに個別アクセスして集計する。
     """
     if cached_val is not None and np.isfinite(cached_val) and cached_val >= 0:
         return float(cached_val)
@@ -680,30 +682,20 @@ def compute_mean_u_bar_sq(
             if not frames:
                 return 0.0
 
-            # 高速化: 最大 max_sample_frames フレームで等間隔サンプリング
             if len(frames) > max_sample_frames:
                 step = max(1, len(frames) // max_sample_frames)
                 frames = frames[::step][:max_sample_frames]
 
-            # HDF5から一括読み込み（NAS I/Oのレイテンシを最小化）
-            data = flow[frames]
-            if channel_first:
-                vx = data[:, 0].astype(np.float32)
-                vy = data[:, 1].astype(np.float32)
-            else:
-                vx = data[..., 0].astype(np.float32)
-                vy = data[..., 1].astype(np.float32)
-
-            vmag = np.hypot(vx, vy)
-            val = vmag > float(min_flow_mag)
-
             u_sq_list = []
-            for i in range(len(frames)):
-                m = val[i]
-                cnt = int(np.sum(m))
+            for t in frames:
+                vx = (flow[t, 0] if channel_first else flow[t, ..., 0]).astype(np.float32)
+                vy = (flow[t, 1] if channel_first else flow[t, ..., 1]).astype(np.float32)
+                vmag = np.hypot(vx, vy)
+                val = vmag > float(min_flow_mag)
+                cnt = int(np.sum(val))
                 if cnt > 50:
-                    ux = float(np.sum(vx[i][m] / vmag[i][m])) / cnt
-                    uy = float(np.sum(vy[i][m] / vmag[i][m])) / cnt
+                    ux = float(np.sum(vx[val] / vmag[val])) / cnt
+                    uy = float(np.sum(vy[val] / vmag[val])) / cnt
                     u_sq_list.append(ux**2 + uy**2)
             return float(np.mean(u_sq_list)) if u_sq_list else 0.0
     except Exception as e:
@@ -1584,6 +1576,109 @@ def plot_xi_vs_diameter(
     plt.close(fig)
 
 
+def plot_xi_vs_radius(
+    df_xi: pd.DataFrame,
+    df_summary: pd.DataFrame,
+    out_dirs: List[Path],
+    global_xi: Tuple[float, float, int],
+    xscale: str = 'log',
+    error_mode: str = 'frame',
+) -> None:
+    """
+    xi_bg vs 貨物半径 R_c（実験点 + 条件平均 ± SEM + 全実験代表値 + プールフィット値）。
+
+    横軸を貨物半径 R_c [um]、縦軸を空間配向相関長 xi_bg [um] としてプロットする。
+    """
+    if df_summary.empty:
+        print("[WARNING] xi_bg 集計データが空のため xi vs R_c 図をスキップします")
+        return
+
+    fig, ax = plt.subplots(figsize=(7.8, 5.8))
+    rng = np.random.default_rng(7)
+    plotted_any = False
+    plotted_radii: List[float] = []
+
+    for binfo in BEADS_INFO:
+        if binfo.get('is_control', False):
+            continue
+        sub = df_xi[(df_xi['bead_name'] == binfo['name']) & np.isfinite(df_xi['xi_um'])]
+        row = df_summary[df_summary['bead_name'] == binfo['name']]
+        if sub.empty or row.empty:
+            continue
+        radius = float(binfo.get('radius_um', np.nan))
+        if not np.isfinite(radius) or radius <= 0:
+            continue
+
+        plotted_any = True
+        plotted_radii.append(radius)
+        if xscale == 'log':
+            x_pts = radius * rng.uniform(0.90, 1.10, size=len(sub))
+        else:
+            x_pts = radius + rng.uniform(-0.08, 0.08, size=len(sub)) * radius
+        marker = binfo.get('marker') or 'o'
+        ax.plot(x_pts, sub['xi_um'], marker=marker, ls='none', ms=6.0,
+                mfc='none', mec=binfo['color'], mew=1.0, alpha=0.8, zorder=3)
+
+        # 実験ごとの xi_bg フィット誤差
+        xi_err = sub['xi_err_um'].to_numpy(dtype=float)
+        if np.any(np.isfinite(xi_err)):
+            ax.errorbar(x_pts, sub['xi_um'], yerr=np.where(np.isfinite(xi_err), xi_err, 0.0),
+                        fmt='none', ecolor=binfo['color'], elinewidth=0.9, capsize=2.0,
+                        alpha=0.55, zorder=3)
+
+        xi_mean = float(row['xi_bg_mean_um'].iloc[0])
+        xi_sem = float(row['xi_bg_sem_um'].iloc[0]) if np.isfinite(row['xi_bg_sem_um'].iloc[0]) else 0.0
+        if np.isfinite(xi_mean):
+            label = (rf"$R_c = {radius:.2f}\,\mu\mathrm{{m}}$ "
+                     rf"($N = {int(row['xi_bg_n_experiments'].iloc[0])}$)")
+            ax.errorbar([radius], [xi_mean], yerr=[xi_sem], fmt=marker, ms=11.0,
+                        color=binfo['color'], mfc=binfo['color'], mec='black', mew=0.9,
+                        elinewidth=1.4, capsize=3.5, zorder=5, label=label)
+        #xi_pooled = float(row['xi_bg_pooled_um'].iloc[0])
+        #if np.isfinite(xi_pooled):
+        #    ax.plot([radius], [xi_pooled], marker='s', ls='none', ms=6.5, mfc='white',
+        #            mec=binfo['color'], mew=1.4, alpha=0.9, zorder=6)
+
+    #g_mean, g_sem, g_n = global_xi
+    #if np.isfinite(g_mean):
+    #    g_err = g_sem if np.isfinite(g_sem) else 0.0
+    #    ax.axhspan(g_mean - g_err, g_mean + g_err, color='#333333', alpha=0.10, zorder=1)
+    #    ax.axhline(g_mean, color='#333333', ls='--', lw=1.3, zorder=2,
+    #               label=rf"All experiments: $\xi_{{\mathrm{{bg}}}} = {g_mean:.2f} \pm {g_err:.2f}\,"
+    #                     rf"\mu\mathrm{{m}}$ ($N = {g_n}$)")
+
+    if not plotted_any:
+        print("[WARNING] 有効な xi_bg が無いため xi vs R_c 図をスキップします")
+        plt.close(fig)
+        return
+
+    if len(set(plotted_radii)) < 2:
+        ax.set_xscale('linear')
+        r0 = float(plotted_radii[0]) if plotted_radii else 1.0
+        ax.set_xticks([r0])
+        ax.set_xlim(max(r0 * 0.25, 1e-3), r0 * 1.75)
+    else:
+        ax.set_xscale(xscale)
+    ax.set_xlabel(r"Cargo Radius $R_c$ [$\mu\mathrm{m}$]", fontsize=13, fontweight='bold')
+    ax.set_ylabel(r"Background Correlation Length $\xi_{\mathrm{bg}}$ [$\mu\mathrm{m}$]",
+                  fontsize=13, fontweight='bold')
+    ax.set_title(r"Background MT Flow Correlation Length vs Cargo Radius",
+                 fontsize=13.5, fontweight='bold')
+    ax.grid(True, which='both', ls='--', alpha=0.35)
+    if ax.get_legend_handles_labels()[0]:
+        pooled_label = ("open square: pooled fit (frame-block SEM weights)"
+                        if str(error_mode) == 'frame'
+                        else "open square: pooled fit (sample SEM weights)")
+        ax.legend(fontsize=9.5, loc='best', framealpha=0.93,
+                  title=("Filled: experiment mean $\\pm$ SEM" + "\n" + pooled_label),
+                  title_fontsize=9.5)
+
+    ax.set_ylim(0, 10)
+    fig.tight_layout()
+    save_figure_to_all(fig, 'bg_angular_correlation_xi_vs_radius', out_dirs)
+    plt.close(fig)
+
+
 def plot_par_perp_panels(
     df_curves: pd.DataFrame,
     df_summary: pd.DataFrame,
@@ -2136,6 +2231,8 @@ def main():
                           error_mode=args.error_mode)
     plot_xi_vs_diameter(df_xi, df_summary, out_dirs, global_xi, xscale=args.xi_xscale,
                         error_mode=args.error_mode)
+    plot_xi_vs_radius(df_xi, df_summary, out_dirs, global_xi, xscale=args.xi_xscale,
+                      error_mode=args.error_mode)
     plot_condition_panels(df_curves, df_points, df_summary, out_dirs,
                           fit_range, args.min_corr_threshold,
                           cutoff_ratio=cutoff_ratio,
