@@ -613,30 +613,27 @@ def plot_qv_vs_deltat(df: pd.DataFrame, dr_min: float = DEFAULT_DR_MIN):
 def plot_drift_contrast(df: pd.DataFrame, df_rel: pd.DataFrame, lag_target: int = 1, dr_min: float = DEFAULT_DR_MIN):
     """
     【ドリフト対照解析】
-    通常の変位 vs 粒子間相対変位 (dr_i - dr_j) の比較。
-    大域並進ドリフトを除去しても、平行輸送 (Q_v > 0) の結論が堅牢に成立することを実証する。
+    通常の変位 vs 粒子間相対変位 (dr_i - dr_j, 複数粒子条件) & 長時間ドリフト差し引き変位 (20 um 条件)
+    大域並進ドリフトを除去しても、平行輸送 (Q_v > 0) および垂直輸送 (Q_v < 0) の結論が
+    堅牢に成立することを実証する。
     """
     sub_ind = df[(df['lag_frames'] == lag_target) & (df['dr_um'] >= dr_min)].copy()
     sub_rel = df_rel[df_rel['dr_rel'] >= dr_min * np.sqrt(2)].copy()
 
-    fig, ax = plt.subplots(figsize=(8.0, 5.2))
+    fig, ax = plt.subplots(figsize=(8.5, 5.4))
 
     ax.axhline(0, color='gray', linestyle='--', linewidth=1.2, alpha=0.8, zorder=1)
     ax.axhspan(0, 0.35, color='#117733', alpha=0.03, zorder=0)
     ax.axhspan(-0.35, 0, color='#882255', alpha=0.03, zorder=0)
 
-    # 複数粒子が存在する条件 (0.63, 1.18, 3.37, 7.24, 5.00 um)
     for b_item in BEADS_INFO:
         bname = b_item['name']
         lbl = b_item['label']
         color = b_item['color']
         marker = b_item['marker']
 
-        # 通常の変位
+        # 1. 通常の変位
         b_ind = sub_ind[sub_ind['bead_name'] == bname]
-        # 相対変位
-        b_rel = sub_rel[sub_rel['bead_name'] == bname]
-
         if not b_ind.empty:
             sc_r = b_ind['scaled_radius'].mean()
             m_ind, l_ind, h_ind = bootstrap_ci(b_ind['cos2_global'].values)
@@ -645,35 +642,60 @@ def plot_drift_contrast(df: pd.DataFrame, df_rel: pd.DataFrame, lag_target: int 
                         fmt=marker, color=color, markersize=8.5, capsize=3.5, elinewidth=1.6,
                         markeredgecolor='black', markeredgewidth=0.7, zorder=4)
 
-        if not b_rel.empty:
-            sc_r = b_rel['scaled_radius'].mean()
-            m_rel, l_rel, h_rel = bootstrap_ci(b_rel['cos2_rel'].values)
-            # 相対変位（中空マーカー）
-            ax.errorbar(sc_r * 1.04, m_rel, yerr=[[m_rel - l_rel], [h_rel - m_rel]],
-                        fmt=marker, color=color, mfc='white', mew=2.0,
-                        markersize=8.5, capsize=3.5, elinewidth=1.6, zorder=4)
+        # 2. ドリフト補正変位:
+        # 複数粒子が存在するサイズ (0.63, 1.18, 3.37, 7.24, 5.00 um) -> 粒子間相対変位 (dr_i - dr_j)
+        # 1 粒子のみのサイズ (20.0 um) -> 粒子ごとの時間平均ドリフト差し引き変位 (dr_i - <v_i> dt)
+        if bname != 'beads20um':
+            b_rel = sub_rel[sub_rel['bead_name'] == bname]
+            if not b_rel.empty:
+                sc_r = b_rel['scaled_radius'].mean()
+                m_rel, l_rel, h_rel = bootstrap_ci(b_rel['cos2_rel'].values)
+                # 相対変位（中空マーカー）
+                ax.errorbar(sc_r * 1.04, m_rel, yerr=[[m_rel - l_rel], [h_rel - m_rel]],
+                            fmt=marker, color=color, mfc='white', mew=2.0,
+                            markersize=8.5, capsize=3.5, elinewidth=1.6, zorder=4)
+        else:
+            # 20 um: 時間平均ドリフトの差し引き
+            c2_drift_sub = []
+            for (exp, pid), grp in b_ind.groupby(['exp_dir', 'particle']):
+                mean_dx = grp['dx_um'].mean()
+                mean_dy = grp['dy_um'].mean()
+                dx_fluc = grp['dx_um'] - mean_dx
+                dy_fluc = grp['dy_um'] - mean_dy
+                th_v_fluc = np.arctan2(dy_fluc, dx_fluc)
+                th_g = grp['theta_global'].iloc[0]
+                c2 = np.cos(2.0 * (th_v_fluc - th_g))
+                c2_drift_sub.extend(c2)
+            c2_drift_sub = np.array(c2_drift_sub)
+            if len(c2_drift_sub) > 0:
+                sc_r = b_ind['scaled_radius'].mean()
+                m_sub, l_sub, h_sub = bootstrap_ci(c2_drift_sub)
+                ax.errorbar(sc_r * 1.04, m_sub, yerr=[[m_sub - l_sub], [h_sub - m_sub]],
+                            fmt=marker, color=color, mfc='white', mew=2.0,
+                            markersize=8.5, capsize=3.5, elinewidth=1.6, zorder=4)
 
     ax.set_xscale('log')
-    ax.set_xlim(0.04, 3.0)
+    ax.set_xlim(0.04, 3.5)
     ax.set_ylim(-0.25, 0.25)
     ax.set_xlabel(r"Scaled Cargo Radius $R_c / \xi$", fontsize=13)
     ax.set_ylabel(r"Nematic Order $\langle \cos 2\phi \rangle$", fontsize=13)
-    ax.set_title(rf"Robustness against Drift: Individual vs Pairwise Relative Displacements ($\Delta t = {lag_target * DT_SEC_PER_FRAME:.0f}\,\mathrm{{s}}$)",
-                 fontsize=12.5, pad=10)
+    ax.set_title(rf"Robustness against Drift: Individual Displacements vs Drift-Free Displacements ($\Delta t = {lag_target * DT_SEC_PER_FRAME:.0f}\,\mathrm{{s}}$)",
+                 fontsize=12.0, pad=10)
     ax.grid(True, which='both', linestyle='--', alpha=0.4)
 
     # カスタム凡例
     legend_elements = [
-        Line2D([0], [0], marker='o', color='black', label=r'Individual Displacements $\Delta \mathbf{r}_i$',
+        Line2D([0], [0], marker='o', color='black', label=r'Raw Individual Displacements $\Delta \mathbf{r}_i$',
                markerfacecolor='black', markersize=8),
-        Line2D([0], [0], marker='o', color='black', label=r'Relative Displacements $\Delta \mathbf{r}_i - \Delta \mathbf{r}_j$ (Drift-free)',
+        Line2D([0], [0], marker='o', color='black',
+               label=r'Drift-Free Displacements ($\Delta\mathbf{r}_i - \Delta\mathbf{r}_j$ / $\Delta\mathbf{r} - \langle\mathbf{v}\rangle\Delta t$)',
                markerfacecolor='white', markeredgewidth=2.0, markersize=8),
     ]
     for b in BEADS_INFO:
         legend_elements.append(Line2D([0], [0], marker=b['marker'], color=b['color'],
                                       label=b['label'], linestyle='None', markersize=7))
 
-    ax.legend(handles=legend_elements, loc='upper right', frameon=True, framealpha=0.92, fontsize=9.5)
+    ax.legend(handles=legend_elements, loc='upper right', frameon=True, framealpha=0.92, fontsize=9.2)
     fig.tight_layout()
     save_figure(fig, "nematic_transport_drift_contrast")
     plt.close(fig)
