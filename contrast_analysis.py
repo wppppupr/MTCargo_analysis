@@ -85,17 +85,65 @@ def save_figure(fig, base_name: str, out_dirs=OUT_DIRS):
     print(f"Saved figure: {base_name}.png and .svg")
 
 
+# キャッシュファイル (scratch/compute_contrast_data.py が生成, 本スクリプトが読み込み)
+CACHE_DIR = CURRENT_DIR / "scratch"
+CACHE_PATHS = {
+    'inst': CACHE_DIR / "contrast_inst_cache.pkl",
+    'imsd': CACHE_DIR / "contrast_imsd_cache.pkl",
+    'disp': CACHE_DIR / "contrast_disp_cache.npy",
+}
+
+
+def _atomic_write(final_path: Path, writer):
+    """一時ファイルに書いてから置換する (中断時に壊れたキャッシュを残さない)。"""
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = final_path.with_name(final_path.stem + ".tmp" + final_path.suffix)
+    try:
+        writer(tmp_path)
+        tmp_path.replace(final_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
+def _portable_df(df: pd.DataFrame) -> pd.DataFrame:
+    """pandas 3 の StringDtype 列は pandas 2 で unpickle できないため object 列に戻す。"""
+    df = df.copy()
+    df.columns = pd.Index(list(df.columns), dtype=object)
+    if isinstance(df.index.dtype, pd.StringDtype):
+        df.index = df.index.astype(object)
+    str_cols = [c for c in df.columns if isinstance(df[c].dtype, pd.StringDtype)]
+    return df.astype({c: object for c in str_cols}) if str_cols else df
+
+
+def save_cached_data(df_inst: pd.DataFrame, df_imsd: pd.DataFrame, disp_data: dict):
+    """3種のキャッシュを CACHE_DIR に保存する (実行ディレクトリに依存しない)。"""
+    df_inst, df_imsd = _portable_df(df_inst), _portable_df(df_imsd)
+    _atomic_write(CACHE_PATHS['inst'], lambda p: df_inst.to_pickle(p))
+    _atomic_write(CACHE_PATHS['imsd'], lambda p: df_imsd.to_pickle(p))
+    # np.save は拡張子 .npy を自動付与するため、ファイルハンドル経由で書く
+    def _save_npy(p):
+        with open(p, 'wb') as f:
+            np.save(f, np.array(disp_data, dtype=object), allow_pickle=True)
+    _atomic_write(CACHE_PATHS['disp'], _save_npy)
+    print(f"Saved caches to {CACHE_DIR}")
+
+
 def load_cached_data():
-    inst_path = CURRENT_DIR / "scratch" / "contrast_inst_cache.pkl"
-    imsd_path = CURRENT_DIR / "scratch" / "contrast_imsd_cache.pkl"
-    disp_path = CURRENT_DIR / "scratch" / "contrast_disp_cache.npy"
+    missing = [str(p) for p in CACHE_PATHS.values() if not p.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Cache files not found:\n  " + "\n  ".join(missing)
+            + "\nRun `python3 scratch/compute_contrast_data.py` first.")
 
-    if not inst_path.exists() or not imsd_path.exists() or not disp_path.exists():
-        raise FileNotFoundError("Cache files not found. Run scratch/compute_contrast_data.py first.")
-
-    df_inst = pd.read_pickle(inst_path)
-    df_imsd = pd.read_pickle(imsd_path)
-    disp_data = np.load(disp_path, allow_pickle=True).item()
+    try:
+        df_inst = pd.read_pickle(CACHE_PATHS['inst'])
+        df_imsd = pd.read_pickle(CACHE_PATHS['imsd'])
+        disp_data = np.load(CACHE_PATHS['disp'], allow_pickle=True).item()
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to read contrast caches in {CACHE_DIR} ({type(e).__name__}: {e}). "
+            "Re-run `python3 scratch/compute_contrast_data.py` to regenerate them.") from e
     return df_inst, df_imsd, disp_data
 
 
@@ -452,16 +500,16 @@ def plot_fig3_displacement_pdf(disp_data: dict):
         v_kurt = stats.kurtosis(v_disp)
         
         # ガウス基準線
-        ax.plot(x_grid, gauss_ref, color='gray', linestyle='--', linewidth=1.5, label='Gaussian $\mathcal{N}(0, 1)$')
+        ax.plot(x_grid, gauss_ref, color='gray', linestyle='--', linewidth=1.5, label='Gaussian $\\mathcal{N}(0, 1)$')
         
         # KDE プロット
         kde_r = stats.gaussian_kde(r_norm, bw_method=0.2)
         kde_v = stats.gaussian_kde(v_norm, bw_method=0.2)
         
         ax.plot(x_grid, kde_v(x_grid), color='#332288', linestyle='--', linewidth=2.2,
-                label=f'Virtual Cargo ($\kappa={v_kurt:.1f}$)')
+                label=f'Virtual Cargo ($\\kappa={v_kurt:.1f}$)')
         ax.plot(x_grid, kde_r(x_grid), color=color, linestyle='-', linewidth=2.4,
-                label=f'Real Cargo ($\kappa={r_kurt:.1f}$)')
+                label=f'Real Cargo ($\\kappa={r_kurt:.1f}$)')
         
         ax.set_yscale('log')
         ax.set_xlim(-5.0, 5.0)
@@ -531,7 +579,7 @@ def plot_fig4_velocity_transfer(df_inst: pd.DataFrame):
     ratio_arr = np.array(ratio_list)[sort_idx]
 
     # Panel (a): kappa vs Rc/xi
-    ax_a.axhline(1.0, color='#2b83ba', linestyle='--', linewidth=1.8, label='Perfect Transfer ($\kappa = 1.0$)')
+    ax_a.axhline(1.0, color='#2b83ba', linestyle='--', linewidth=1.8, label='Perfect Transfer ($\\kappa = 1.0$)')
     for i in sort_idx:
         ax_a.scatter(rc_xi_list[i], kappa_list[i], color=colors[i], marker=markers[i], s=120, zorder=5, label=labels[i])
     ax_a.plot(rc_xi_arr, kappa_arr, color='#882255', linewidth=2.0, linestyle='-', alpha=0.7, zorder=4)

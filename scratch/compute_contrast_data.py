@@ -245,11 +245,10 @@ def run_extraction():
     df_inst_full = pd.DataFrame(instant_records)
     df_imsd_full = pd.DataFrame(imsd_records)
     
-    out_dir = Path("scratch")
-    df_inst_full.to_pickle(out_dir / "contrast_inst_cache.pkl")
-    df_imsd_full.to_pickle(out_dir / "contrast_imsd_cache.pkl")
-    np.save(out_dir / "contrast_disp_cache.npy", disp_records, allow_pickle=True)
-    print("\nExtraction complete! Saved caches to scratch/")
+    # 保存先・形式は contrast_analysis.py 側と共通化 (実行ディレクトリに依存しない)
+    from contrast_analysis import save_cached_data
+    save_cached_data(df_inst_full, df_imsd_full, disp_records)
+    print("\nExtraction complete!")
     print(f"Total instant records: {len(df_inst_full)}")
     print(f"Total iMSD points: {len(df_imsd_full)}")
 
