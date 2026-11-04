@@ -596,6 +596,9 @@ def _plot_all_beads_ngp_loglog(beads_results, out_dirs, component, frame_interva
             zorder=4
         )
 
+    ax.hlines(0, 1,  300, color="#333333", linestyles="--", lw = 2)
+
+    ax.set_xlim(3.3, 220)
     ax.set_xscale('log')
     ax.set_yscale('linear')
     ax.set_xlabel(r'Lag time $\Delta t$ [s]')

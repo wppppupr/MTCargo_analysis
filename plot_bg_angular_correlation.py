@@ -1705,6 +1705,153 @@ def plot_par_perp_panels(
     plt.close(fig)
 
 
+def plot_condition_panels(
+    df_curves: pd.DataFrame,
+    df_points: pd.DataFrame,
+    df_summary: pd.DataFrame,
+    out_dirs: List[Path],
+    fit_range: Tuple[float, float],
+    min_corr_threshold: float,
+    cutoff_ratio: Optional[float] = 1.0 / np.e,
+    xscale: str = 'linear',
+    yscale: str = 'log',
+    max_dist: float = 12.0,
+    ylim: Tuple[float, float] = (-0.15, 1.05),
+    error_mode: str = 'frame',
+) -> None:
+    """
+    各粒子サイズ（6条件）ごとに C_bg(r) のプロットを配置した 6 パネルのグラフを作成する。
+    各パネルには:
+      - 個々の実験ごとの C(r) の線（薄い細線）
+      - 条件平均 ± 実験間 SEM（マーカー＋エラーバー）
+      - プールしたフレームブロック SEM の誤差帯（薄い塗り）
+      - 指数減衰フィット直線（破線）
+    を表示する。
+    """
+    # 貨物粒子サイズ 6 条件（control を除外した 6 条件）
+    conds = [b for b in BEADS_INFO if not b.get('is_control', False) and not df_curves[df_curves['bead_name'] == b['name']].empty]
+    if not conds:
+        conds = [b for b in BEADS_INFO if not df_curves[df_curves['bead_name'] == b['name']].empty][:6]
+    if not conds:
+        print("[WARNING] 条件データが空のため 6 パネル図をスキップします")
+        return
+
+    # y 軸範囲の決定
+    if str(yscale) == 'log':
+        y_vals: List[np.ndarray] = []
+        for binfo in conds:
+            s = df_curves[df_curves['bead_name'] == binfo['name']]
+            mid = s['mean_c'].to_numpy(dtype=float)
+            y_vals.append(mid)
+            if 'pooled_sem_c_frame' in s.columns:
+                band = s['pooled_sem_c_frame'].to_numpy(dtype=float)
+                y_vals.append(mid - band)
+                y_vals.append(mid + band)
+            if 'sem_c' in s.columns:
+                sem = s['sem_c'].to_numpy(dtype=float)
+                y_vals.append(mid + sem)
+
+            sub_pts = df_points[df_points['bead_name'] == binfo['name']]
+            if not sub_pts.empty:
+                raw = sub_pts['mean_c'].to_numpy(dtype=float)
+                y_vals.append(raw)
+        y_flat = np.concatenate([np.ravel(v) for v in y_vals]) if y_vals else np.array([])
+        panel_ylim = _log_positive_ylim(y_flat)
+    else:
+        panel_ylim = tuple(ylim)
+
+    ncols = 3
+    nrows = int(np.ceil(len(conds) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5.2 * ncols, 4.4 * nrows),
+                             sharex=True, sharey=True)
+    axes = np.atleast_1d(axes).ravel()
+
+    for i, binfo in enumerate(conds):
+        ax = axes[i]
+        bname = binfo['name']
+        bcolor = binfo.get('color', '#333333')
+        sub = df_curves[df_curves['bead_name'] == bname].sort_values('distance_um')
+        sub_pts = df_points[df_points['bead_name'] == bname]
+
+        # 1. 各実験ごとの C(r) 線（薄い線）
+        exp_list = sorted(sub_pts['exp_dir'].unique()) if not sub_pts.empty else []
+        for ei, exp in enumerate(exp_list):
+            eg = sub_pts[sub_pts['exp_dir'] == exp].sort_values('distance_um')
+            ax.plot(eg['distance_um'], eg['mean_c'], color='#999999', lw=0.9, alpha=0.65, zorder=1,
+                    label=r"Individual exp." if ei == 0 else None)
+
+        # 2. プールしたフレームブロック SEM の誤差帯
+        if 'pooled_sem_c_frame' in sub.columns:
+            band = sub['pooled_sem_c_frame'].to_numpy(dtype=float)
+            mid = sub['mean_c'].to_numpy(dtype=float)
+            r_plot = sub['distance_um'].to_numpy(dtype=float)
+            ok = np.isfinite(band) & np.isfinite(mid)
+            if np.any(ok):
+                ax.fill_between(r_plot[ok], mid[ok] - band[ok], mid[ok] + band[ok],
+                                color=bcolor, alpha=0.18, lw=0, zorder=2,
+                                label=r"Pooled frame-block SEM")
+
+        # 3. 条件平均 ± 実験間 SEM（マーカー＋エラーバー＋実線）
+        marker = binfo.get('marker', 'o')
+        ax.errorbar(sub['distance_um'], sub['mean_c'], yerr=sub['sem_c'],
+                    fmt=marker if marker else 'none', ms=5.5, color=bcolor,
+                    mfc=bcolor, mec='black', mew=0.8,
+                    elinewidth=1.1, capsize=2.5, lw=1.5, alpha=0.95, zorder=4,
+                    label=r"Condition mean $\pm$ SEM")
+
+        # 4. 指数減衰フィット曲線
+        fit = fit_xi_from_curve(sub['distance_um'].to_numpy(dtype=float),
+                                sub['mean_c'].to_numpy(dtype=float),
+                                sub['sem_c'].to_numpy(dtype=float),
+                                fit_range[0], fit_range[1], min_corr_threshold,
+                                cutoff_ratio=cutoff_ratio)
+        fit_r = np.asarray(fit.get('fit_r', np.array([])), dtype=float)
+        fit_c = np.asarray(fit.get('fit_c', np.array([])), dtype=float)
+        if fit_r.size and np.isfinite(fit.get('xi_um', np.nan)):
+            ax.plot(fit_r, fit_c, ls='--', color='black', lw=1.6, alpha=0.9, zorder=5,
+                    label=rf"Fit ($\xi = {fit['xi_um']:.1f}\,\mu\mathrm{{m}}$)")
+
+        # タイトル・目盛り
+        row = df_summary[df_summary['bead_name'] == bname]
+        display_name = binfo.get('display_name', rf"$2R_c = {binfo.get('diameter_um', np.nan):.2f}\,\mu\mathrm{{m}}$")
+        if not row.empty and np.isfinite(row['xi_bg_mean_um'].iloc[0]):
+            title = (rf"{display_name} "
+                     rf"($\xi_{{\mathrm{{bg}}}} = {row['xi_bg_mean_um'].iloc[0]:.2f}\,"
+                     rf"\pm {row['xi_bg_sem_um'].iloc[0]:.2f}\,\mu\mathrm{{m}}$, "
+                     rf"$N_{{\mathrm{{exp}}}} = {len(exp_list)}$)")
+        else:
+            title = display_name
+        ax.set_title(title, fontsize=10.5, fontweight='bold')
+        ax.set_xscale(xscale)
+        ax.set_yscale(yscale)
+        if str(yscale) == 'log':
+            ax.set_ylim(*panel_ylim)
+        else:
+            ax.axhline(0.0, color='gray', ls='--', lw=0.8, alpha=0.6)
+            ax.set_ylim(*ylim)
+        ax.set_xlim(float(max(np.nanmin(df_curves['distance_um']) * 0.8, 1e-3)) if xscale == 'log' else 0.0,
+                    max_dist)
+        ax.grid(True, which='both', ls='--', alpha=0.35)
+
+        if i // ncols == nrows - 1:
+            ax.set_xlabel(r"Distance $r$ [$\mu\mathrm{m}$]", fontsize=11)
+        if i % ncols == 0:
+            ax.set_ylabel(r"Spatial Correlation $C_{\mathrm{bg}}(r)$", fontsize=11)
+        if i == 0:
+            ax.legend(fontsize=8.0, loc='upper right', framealpha=0.92)
+
+    for j in range(len(conds), axes.size):
+        axes[j].axis('off')
+
+    weights_label = "frame-block SEM" if str(error_mode) == 'frame' else "sample SEM"
+    fig.suptitle(r"Background MT Flow Spatial Correlation $C_{\mathrm{bg}}(r)$ by Cargo Size" + "\n"
+                 + rf"(thin lines: individual experiments; fit weights: {weights_label})",
+                 fontsize=12.5, fontweight='bold')
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    save_figure_to_all(fig, 'bg_angular_correlation_panels', out_dirs)
+    plt.close(fig)
+
+
 # =========================================================================
 # メイン処理
 # =========================================================================
@@ -1989,6 +2136,12 @@ def main():
                           error_mode=args.error_mode)
     plot_xi_vs_diameter(df_xi, df_summary, out_dirs, global_xi, xscale=args.xi_xscale,
                         error_mode=args.error_mode)
+    plot_condition_panels(df_curves, df_points, df_summary, out_dirs,
+                          fit_range, args.min_corr_threshold,
+                          cutoff_ratio=cutoff_ratio,
+                          xscale=args.xscale, yscale=args.yscale,
+                          max_dist=args.max_dist, ylim=ylim,
+                          error_mode=args.error_mode)
     plot_par_perp_panels(df_curves, df_summary, out_dirs,
                          xscale=args.xscale, yscale=args.yscale,
                          max_dist=args.max_dist,
