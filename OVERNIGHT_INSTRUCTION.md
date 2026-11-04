@@ -9,7 +9,7 @@
 <!-- 
 書き方の例：
 - [x] plot_velocity_decomposition.py で beads06um と beads20um の速度プロットを比較出力してほしい *(完了: 22:43)*
-- [ ] contrast_analysis.py のキャッシュ保存処理を整理してエラーが出ないようにしてほしい
+- [x] contrast_analysis.py のキャッシュ保存処理を整理してエラーが出ないようにしてほしい *(完了: 22:48)*
 - [ ] MSD.py の計算結果に異常値がないか検証して、新しいフィッティング関数を検討してほしい
 -->
 
