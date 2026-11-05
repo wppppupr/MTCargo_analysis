@@ -1,0 +1,32 @@
+[beads06um] beads06um: edge ratio = 0.439
+[beads06um] beads06um001: edge ratio = 0.989
+[beads06um] beads06um002: edge ratio = 0.198
+[beads06um] beads06um003: edge ratio = 0.473
+[beads1um] beads1um001_crop: edge ratio = 0.594
+[beads1um] beads1um002: edge ratio = 0.512
+[beads1um] beads1um003: edge ratio = 0.671
+[beads1um] beads1um_crop: edge ratio = 0.925
+[beads3um] beads3um: edge ratio = 0.492
+[beads3um] beads3um001: edge ratio = 0.635
+[beads3um] beads3um002: edge ratio = 0.749
+[beads3um] beads3um003: edge ratio = 0.846
+[beads5um] beads5um: edge ratio = 0.869
+[beads5um] beads5um001: edge ratio = 0.747
+[beads5um] beads5um002: edge ratio = 0.875
+[beads5um] beads5um003: edge ratio = 0.680
+[beads7um] beads7um: edge ratio = 0.522
+[beads7um] beads7um002: edge ratio = 0.656
+[beads7um] beads7um003: edge ratio = 0.437
+[beads20um] beads20um001: edge ratio = 0.767
+[beads20um] beads20um002: edge ratio = 0.881
+[beads20um] beads20um_crop: edge ratio = 0.733
+            edge               edge_sem                 near              
+source     cargo  image tracer    cargo  image tracer  cargo  image tracer
+bead_name                                                                 
+beads06um  0.391  0.475  0.006    0.146  0.166  0.019  0.320  0.329  0.005
+beads1um   0.262  0.324  0.011    0.081  0.089  0.012  0.217  0.190  0.010
+beads3um   0.348  0.319 -0.007    0.065  0.076  0.019  0.306  0.203 -0.007
+beads5um   0.158  0.207 -0.013    0.052  0.048  0.001  0.118  0.130 -0.012
+beads7um   0.402  0.462  0.004    0.073  0.064  0.009  0.296  0.230 -0.005
+beads20um -0.684  0.206  0.019    0.380  0.045  0.024 -0.598  0.152  0.018
+image edge rel. vector error |u_inj-u_orig|/|u_orig| (mean): 0.85

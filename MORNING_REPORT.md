@@ -1349,3 +1349,27 @@ error: authentication failed or timed out
 - `plot_polar_order_vs_normalized_velocity.py`: `--u_inf_mode {frame,movie}` を追加（デフォルトは frame）。flow-profile キャッシュ中の u∞(t)（25 フレーム分）について、サンプリングしたフレーム番号を再構成し、時間補間で各観測フレームに割り当てた。22 本中 22 本で対応が取れた。
 - 結果: 高 Φ 側の足元の流れ |u_fp|/u∞ が 5 µm で 1.91→1.16、20 µm で 2.57→1.22 に下がり、ほぼ 1 になった（動画定数の u∞ では、活性が高い初期フレームが過大評価されていた）。v∥/u∞ の変化はほとんどのサイズで ±0.05 以内。5 µm の最高 Φ ビンだけは 0.31→0.19。
 - 出力: `figure/polar_vs_normalized_velocity/*_uinf_frame.{png,svg,csv}`、ログ: `scratch/log_polar_vs_vpar_uinf_frame.txt`
+### 🔹 Iteration 1 (01:51:49) - 状態: `success`
+* **リクエスト**: u∞ をフレームごとに取り直したので、polar_vs_normalized_velocityにも適用する。
+* **変更ファイル**: `plot_polar_order_vs_normalized_velocity.py`
+* **📊 生成されたプロット**:
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels.png](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels.png)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels.svg](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels.svg)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.png](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.png)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.svg](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.svg)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay.png](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay.png)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay.svg](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay.svg)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.png](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.png)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.svg](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.svg)
+* **Claudeの作業報告**:
+> der_vs_vpar_norm_{6panels,overlay}_uinf_frame.{png,svg}` と `polar_vs_vpar_norm_binned_uinf_frame.csv` です。ログは `scratch/log_polar_vs_vpar_uinf_frame.txt` で、`MORNING_REPORT.md` にも追記しました。比較用の movie モード実行で、従来版のファイル名の図と CSV も再生成されています。コミットはしていません。以上で完了です。
+* **Geminiの物理的コメント**:
+> ⚠️ Gemini認証待ちのためスキップ（ターミナルで agy -p 'hi' で事前認証すると有効化されます）
+
+
+
+### 貨物の像による見かけの流れの低下（画像注入テスト）
+- `scratch/cargo_image_injection_test.py`: 実際の貨物の像（半径 Rc の円盤）を、貨物のない背景に貼り付けた（フレーム i→i+1 で貨物の実変位をつける）。本番と同じ RAFT（finetune epoch 5、1024² タイル）で流れを推定し直し、|u_inj|/|u_orig| を縁からの距離 r の関数として求めた。対象は 22 本 × 6 フレーム × 3 か所。プロットは `scratch/plot_cargo_image_injection.py`。
+- 結果: 縁 (r<0.5 µm) での像による見かけの低下は 0.21–0.48 で、0.6–7 µm の実験の縁の低下 0.16–0.40 とほぼ同じ大きさだった（仮想トレーサーは ≈0）。r/ξ<0.5 の平均でも、像による低下が実験の低下の 6–10 割を説明する。像の影響は r/ξ≈0.5–1 で消えるが、実験の低下は r/ξ≈1.5 まで続く。像の比で割り戻すと、3・7 µm で r/ξ≈0.3–0.6 に 10–18% の浅い低下が残る。20 µm は実験が増加（+0.68）しているので、像では説明できない。
+- 注意: 貼り付けた像の変位は局所の流れと相関していない（実際の貨物は流れに部分的に乗る）ので、像による低下は過大評価の可能性がある。上限の見積もりとして扱う。
+- 出力: `figure/cargo_image_injection/cargo_image_injection.{png,svg}`, `image_injection_{per_video,per_size}.csv`, `image_injection_stats.txt`、ログ: `scratch/log_cargo_image_injection.txt`
