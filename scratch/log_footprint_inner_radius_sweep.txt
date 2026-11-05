@@ -9,3 +9,6 @@
 [beads3um001] 3976 rows, 527.1s
 [beads1um003] 8296 rows, 869.6s
 [beads3um] 7108 rows, 577.6s
+[beads3um002] 4176 rows, 618.7s
+[beads20um001] 3620 rows, 949.0s
+[beads5um] 1376 rows, 209.1s
