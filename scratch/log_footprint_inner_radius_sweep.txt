@@ -5,3 +5,7 @@
 [beads1um_crop] 2076 rows, 193.4s
 [beads06um003] 5728 rows, 534.2s
 [beads06um] 5444 rows, 540.0s
+[beads20um_crop] 404 rows, 144.4s
+[beads3um001] 3976 rows, 527.1s
+[beads1um003] 8296 rows, 869.6s
+[beads3um] 7108 rows, 577.6s
