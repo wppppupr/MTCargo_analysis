@@ -95,6 +95,7 @@ TARGET_DIRS = [
 SCALE_UM_PER_PX = 0.11
 DT_SEC = 4.0
 V_UNIT = SCALE_UM_PER_PX / DT_SEC # um/s
+U_INF_MODE = 'frame'  # 'frame': 流れ場フレームごとの u_inf(t), 'movie': 動画ごとの定数 (従来)
 
 # 評価する時間遅れ \Delta t (秒単位)
 DELTA_T_SEC_LIST = [0, 12, 32, 64, 128]
@@ -201,8 +202,11 @@ def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_u
             fl = flows[f_idx]
             speed_cache[f_idx] = np.sqrt(fl[0].astype(np.float32)**2 + fl[1].astype(np.float32)**2).astype(np.float16)
 
-        profiles_by_dt = {dt_sec: {'sums': np.zeros(n_bins, dtype=np.float64), 'counts': np.zeros(n_bins, dtype=np.int64)}
+        profiles_by_dt = {dt_sec: {'sums': np.zeros(n_bins, dtype=np.float64), 'counts': np.zeros(n_bins, dtype=np.int64),
+                                   'nsums': np.zeros(n_bins, dtype=np.float64), 'ncounts': np.zeros(n_bins, dtype=np.int64),
+                                   'u_t': []}
                           for dt_sec in delta_t_sec_list}
+        far_mask_fr = bin_centers_um >= 12.0
                           
         for t_bead in sampled_t_beads:
             sub_tracks = df_tracks[df_tracks['frame'] == t_bead]
@@ -231,14 +235,27 @@ def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_u
             # 各時間差 \Delta t の速度場を積算
             for dt_sec, dt_fr in zip(delta_t_sec_list, delta_frames):
                 spd = speed_cache[t_bead - dt_fr]
+                fr_s = np.zeros(n_bins, dtype=np.float64)
+                fr_c = np.zeros(n_bins, dtype=np.int64)
                 for (x_min, x_max, y_min, y_max, valid, b_idx, b_c) in bead_geoms:
                     sub_spd = spd[y_min:y_max, x_min:x_max][valid].astype(np.float32)
-                    b_s = np.bincount(b_idx, weights=sub_spd, minlength=n_bins)
-                    profiles_by_dt[dt_sec]['counts'] += b_c
-                    profiles_by_dt[dt_sec]['sums'] += b_s
+                    fr_s += np.bincount(b_idx, weights=sub_spd, minlength=n_bins)
+                    fr_c += b_c
+                pr = profiles_by_dt[dt_sec]
+                pr['counts'] += fr_c
+                pr['sums'] += fr_s
+                # 流れ場フレーム (t - Δt) 自身の遠方プラトーから u_inf(t-Δt) を取って規格化
+                if fr_c[far_mask_fr].sum() > 50:
+                    u_t = fr_s[far_mask_fr].sum() / fr_c[far_mask_fr].sum() * V_UNIT
+                    if u_t > 0 and np.isfinite(u_t):
+                        pr['u_t'].append(u_t)
+                        pr['nsums'] += fr_s * V_UNIT / u_t
+                        pr['ncounts'] += fr_c
 
     far_mask = bin_centers_um >= 12.0
-    norm_profiles_by_dt = {}
+    norm_profiles_movie_by_dt = {}
+    norm_profiles_frame_by_dt = {}
+    u_inf_frames_by_dt = {}
     u_inf_by_dt = {}
     
     for dt_sec in delta_t_sec_list:
@@ -250,7 +267,11 @@ def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_u
         else:
             u_inf = np.mean(spd[int(n_bins * 0.7):])
         u_inf_by_dt[dt_sec] = u_inf
-        norm_profiles_by_dt[dt_sec] = spd / u_inf if u_inf > 0 else np.zeros_like(spd)
+        norm_profiles_movie_by_dt[dt_sec] = spd / u_inf if u_inf > 0 else np.zeros_like(spd)
+        pr = profiles_by_dt[dt_sec]
+        norm_profiles_frame_by_dt[dt_sec] = np.where(pr['ncounts'] > 0, pr['nsums'] / np.maximum(pr['ncounts'], 1), np.nan)
+        u_inf_frames_by_dt[dt_sec] = np.array(pr['u_t'])
+    norm_profiles_by_dt = norm_profiles_frame_by_dt if U_INF_MODE == 'frame' else norm_profiles_movie_by_dt
 
     return {
         'exp_dir': exp_dir_str,
@@ -259,7 +280,10 @@ def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_u
         'radius_um': b_info['radius_um'],
         'r_edge_um': bin_centers_um,
         'norm_profiles_by_dt': norm_profiles_by_dt,
-        'u_inf_by_dt': u_inf_by_dt
+        'u_inf_by_dt': u_inf_by_dt,
+        'norm_profiles_movie_by_dt': norm_profiles_movie_by_dt,
+        'norm_profiles_frame_by_dt': norm_profiles_frame_by_dt,
+        'u_inf_frames_by_dt': u_inf_frames_by_dt
     }
 
 def fit_relaxation_time(dt_vals, depth_vals, depth_sems):
@@ -303,6 +327,8 @@ def retention_tau_lower_bound(d0, d0_err, d_max, d_max_err, dt_max, n_sigma=2.0)
 def main():
     global DELTA_T_SEC_LIST
     parser = argparse.ArgumentParser(description="Time-lagged cargo flow profile analysis: accumulation vs disturbance.")
+    parser.add_argument('--u_inf_mode', choices=['frame', 'movie'], default='frame',
+                        help="u_inf の取り方: frame=流れ場フレームごと (default), movie=動画ごとの定数 (従来)")
     parser.add_argument('--force_recompute', action='store_true', help="Force recomputation ignoring cache")
     parser.add_argument('--n_samples', type=int, default=12, help="Number of bead time frames sampled (default 12)")
     parser.add_argument('--rep_bead', type=str, default='beads3um', choices=[b['name'] for b in BEADS_INFO],
@@ -338,6 +364,11 @@ def main():
         dt_tag = "_".join(f"m{-d}" if d < 0 else str(d) for d in DELTA_T_SEC_LIST)
         cache_file = CACHE_DIR / f"time_lagged_flow_fast_cache_n{args.n_samples}_dt{dt_tag}.pkl"
     suffix = "" if is_default_dt else "_custom_dt"
+    global U_INF_MODE
+    U_INF_MODE = args.u_inf_mode
+    if U_INF_MODE == 'frame':
+        suffix += "_uinf_frame"
+        cache_file = cache_file.with_name(cache_file.stem + "_uinf_frame.pkl")
 
     df_all = None
     if cache_file.exists() and not args.force_recompute:

@@ -86,6 +86,7 @@ TARGET_DIRS = [
 SCALE_UM_PER_PX = 0.11
 DT_SEC = 4.0
 V_UNIT = SCALE_UM_PER_PX / DT_SEC # um/s
+FAR_R_UM = 20.0  # u_inf を取る遠方プラトーの下限 (縁からの距離)
 
 def setup_matplotlib():
     plt.rcParams.update({
@@ -106,7 +107,10 @@ def setup_matplotlib():
         'grid.linestyle': '--',
     })
 
+FIG_SUFFIX = ""
+
 def save_fig(fig, base_name):
+    base_name = base_name + FIG_SUFFIX
     for out_dir in OUT_DIRS:
         out_dir.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_dir / f"{base_name}.png", dpi=300, bbox_inches='tight')
@@ -159,6 +163,11 @@ def process_single_experiment(exp_dir_str: str, b_info: dict, max_r_edge_um: flo
     
     bin_sums = np.zeros(n_bins, dtype=np.float64)
     bin_counts = np.zeros(n_bins, dtype=np.int64)
+    # フレームごとの u_inf(t) で規格化した和 (活性の時間低下を打ち消すため)
+    norm_sums_frame = np.zeros(n_bins, dtype=np.float64)
+    norm_counts_frame = np.zeros(n_bins, dtype=np.int64)
+    u_inf_frames = []
+    far_mask_frame = (0.5 * (bins_px[:-1] + bins_px[1:]) * SCALE_UM_PER_PX) >= FAR_R_UM
     
     with h5py.File(str(h5_path), 'r') as hf:
         dataset_key = list(hf.keys())[0]
@@ -178,6 +187,8 @@ def process_single_experiment(exp_dir_str: str, b_info: dict, max_r_edge_um: flo
             speed = np.sqrt(u**2 + v**2)
             
             sub_tracks = df_tracks[df_tracks['frame'] == fr]
+            fr_sums = np.zeros(n_bins, dtype=np.float64)
+            fr_counts = np.zeros(n_bins, dtype=np.int64)
             for _, row in sub_tracks.iterrows():
                 bx, by = row['x'], row['y']
                 max_dist = Rc_px + max_r_edge_px
@@ -203,8 +214,18 @@ def process_single_experiment(exp_dir_str: str, b_info: dict, max_r_edge_um: flo
                 b_c = np.bincount(b_idx, minlength=n_bins)
                 b_s = np.bincount(b_idx, weights=sub_spd[valid], minlength=n_bins)
                 
-                bin_counts += b_c
-                bin_sums += b_s
+                fr_counts += b_c
+                fr_sums += b_s
+
+            bin_counts += fr_counts
+            bin_sums += fr_sums
+            # このフレームの遠方プラトー (r >= FAR_R_UM) から u_inf(t) を取る
+            if fr_counts[far_mask_frame].sum() > 100:
+                u_t = fr_sums[far_mask_frame].sum() / fr_counts[far_mask_frame].sum() * V_UNIT
+                if u_t > 0 and np.isfinite(u_t):
+                    u_inf_frames.append(u_t)
+                    norm_sums_frame += fr_sums * V_UNIT / u_t
+                    norm_counts_frame += fr_counts
                 
     mean_speed_px = bin_sums / np.maximum(bin_counts, 1)
     mean_speed_um_s = mean_speed_px * V_UNIT
@@ -220,7 +241,8 @@ def process_single_experiment(exp_dir_str: str, b_info: dict, max_r_edge_um: flo
     else:
         u_inf = np.mean(mean_speed_um_s[int(n_bins * 0.8):])
         
-    norm_speed = mean_speed_um_s / u_inf if (u_inf > 0 and np.isfinite(u_inf)) else np.zeros_like(mean_speed_um_s)
+    norm_speed_movie = mean_speed_um_s / u_inf if (u_inf > 0 and np.isfinite(u_inf)) else np.zeros_like(mean_speed_um_s)
+    norm_speed_frame = np.where(norm_counts_frame > 0, norm_sums_frame / np.maximum(norm_counts_frame, 1), np.nan)
     
     return {
         'exp_dir': exp_dir_str,
@@ -231,7 +253,10 @@ def process_single_experiment(exp_dir_str: str, b_info: dict, max_r_edge_um: flo
         'dist_um': bin_centers_um + b_info['radius_um'], # 貨物中心からの距離 dist = r + R_c
         'speed_um_s': mean_speed_um_s,
         'u_inf': u_inf,
-        'norm_speed': norm_speed,
+        'norm_speed': norm_speed_movie,          # 動画ごとの定数 u_inf で規格化 (従来)
+        'norm_speed_movie': norm_speed_movie,
+        'norm_speed_frame': norm_speed_frame,    # フレームごとの u_inf(t) で規格化
+        'u_inf_frames': np.array(u_inf_frames),
         'bin_counts': bin_counts
     }
 
@@ -240,6 +265,8 @@ def main():
     parser.add_argument('--max_samples', type=int, default=25, help="Max frame samples per experiment (default 25)")
     parser.add_argument('--max_r', type=float, default=35.0, help="Max distance from cargo edge in um (default 35.0)")
     parser.add_argument('--bin_w', type=float, default=0.50, help="Radial bin width in um (default 0.50)")
+    parser.add_argument('--u_inf_mode', choices=['frame', 'movie'], default='frame',
+                        help="u_inf の取り方: frame=フレームごと (default), movie=動画ごとの定数 (従来)")
     parser.add_argument('--force_recompute', action='store_true', help="Force recomputation ignoring cache")
     args = parser.parse_args()
 
@@ -251,6 +278,8 @@ def main():
         df_all = pd.read_pickle(cache_file)
         if 'dist_um' not in df_all.columns:
             df_all['dist_um'] = df_all.apply(lambda row: row['r_edge_um'] + row['radius_um'], axis=1)
+        if args.u_inf_mode == 'frame' and 'norm_speed_frame' not in df_all.columns:
+            raise SystemExit("Cache lacks per-frame u_inf. Re-run with --force_recompute.")
     else:
         print(f"Computing extended flow profiles (0 to {args.max_r} um) across {len(TARGET_DIRS)} experiments...")
         t0 = time.time()
@@ -276,6 +305,19 @@ def main():
         df_all.to_pickle(cache_file)
         print(f"All experiments processed in {time.time() - t0:.1f} s. Cached to {cache_file}.")
 
+    # 規格化モードの選択: 以降の作図は 'norm_speed' 列を使う
+    global FIG_SUFFIX
+    if args.u_inf_mode == 'frame':
+        df_all['norm_speed'] = df_all['norm_speed_frame']
+        FIG_SUFFIX = "_uinf_frame"
+        for _, r in df_all.iterrows():
+            uf = r['u_inf_frames']
+            if len(uf):
+                print(f"  {r['bead_name']:9s} {Path(r['exp_dir']).name}: u_inf(movie)={r['u_inf']:.3f}, "
+                      f"u_inf(t) {uf.min():.3f}-{uf.max():.3f} um/s, edge |u|/u_inf: movie={r['norm_speed_movie'][0]:.3f} frame={r['norm_speed_frame'][0]:.3f}")
+    elif 'norm_speed_movie' in df_all.columns:
+        df_all['norm_speed'] = df_all['norm_speed_movie']
+
     # xi の読み込み
     xi_map = load_xi_dict()
 
@@ -298,8 +340,8 @@ def main():
         norm_matrix = np.vstack(sub['norm_speed'].values)
         speed_matrix = np.vstack(sub['speed_um_s'].values)
         
-        mean_norm = np.mean(norm_matrix, axis=0)
-        std_norm = np.std(norm_matrix, axis=0)
+        mean_norm = np.nanmean(norm_matrix, axis=0)
+        std_norm = np.nanstd(norm_matrix, axis=0)
         sem_norm = std_norm / np.sqrt(len(sub)) if len(sub) > 1 else np.zeros_like(std_norm)
         
         mean_speed = np.mean(speed_matrix, axis=0)

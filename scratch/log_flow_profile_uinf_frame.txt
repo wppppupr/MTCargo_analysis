@@ -1,0 +1,117 @@
+/home/sasaki/MTCargo_analysis/calc_and_plot_cargo_flow_profile.py:642: RuntimeWarning: Mean of empty slice
+  mean_sc = np.nanmean(matrix_scaled, axis=0)
+/home/sasaki/MTCargo_analysis/.pixi/envs/default/lib/python3.11/site-packages/numpy/lib/_nanfunctions_impl.py:1997: RuntimeWarning: Degrees of freedom <= 0 for slice.
+  var = nanvar(a, axis=axis, dtype=dtype, out=out, ddof=ddof,
+/home/sasaki/MTCargo_analysis/calc_and_plot_cargo_flow_profile.py:642: RuntimeWarning: Mean of empty slice
+  mean_sc = np.nanmean(matrix_scaled, axis=0)
+/home/sasaki/MTCargo_analysis/.pixi/envs/default/lib/python3.11/site-packages/numpy/lib/_nanfunctions_impl.py:1997: RuntimeWarning: Degrees of freedom <= 0 for slice.
+  var = nanvar(a, axis=axis, dtype=dtype, out=out, ddof=ddof,
+/home/sasaki/MTCargo_analysis/calc_and_plot_cargo_flow_profile.py:642: RuntimeWarning: Mean of empty slice
+  mean_sc = np.nanmean(matrix_scaled, axis=0)
+/home/sasaki/MTCargo_analysis/.pixi/envs/default/lib/python3.11/site-packages/numpy/lib/_nanfunctions_impl.py:1997: RuntimeWarning: Degrees of freedom <= 0 for slice.
+  var = nanvar(a, axis=axis, dtype=dtype, out=out, ddof=ddof,
+/home/sasaki/MTCargo_analysis/calc_and_plot_cargo_flow_profile.py:642: RuntimeWarning: Mean of empty slice
+  mean_sc = np.nanmean(matrix_scaled, axis=0)
+/home/sasaki/MTCargo_analysis/.pixi/envs/default/lib/python3.11/site-packages/numpy/lib/_nanfunctions_impl.py:1997: RuntimeWarning: Degrees of freedom <= 0 for slice.
+  var = nanvar(a, axis=axis, dtype=dtype, out=out, ddof=ddof,
+/home/sasaki/MTCargo_analysis/calc_and_plot_cargo_flow_profile.py:642: RuntimeWarning: Mean of empty slice
+  mean_sc = np.nanmean(matrix_scaled, axis=0)
+/home/sasaki/MTCargo_analysis/.pixi/envs/default/lib/python3.11/site-packages/numpy/lib/_nanfunctions_impl.py:1997: RuntimeWarning: Degrees of freedom <= 0 for slice.
+  var = nanvar(a, axis=axis, dtype=dtype, out=out, ddof=ddof,
+/home/sasaki/MTCargo_analysis/calc_and_plot_cargo_flow_profile.py:642: RuntimeWarning: Mean of empty slice
+  mean_sc = np.nanmean(matrix_scaled, axis=0)
+/home/sasaki/MTCargo_analysis/.pixi/envs/default/lib/python3.11/site-packages/numpy/lib/_nanfunctions_impl.py:1997: RuntimeWarning: Degrees of freedom <= 0 for slice.
+  var = nanvar(a, axis=axis, dtype=dtype, out=out, ddof=ddof,
+Computing extended flow profiles (0 to 35.0 um) across 22 experiments...
+[1/22] Processing beads06um: beads06um...
+    Done in 8.5 s. u_inf = 0.189 um/s, edge |u|/u_inf = 0.466
+[2/22] Processing beads06um: beads06um001...
+    Done in 8.4 s. u_inf = 0.231 um/s, edge |u|/u_inf = 1.035
+[3/22] Processing beads06um: beads06um002...
+    Done in 8.3 s. u_inf = 0.277 um/s, edge |u|/u_inf = 0.361
+[4/22] Processing beads06um: beads06um003...
+    Done in 8.3 s. u_inf = 0.268 um/s, edge |u|/u_inf = 0.459
+[5/22] Processing beads1um: beads1um001_crop...
+    Done in 8.2 s. u_inf = 0.175 um/s, edge |u|/u_inf = 0.807
+[6/22] Processing beads1um: beads1um002...
+    Done in 8.2 s. u_inf = 0.205 um/s, edge |u|/u_inf = 0.494
+[7/22] Processing beads1um: beads1um003...
+    Done in 8.3 s. u_inf = 0.201 um/s, edge |u|/u_inf = 0.721
+[8/22] Processing beads1um: beads1um_crop...
+    Done in 9.1 s. u_inf = 0.177 um/s, edge |u|/u_inf = 0.857
+[9/22] Processing beads3um: beads3um...
+    Done in 8.6 s. u_inf = 0.259 um/s, edge |u|/u_inf = 0.751
+[10/22] Processing beads3um: beads3um001...
+    Done in 8.2 s. u_inf = 0.222 um/s, edge |u|/u_inf = 0.593
+[11/22] Processing beads3um: beads3um002...
+    Done in 8.3 s. u_inf = 0.294 um/s, edge |u|/u_inf = 0.478
+[12/22] Processing beads3um: beads3um003...
+    Done in 8.5 s. u_inf = 0.185 um/s, edge |u|/u_inf = 0.723
+[13/22] Processing beads5um: beads5um...
+    Done in 7.9 s. u_inf = 0.137 um/s, edge |u|/u_inf = 0.687
+[14/22] Processing beads5um: beads5um001...
+    Done in 7.9 s. u_inf = 0.156 um/s, edge |u|/u_inf = 0.848
+[15/22] Processing beads5um: beads5um002...
+    Done in 8.4 s. u_inf = 0.151 um/s, edge |u|/u_inf = 0.910
+[16/22] Processing beads5um: beads5um003...
+    Done in 8.6 s. u_inf = 0.139 um/s, edge |u|/u_inf = 0.842
+[17/22] Processing beads7um: beads7um...
+    Done in 8.6 s. u_inf = 0.284 um/s, edge |u|/u_inf = 0.443
+[18/22] Processing beads7um: beads7um002...
+    Done in 8.4 s. u_inf = 0.353 um/s, edge |u|/u_inf = 0.692
+[19/22] Processing beads7um: beads7um003...
+    Done in 8.9 s. u_inf = 0.322 um/s, edge |u|/u_inf = 0.642
+[20/22] Processing beads20um: beads20um001...
+    Done in 8.3 s. u_inf = 0.145 um/s, edge |u|/u_inf = 1.521
+[21/22] Processing beads20um: beads20um002...
+    Done in 8.3 s. u_inf = 0.125 um/s, edge |u|/u_inf = 1.049
+[22/22] Processing beads20um: beads20um_crop...
+    Done in 7.7 s. u_inf = 0.170 um/s, edge |u|/u_inf = 2.256
+All experiments processed in 183.8 s. Cached to /home/sasaki/MTCargo_analysis/scratch/cargo_flow_profile_extended_cache.pkl.
+  beads06um beads06um: u_inf(movie)=0.189, u_inf(t) 0.135-0.229 um/s, edge |u|/u_inf: movie=0.466 frame=0.470
+  beads06um beads06um001: u_inf(movie)=0.231, u_inf(t) 0.164-0.279 um/s, edge |u|/u_inf: movie=1.035 frame=1.031
+  beads06um beads06um002: u_inf(movie)=0.277, u_inf(t) 0.225-0.415 um/s, edge |u|/u_inf: movie=0.361 frame=0.370
+  beads06um beads06um003: u_inf(movie)=0.268, u_inf(t) 0.120-0.646 um/s, edge |u|/u_inf: movie=0.459 frame=0.564
+  beads1um  beads1um001_crop: u_inf(movie)=0.175, u_inf(t) 0.122-0.211 um/s, edge |u|/u_inf: movie=0.807 frame=0.846
+  beads1um  beads1um002: u_inf(movie)=0.205, u_inf(t) 0.161-0.235 um/s, edge |u|/u_inf: movie=0.494 frame=0.507
+  beads1um  beads1um003: u_inf(movie)=0.201, u_inf(t) 0.091-0.395 um/s, edge |u|/u_inf: movie=0.721 frame=0.742
+  beads1um  beads1um_crop: u_inf(movie)=0.177, u_inf(t) 0.158-0.215 um/s, edge |u|/u_inf: movie=0.857 frame=0.856
+  beads3um  beads3um: u_inf(movie)=0.259, u_inf(t) 0.221-0.288 um/s, edge |u|/u_inf: movie=0.751 frame=0.755
+  beads3um  beads3um001: u_inf(movie)=0.222, u_inf(t) 0.173-0.257 um/s, edge |u|/u_inf: movie=0.593 frame=0.603
+  beads3um  beads3um002: u_inf(movie)=0.294, u_inf(t) 0.196-0.474 um/s, edge |u|/u_inf: movie=0.478 frame=0.492
+  beads3um  beads3um003: u_inf(movie)=0.185, u_inf(t) 0.098-0.301 um/s, edge |u|/u_inf: movie=0.723 frame=0.758
+  beads5um  beads5um: u_inf(movie)=0.137, u_inf(t) 0.084-0.198 um/s, edge |u|/u_inf: movie=0.687 frame=0.692
+  beads5um  beads5um001: u_inf(movie)=0.156, u_inf(t) 0.110-0.253 um/s, edge |u|/u_inf: movie=0.848 frame=0.854
+  beads5um  beads5um002: u_inf(movie)=0.151, u_inf(t) 0.051-0.400 um/s, edge |u|/u_inf: movie=0.910 frame=0.916
+  beads5um  beads5um003: u_inf(movie)=0.139, u_inf(t) 0.050-0.300 um/s, edge |u|/u_inf: movie=0.842 frame=0.905
+  beads7um  beads7um: u_inf(movie)=0.284, u_inf(t) 0.194-0.382 um/s, edge |u|/u_inf: movie=0.443 frame=0.454
+  beads7um  beads7um002: u_inf(movie)=0.353, u_inf(t) 0.170-0.579 um/s, edge |u|/u_inf: movie=0.692 frame=0.690
+  beads7um  beads7um003: u_inf(movie)=0.322, u_inf(t) 0.173-0.493 um/s, edge |u|/u_inf: movie=0.642 frame=0.650
+  beads20um beads20um001: u_inf(movie)=0.145, u_inf(t) 0.065-0.211 um/s, edge |u|/u_inf: movie=1.521 frame=1.728
+  beads20um beads20um002: u_inf(movie)=0.125, u_inf(t) 0.054-0.299 um/s, edge |u|/u_inf: movie=1.049 frame=1.005
+  beads20um beads20um_crop: u_inf(movie)=0.170, u_inf(t) 0.139-0.230 um/s, edge |u|/u_inf: movie=2.256 frame=2.320
+Loaded 25 xi values from bg_angular_correlation_length_per_experiment.csv
+Saved figure: cargo_flow_speed_profile_all_beads_uinf_frame.png and .svg
+Saved figure: cargo_flow_speed_profile_6panels_uinf_frame.png and .svg
+Saved figure: cargo_flow_speed_profile_scaled_xi_all_beads_uinf_frame.png and .svg
+Saved figure: cargo_flow_speed_profile_scaled_xi_6panels_uinf_frame.png and .svg
+Saved figure: cargo_flow_speed_profile_dist_center_all_beads_uinf_frame.png and .svg
+Saved figure: cargo_flow_speed_profile_dist_center_6panels_uinf_frame.png and .svg
+Saved figure: cargo_flow_speed_profile_scaled_xi_dist_center_all_beads_uinf_frame.png and .svg
+Saved figure: cargo_flow_speed_profile_scaled_xi_dist_center_6panels_uinf_frame.png and .svg
+Saved figure: cargo_edge_speed_ratio_vs_diameter_uinf_frame.png and .svg
+
+=== Analysis Summary ===
+bead_name  diameter_um  radius_um  n_exps  edge_norm_speed  edge_norm_sem  edge_slowdown_pct  norm_speed_at_3.5xi
+beads06um         0.63      0.315       4         0.608738       0.126623          39.126193             1.003547
+ beads1um         1.18      0.590       4         0.737755       0.070143          26.224474             0.988895
+ beads3um         3.37      1.685       4         0.651948       0.055904          34.805154             1.009015
+ beads5um         5.00      2.500       4         0.841714       0.044870          15.828618             0.981702
+ beads7um         7.24      3.620       3         0.598026       0.059598          40.197419             0.996855
+beads20um        20.00     10.000       3         1.684247       0.310451         -68.424688             1.006327
+
+All figures (both r = dist - Rc and dist from center) generated successfully!
+
+real	3m14.069s
+user	0m42.211s
+sys	0m16.036s
