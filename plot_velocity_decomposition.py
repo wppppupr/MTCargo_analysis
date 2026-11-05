@@ -31,10 +31,11 @@ if not ROOT_DIR.exists():
 sys.path.append(str(CURRENT_DIR))
 import verify_cos_decomposition as vcd
 
-OUT_DIRS = [
+# ROOT_DIR がローカルにフォールバックした場合に同じ場所へ二重保存しないよう重複除去
+OUT_DIRS = list(dict.fromkeys([
     CURRENT_DIR / "figure" / "contrast_analysis",
-    ROOT_DIR / "figure" / "contrast_analysis"
-]
+    ROOT_DIR / "figure" / "contrast_analysis",
+]))
 
 SCALE = 0.11  # um/px
 DT = 4.0      # s/frame
@@ -379,12 +380,17 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0, 
 COMPARE_BEADS_DEFAULT = ('beads06um', 'beads20um')
 
 
-def _particle_boot_ci(p_means: pd.DataFrame, col: str, rng: np.random.Generator,
-                      n_boot: int = N_BOOT):
-    vals = p_means[col].values
+def _particle_boot_paired(p_means: pd.DataFrame, cols: List[str], rng: np.random.Generator,
+                          n_boot: int = N_BOOT) -> Tuple[np.ndarray, np.ndarray]:
+    """全列に同一の粒子リサンプルを用いる (対応ありブートストラップ).
+
+    比 (eta, A) の CI を正しく求めるには分子・分母で同じインデックスが必要.
+    戻り値: (点推定 (n_cols,), ブートストラップ平均 (n_boot, n_cols))
+    """
+    vals = p_means[cols].values
     n = len(vals)
     boots = vals[rng.integers(0, n, size=(n_boot, n))].mean(axis=1)
-    return float(vals.mean()), float(np.percentile(boots, 2.5)), float(np.percentile(boots, 97.5))
+    return vals.mean(axis=0), boots
 
 
 def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAULT,
@@ -426,19 +432,28 @@ def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAU
             continue
         b = info[bname]
         p_means = sub.groupby('unique_pid')[['v_parallel', 'u_fp', 'u_px']].mean()
-        label = f"{b['label']} (N={len(p_means)} particles)"
+        label_base = f"{b['label']} (N={len(p_means)} particles)"
 
-        # (a) bar chart of means
-        stats = [_particle_boot_ci(p_means, c, rng, n_boot) for c, _ in qty]
+        # (a) bar chart of means (paired bootstrap: 列間で同じ粒子リサンプル)
+        pt, bt = _particle_boot_paired(p_means, [c for c, _ in qty], rng, n_boot)
+        lo_q, hi_q = np.percentile(bt, [2.5, 97.5], axis=0)
+        stats = list(zip(pt, lo_q, hi_q))
+        with np.errstate(divide='ignore', invalid='ignore'):
+            eta_pt, a_pt = pt[0] / pt[1], pt[1] / pt[2]
+        r_eta = _ratio_stats(bt[:, 0], bt[:, 1], eta_pt, 'eta')
+        r_A = _ratio_stats(bt[:, 1], bt[:, 2], a_pt, 'A')
         x = np.arange(len(qty)) + (k - (len(bead_names) - 1) / 2) * width
         m = np.array([s[0] for s in stats])
         err = np.array([[s[0] - s[1] for s in stats], [s[2] - s[0] for s in stats]])
+        label = (f"{label_base}\n"
+                 rf"$\eta$={r_eta['eta']:.2f} [{r_eta['eta_ci95'][0]:.2f}, {r_eta['eta_ci95'][1]:.2f}], "
+                 rf"$A$={r_A['A']:.2f} [{r_A['A_ci95'][0]:.2f}, {r_A['A_ci95'][1]:.2f}]")
         axes[0].bar(x, m, width=width, color=b['color'], yerr=err, capsize=4,
                     edgecolor='black', linewidth=0.8, label=label)
         rows.append({'bead_name': bname, 'n_particles': len(p_means), 'n_frames': len(sub),
                      **{f'{c}_mean': s[0] for (c, _), s in zip(qty, stats)},
                      **{f'{c}_ci95': (s[1], s[2]) for (c, _), s in zip(qty, stats)},
-                     'eta': stats[0][0] / stats[1][0], 'A': stats[1][0] / stats[2][0]})
+                     **r_eta, **r_A})
 
         # (b) distribution of instantaneous v_parallel
         axes[1].hist(sub['v_parallel'], bins=bins, density=True, histtype='stepfilled',
@@ -457,7 +472,8 @@ def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAU
     axes[0].set_xticklabels([q[1] for q in qty])
     axes[0].set_ylabel(r'Speed [$\mu$m/s]')
     axes[0].set_title('(a) Mean speeds (particle bootstrap 95% CI)')
-    axes[0].legend(fontsize=9)
+    axes[0].set_ylim(top=axes[0].get_ylim()[1] * 1.3)  # 凡例(eta, A 注記)と誤差棒の重なり回避
+    axes[0].legend(fontsize=9, loc='upper left')
 
     axes[1].axvline(0, color='gray', linewidth=0.8)
     axes[1].set_xlabel(r'$v_\parallel$ [$\mu$m/s] (instantaneous)')
@@ -487,7 +503,7 @@ def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAU
         df_cmp.to_csv(d / f"speed_comparison_{tag}.csv", index=False)
     print(f"\n=== Speed comparison: {' vs '.join(bead_names)} [um/s] ===")
     print(df_cmp[['bead_name', 'n_particles', 'n_frames', 'v_parallel_mean', 'u_fp_mean',
-                  'u_px_mean', 'eta', 'A']].to_string(index=False, float_format=lambda x: f"{x:.4f}"))
+                  'u_px_mean', 'eta', 'eta_ci95', 'A', 'A_ci95']].to_string(index=False, float_format=lambda x: f"{x:.4f}"))
     return df_cmp
 
 
@@ -508,6 +524,10 @@ def main():
     ap.add_argument('--compare-only', action='store_true',
                     help='サイズ比較図のみ出力 (全サイズの分解統計を省略)')
     args = ap.parse_args()
+    if args.n_boot < 1:
+        ap.error('--n-boot must be >= 1')
+    if args.min_particles < 1:
+        ap.error('--min-particles must be >= 1')
 
     print("Loading data...")
     df_merged = load_and_preprocess_data(use_local_scalar=not args.no_local_scalar)
