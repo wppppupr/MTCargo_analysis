@@ -499,12 +499,20 @@ def plot_fig2_msd_real_vs_virtual(df_imsd: pd.DataFrame):
     plt.close(fig)
 
 
-def plot_fig3_displacement_pdf(disp_data: dict):
+def _finite_disp(disp_data: dict, kind: str, bname: str, lag: int) -> np.ndarray:
+    """disp_data[kind][bname][lag] を有限値の 1D 配列で返す (欠損時は空配列)。"""
+    vals = disp_data.get(kind, {}).get(bname, {}).get(lag, [])
+    arr = np.asarray(vals, dtype=float).ravel()
+    return arr[np.isfinite(arr)]
+
+
+def plot_fig3_displacement_pdf(disp_data: dict, lag: int = 1, bw: float = 0.2):
     """
     Figure 3: 変位確率密度関数 (Displacement PDF) 直接比較
-    - tau = 4 s (1フレーム) での実測 vs 仮想貨物
-    - 規格化変位 Delta x / sigma
+    - tau = lag * DT_SEC での実測 vs 仮想貨物 (lag はキャッシュ内のフレーム数)
+    - 規格化変位 Delta x / sigma, K = 過剰尖度 (Fig4 の伝達係数 kappa とは別物)
     """
+    tau_sec = lag * DT_SEC
     fig, axes = plt.subplots(2, 3, figsize=(18, 11), sharex=True, sharey=True)
     axes = axes.flatten()
 
@@ -516,8 +524,14 @@ def plot_fig3_displacement_pdf(disp_data: dict):
         bname = b_item['name']
         color = b_item['color']
         
-        r_disp = np.array(disp_data['real'][bname][1])
-        v_disp = np.array(disp_data['virt'][bname][1])
+        r_disp = _finite_disp(disp_data, 'real', bname, lag)
+        v_disp = _finite_disp(disp_data, 'virt', bname, lag)
+        if r_disp.size < 3 or v_disp.size < 3:
+            print(f"  [fig3] skip {bname}: insufficient displacements at lag={lag} "
+                  f"(real={r_disp.size}, virt={v_disp.size})")
+            ax.text(0.5, 0.5, 'No data', transform=ax.transAxes, ha='center', va='center')
+            ax.set_title(b_item['label'], fontsize=13, fontweight='bold')
+            continue
         
         r_std = np.std(r_disp)
         v_std = np.std(v_disp)
@@ -531,13 +545,13 @@ def plot_fig3_displacement_pdf(disp_data: dict):
         ax.plot(x_grid, gauss_ref, color='gray', linestyle='--', linewidth=1.5, label='Gaussian $\\mathcal{N}(0, 1)$')
         
         # KDE プロット
-        kde_r = stats.gaussian_kde(r_norm, bw_method=0.2)
-        kde_v = stats.gaussian_kde(v_norm, bw_method=0.2)
+        kde_r = stats.gaussian_kde(r_norm, bw_method=bw)
+        kde_v = stats.gaussian_kde(v_norm, bw_method=bw)
         
         ax.plot(x_grid, kde_v(x_grid), color='#332288', linestyle='--', linewidth=2.2,
-                label=f'Virtual Cargo ($\\kappa={v_kurt:.1f}$)')
+                label=f'Virtual Cargo ($K={v_kurt:.1f}$)')
         ax.plot(x_grid, kde_r(x_grid), color=color, linestyle='-', linewidth=2.4,
-                label=f'Real Cargo ($\\kappa={r_kurt:.1f}$)')
+                label=f'Real Cargo ($K={r_kurt:.1f}$)')
         
         ax.set_yscale('log')
         ax.set_xlim(-5.0, 5.0)
@@ -554,9 +568,11 @@ def plot_fig3_displacement_pdf(disp_data: dict):
         if idx == 0:
             ax.legend(loc='lower center', fontsize=9.2, framealpha=0.9)
 
-    fig.suptitle(r'Displacement Probability Density: Real Cargo vs Virtual Cargo ($\tau = 4\ \mathrm{s}$)',
+    fig.suptitle(r'Displacement Probability Density: Real Cargo vs Virtual Cargo '
+                 + rf'($\tau = {tau_sec:g}\ \mathrm{{s}}$, $K$: excess kurtosis)',
                  fontsize=16, fontweight='bold', y=0.995)
-    save_figure(fig, "contrast_fig3_displacement_pdf_real_vs_virtual")
+    suffix = "" if lag == 1 else f"_lag{lag}"
+    save_figure(fig, f"contrast_fig3_displacement_pdf_real_vs_virtual{suffix}")
     plt.close(fig)
 
 
@@ -675,7 +691,12 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split('\n')[1] if __doc__ else None)
     p.add_argument('--n-iter', type=int, default=100, help='ヌルモデルの反復回数 (default: 100)')
     p.add_argument('--seed', type=int, default=42, help='ヌルモデルの乱数シード (default: 42)')
+    p.add_argument('--pdf-lag', type=int, nargs='+', default=[1],
+                   help='Fig3 の変位ラグ [frame] (キャッシュ内の値, 例: 1 4 16; default: 1)')
+    p.add_argument('--pdf-bw', type=float, default=0.2, help='Fig3 KDE バンド幅 (default: 0.2)')
     args = p.parse_args(argv)
+    if args.pdf_bw <= 0:
+        p.error('--pdf-bw must be > 0')
     if args.n_iter < 1:
         p.error('--n-iter must be >= 1')
     return args
@@ -698,7 +719,12 @@ def main(argv=None):
     plot_fig2_msd_real_vs_virtual(df_imsd)
 
     print("\nGenerating Figure 3: Displacement PDF Real vs Virtual...")
-    plot_fig3_displacement_pdf(disp_data)
+    avail = sorted(next(iter(disp_data.get('real', {}).values()), {}).keys())
+    for lag in args.pdf_lag:
+        if lag not in avail:
+            print(f"  [fig3] lag={lag} not in cache (available: {avail}); skipped")
+            continue
+        plot_fig3_displacement_pdf(disp_data, lag=lag, bw=args.pdf_bw)
 
     print("\nGenerating Figure 4: Velocity Transfer & Speed Ratio...")
     plot_fig4_velocity_transfer(df_inst)
