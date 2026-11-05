@@ -1,0 +1,44 @@
+kappa = median |v|/|<u>_Rc| over frames with cos psi > 0.8 (dt = 4 s)
+Rolling prediction (contact-driven free sphere): bulk 4/7 = 0.571; near-wall GCB:
+  delta=20 nm: a=0.315um->0.429, a=1.685um->0.450, a=3.62um->0.456, a=10um->0.462
+  delta=50 nm: a=0.315um->0.408, a=1.685um->0.440, a=3.62um->0.449, a=10um->0.457
+  delta=200 nm: a=0.315um->0.330, a=1.685um->0.416, a=3.62um->0.431, a=10um->0.445
+
+bead_name     Rc  rc_over_xi  n_beads  n_frames  n_aligned  kappa    cos  kappa_lo  kappa_hi
+beads06um  0.315       0.059       13      3450       1451  0.808  0.394     0.666     0.886
+ beads1um  0.590       0.132       17      4439       1762  0.954  0.284     0.837     0.973
+ beads3um  1.685       0.283       13      5558       1931  0.898  0.265     0.717     0.971
+ beads5um  2.500       0.821       13      7587       2089  0.725  0.114     0.452     1.140
+ beads7um  3.620       0.390       12      3929       1161  0.523  0.187     0.383     0.540
+beads20um 10.000       3.129        3      3006        707  0.348 -0.039     0.051     2.066
+
+bead_name          exp_dir     Rc  rc_over_xi  n_beads  n_frames  n_aligned  kappa   cos  kappa_lo  kappa_hi
+beads06um        beads06um  0.315       0.074        4      1361        425  0.600 0.253     0.527     0.857
+beads06um     beads06um001  0.315       0.058        2       367        257  0.894 0.657     0.884     1.079
+beads06um     beads06um002  0.315       0.073        2       290        134  0.866 0.437     0.666     1.020
+beads06um     beads06um003  0.315       0.059        5      1432        635  0.803 0.385     0.619     0.886
+ beads1um beads1um001_crop  0.590       0.140        7      1563        789  0.954 0.464     0.826     0.929
+ beads1um      beads1um002  0.590       0.132        1       283        106  0.983 0.299       NaN       NaN
+ beads1um      beads1um003  0.590       0.132        5      2074        745  0.953 0.222     0.918     1.002
+ beads1um    beads1um_crop  0.590       0.075        4       519        122  0.903 0.043     0.718     1.031
+beads20um     beads20um001 10.000       1.429        1       905        231  0.104 0.032       NaN       NaN
+beads20um     beads20um002 10.000       3.129        1      2000        466  2.066 0.049       NaN       NaN
+ beads3um         beads3um  1.685       0.283        4      1777        570  0.840 0.234     0.682     1.011
+ beads3um      beads3um001  1.685       0.329        3       994        362  0.880 0.281     0.477     0.990
+ beads3um      beads3um002  1.685       0.319        2      1044        434  0.909 0.375     0.678     1.038
+ beads3um      beads3um003  1.685       0.283        4      1743        565  0.953 0.227     0.573     0.982
+ beads5um         beads5um  2.500       0.591        2       344         93  0.433 0.136     0.349     0.595
+ beads5um      beads5um001  2.500       0.686        5       624        181  1.200 0.109     0.452     1.329
+ beads5um      beads5um002  2.500       0.862        2      3024        822  1.062 0.124     1.015     1.160
+ beads5um      beads5um003  2.500       0.821        4      3595        993  0.430 0.104     0.378     0.818
+ beads7um         beads7um  3.620       0.433        4       815        222  0.359 0.172     0.279     0.429
+ beads7um      beads7um002  3.620       0.404        2       900        272  0.482 0.167     0.373     0.681
+ beads7um      beads7um003  3.620       0.390        6      2214        667  0.558 0.203     0.516     0.613
+
+Spearman kappa vs R_c    (per-video n=21): rho=-0.214 p=0.353
+Spearman kappa vs R_c/xi (per-video n=21): rho=-0.069 p=0.767
+  OLS log kappa = b0 + bR log R_c + bX log(R_c/xi): bR=-0.872±0.357, bX=+0.713±0.352, R2=0.28
+Spearman cos   vs R_c    (per-video n=21): rho=-0.734 p=0.000151
+Spearman cos   vs R_c/xi (per-video n=21): rho=-0.748 p=9.65e-05
+  OLS cos = b0 + bR log R_c + bX log(R_c/xi): bR=-0.166±0.181, bX=-0.070±0.178, R2=0.50
+Fraction of videos with kappa above rolling bound (delta=50nm): 0.81
