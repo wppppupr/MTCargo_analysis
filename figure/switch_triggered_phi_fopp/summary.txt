@@ -1,0 +1,33 @@
+switch-triggered average of ΔΦ_fp, Δf_opp (cargo-mean subtracted), ±10 frames (Δt=4s). pre window k=[-3, -2, -1]. null: RR (for R→S) / SS (for S→R). CI: hier. bootstrap movie→cargo n=500
+
+== simple ==
+beads06um     R→S(stop)     n=  428  pre(ev−null): ΔΦ=-0.018 [-0.043,+0.000]  Δf_opp=+0.007 [-0.001,+0.020]
+beads06um     S→R(unstick)  n=  425  pre(ev−null): ΔΦ=-0.025 [-0.041,-0.006]  Δf_opp=+0.012 [+0.004,+0.024]
+beads1um      R→S(stop)     n=  460  pre(ev−null): ΔΦ=-0.015 [-0.035,+0.003]  Δf_opp=+0.006 [-0.002,+0.016]
+beads1um      S→R(unstick)  n=  459  pre(ev−null): ΔΦ=-0.025 [-0.052,+0.009]  Δf_opp=+0.010 [-0.015,+0.019]
+beads3um      R→S(stop)     n=  626  pre(ev−null): ΔΦ=-0.007 [-0.032,+0.020]  Δf_opp=+0.003 [-0.012,+0.016]
+beads3um      S→R(unstick)  n=  624  pre(ev−null): ΔΦ=-0.020 [-0.043,+0.007]  Δf_opp=+0.008 [-0.008,+0.018]
+beads5um      R→S(stop)     n= 1018  pre(ev−null): ΔΦ=+0.022 [-0.037,+0.059]  Δf_opp=-0.010 [-0.026,+0.015]
+beads5um      S→R(unstick)  n= 1012  pre(ev−null): ΔΦ=-0.073 [-0.132,+0.012]  Δf_opp=+0.037 [-0.009,+0.070]
+beads7um      R→S(stop)     n=  601  pre(ev−null): ΔΦ=+0.008 [-0.050,+0.040]  Δf_opp=-0.003 [-0.019,+0.027]
+beads7um      S→R(unstick)  n=  600  pre(ev−null): ΔΦ=-0.027 [-0.055,+0.003]  Δf_opp=+0.008 [-0.010,+0.024]
+beads20um     R→S(stop)     n=  311  pre(ev−null): ΔΦ=+0.220 [-0.029,+0.361]  Δf_opp=-0.109 [-0.177,+0.011]
+beads20um     S→R(unstick)  n=  310  pre(ev−null): ΔΦ=+0.001 [-0.185,+0.006]  Δf_opp=-0.003 [-0.005,+0.087]
+all_excl20um  R→S(stop)     n= 3133  pre(ev−null): ΔΦ=+0.001 [-0.020,+0.019]  Δf_opp=-0.001 [-0.009,+0.009]
+all_excl20um  S→R(unstick)  n= 3120  pre(ev−null): ΔΦ=-0.043 [-0.085,-0.009]  Δf_opp=+0.020 [+0.001,+0.043]
+
+== hyst ==
+beads06um     R→S(stop)     n=  242  pre(ev−null): ΔΦ=-0.024 [-0.040,-0.002]  Δf_opp=+0.009 [+0.000,+0.019]
+beads06um     S→R(unstick)  n=  235  pre(ev−null): ΔΦ=-0.007 [-0.016,+0.033]  Δf_opp=+0.004 [-0.007,+0.008]
+beads1um      R→S(stop)     n=  290  pre(ev−null): ΔΦ=-0.019 [-0.043,+0.001]  Δf_opp=+0.008 [-0.001,+0.021]
+beads1um      S→R(unstick)  n=  281  pre(ev−null): ΔΦ=-0.021 [-0.038,-0.006]  Δf_opp=+0.007 [-0.000,+0.014]
+beads3um      R→S(stop)     n=  415  pre(ev−null): ΔΦ=-0.006 [-0.031,+0.019]  Δf_opp=+0.003 [-0.011,+0.015]
+beads3um      S→R(unstick)  n=  401  pre(ev−null): ΔΦ=-0.005 [-0.035,+0.023]  Δf_opp=+0.002 [-0.013,+0.016]
+beads5um      R→S(stop)     n=  419  pre(ev−null): ΔΦ=-0.005 [-0.055,+0.032]  Δf_opp=+0.006 [-0.013,+0.030]
+beads5um      S→R(unstick)  n=  412  pre(ev−null): ΔΦ=-0.064 [-0.105,-0.008]  Δf_opp=+0.033 [+0.008,+0.055]
+beads7um      R→S(stop)     n=  254  pre(ev−null): ΔΦ=-0.013 [-0.096,+0.020]  Δf_opp=+0.008 [-0.011,+0.055]
+beads7um      S→R(unstick)  n=  248  pre(ev−null): ΔΦ=-0.039 [-0.084,-0.001]  Δf_opp=+0.017 [+0.004,+0.037]
+beads20um     R→S(stop)     n=   54  pre(ev−null): ΔΦ=+0.081 [-0.035,+0.086]  Δf_opp=-0.045 [-0.047,+0.017]
+beads20um     S→R(unstick)  n=   53  pre(ev−null): ΔΦ=-0.201 [-0.430,+0.047]  Δf_opp=+0.093 [-0.018,+0.204]
+all_excl20um  R→S(stop)     n= 1620  pre(ev−null): ΔΦ=-0.012 [-0.032,+0.003]  Δf_opp=+0.006 [-0.001,+0.016]
+all_excl20um  S→R(unstick)  n= 1577  pre(ev−null): ΔΦ=-0.033 [-0.055,-0.010]  Δf_opp=+0.016 [+0.005,+0.027]
