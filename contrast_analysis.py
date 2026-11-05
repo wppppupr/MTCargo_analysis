@@ -789,6 +789,64 @@ def plot_fig4_velocity_transfer(df_inst: pd.DataFrame, n_boot: int = 500, ci: fl
     return st.drop(columns='rc_xi').assign(bead_name=[b['name'] for b in BEADS_INFO])
 
 
+def report_xi_consistency(df_inst: pd.DataFrame, out_name: str = "contrast_xi_by_experiment"):
+    """実験 (exp_dir) ごとの xi, Rc/xi を集計し、粒径順と Rc/xi 順の逆転を警告・図示する。
+
+    Rc/xi は Rc ∝ 直径なので、xi が実験間で大きく異なると粒径順と逆転しうる。
+    その原因が xi のばらつきかどうかを確認するための診断出力。
+    """
+    need = {'bead_name', 'diameter_um', 'exp_dir', 'xi', 'rc_over_xi'}
+    if not need.issubset(df_inst.columns):
+        print(f"  [xi-check] skipped (missing columns: {sorted(need - set(df_inst.columns))})")
+        return None
+    per_exp = (df_inst.groupby(['bead_name', 'diameter_um', 'exp_dir'], as_index=False)
+               .agg(xi_um=('xi', 'mean'), rc_over_xi=('rc_over_xi', 'mean'),
+                    n_frames=('frame', 'size'), n_traj=('particle', 'nunique'))
+               .sort_values(['diameter_um', 'exp_dir']))
+    per_exp['exp_dir'] = per_exp['exp_dir'].astype(str).map(lambda s: Path(s).name)
+    for out_dir in OUT_DIRS:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write(out_dir / f"{out_name}.csv", lambda p: per_exp.to_csv(p, index=False))
+
+    by_bead = per_exp.groupby('diameter_um', sort=True).agg(
+        rc_over_xi=('rc_over_xi', 'median'), xi_med=('xi_um', 'median'),
+        xi_cv=('xi_um', lambda s: s.std(ddof=0) / s.mean() if s.mean() else np.nan))
+    rcx = by_bead['rc_over_xi'].to_numpy()
+    inversions = [(d0, d1) for (d0, r0), (d1, r1) in zip(by_bead['rc_over_xi'].items(),
+                                                       list(by_bead['rc_over_xi'].items())[1:]) if r1 < r0]
+    print(f"  [xi-check] per-experiment table: {out_name}.csv ({len(per_exp)} experiments)")
+    print(by_bead.to_string(float_format='%.3g'))
+    for d0, d1 in inversions:
+        print(f"  [xi-check] WARNING: Rc/xi inverted between {d0:g} um ({by_bead.at[d0, 'rc_over_xi']:.3g}, "
+              f"xi~{by_bead.at[d0, 'xi_med']:.3g} um) and {d1:g} um ({by_bead.at[d1, 'rc_over_xi']:.3g}, "
+              f"xi~{by_bead.at[d1, 'xi_med']:.3g} um)")
+
+    color_of = {b['name']: b['color'] for b in BEADS_INFO}
+    marker_of = {b['name']: b['marker'] for b in BEADS_INFO}
+    fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(13, 5.5))
+    rng = np.random.default_rng(0)
+    for name, sub in per_exp.groupby('bead_name', sort=False):
+        x = sub['diameter_um'].to_numpy() * np.exp(rng.uniform(-0.04, 0.04, len(sub)))  # log 軸上の横ずらし
+        kw = dict(color=color_of.get(name, 'gray'), marker=marker_of.get(name, 'o'), s=70,
+                  edgecolor='black', linewidth=0.6, alpha=0.85, zorder=3)
+        ax_a.scatter(x, sub['xi_um'], label=name, **kw)
+        ax_b.scatter(x, sub['rc_over_xi'], **kw)
+    ax_b.plot(by_bead.index, rcx, color='black', alpha=0.6, zorder=2, label='median per size')
+    for d0, d1 in inversions:
+        ax_b.plot([d0, d1], by_bead.loc[[d0, d1], 'rc_over_xi'], color='#d7191c', lw=2.5, zorder=2.5)
+    ax_b.axhline(1.0, color='gray', ls='--', lw=1)
+    for ax, ylab, tag in ((ax_a, r'$\xi$ [$\mu$m]', '(a) Flow correlation length per experiment'),
+                          (ax_b, r'$R_c/\xi$', r'(b) $R_c/\xi$ per experiment (red: order inversion)')):
+        ax.set_xscale('log'); ax.set_yscale('log')
+        ax.set_xlabel(r'Bead diameter [$\mu$m]'); ax.set_ylabel(ylab)
+        ax.set_title(tag, fontweight='bold'); ax.grid(True, which='both', alpha=0.3)
+    ax_a.legend(fontsize=9, loc='best'); ax_b.legend(fontsize=9, loc='upper left')
+    fig.tight_layout()
+    save_figure(fig, out_name)
+    plt.close(fig)
+    return per_exp
+
+
 def parse_args(argv=None):
     import argparse
     p = argparse.ArgumentParser(description=__doc__.split('\n')[1] if __doc__ else None)
@@ -824,6 +882,9 @@ def main(argv=None):
     print("Loading cached data...")
     df_inst, df_imsd, disp_data = load_cached_data()
     print(f"Data loaded: {len(df_inst)} inst, {len(df_imsd)} imsd")
+
+    print("\nChecking xi / Rc-xi consistency across experiments...")
+    report_xi_consistency(df_inst)
 
     print("\nComputing Null Models (Time Shuffle & Trajectory Swap)...")
     null_results = compute_null_models(df_inst, n_iter=args.n_iter, seed=args.seed)
