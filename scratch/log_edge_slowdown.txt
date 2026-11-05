@@ -1,2 +1,36 @@
 Starting simulation of virtual tracers on 22 experiments...
 Using 10 parallel workers.
+[beads1um] Done beads1um003 in 2511.0s | u_inf=0.1923 um/s, edge_norm=0.9650, edge_norm_frame=0.9565
+[beads3um] Done beads3um in 1718.2s | u_inf=0.2671 um/s, edge_norm=1.0161, edge_norm_frame=1.0161
+[beads7um] Done beads7um in 816.1s | u_inf=0.2910 um/s, edge_norm=0.9817, edge_norm_frame=0.9812
+[beads1um] Done beads1um_crop in 552.9s | u_inf=0.1701 um/s, edge_norm=0.9884, edge_norm_frame=0.9879
+[beads3um] Done beads3um002 in 1692.2s | u_inf=0.2253 um/s, edge_norm=1.0320, edge_norm_frame=1.0367
+[beads20um] Done beads20um_crop in 362.5s | u_inf=0.1859 um/s, edge_norm=0.9389, edge_norm_frame=0.9335
+[beads1um] Done beads1um002 in 1134.2s | u_inf=0.2023 um/s, edge_norm=1.0096, edge_norm_frame=1.0122
+[beads5um] Done beads5um in 625.2s | u_inf=0.1211 um/s, edge_norm=1.0150, edge_norm_frame=1.0152
+[beads7um] Done beads7um002 in 1162.4s | u_inf=0.3952 um/s, edge_norm=0.9913, edge_norm_frame=0.9965
+[beads06um] Done beads06um002 in 789.1s | u_inf=0.2655 um/s, edge_norm=0.9612, edge_norm_frame=0.9606
+[beads3um] Done beads3um003 in 2200.6s | u_inf=0.1895 um/s, edge_norm=0.9661, edge_norm_frame=0.9511
+[beads3um] Done beads3um001 in 1572.0s | u_inf=0.2223 um/s, edge_norm=1.0250, edge_norm_frame=1.0248
+[beads5um] Done beads5um002 in 2707.0s | u_inf=0.2247 um/s, edge_norm=1.0076, edge_norm_frame=1.0116
+[beads1um] Done beads1um001_crop in 1255.9s | u_inf=0.1722 um/s, edge_norm=1.0008, edge_norm_frame=1.0001
+[beads5um] Done beads5um001 in 676.3s | u_inf=0.1628 um/s, edge_norm=1.0110, edge_norm_frame=1.0114
+[beads20um] Done beads20um002 in 2408.2s | u_inf=0.2586 um/s, edge_norm=1.0060, edge_norm_frame=1.0062
+[beads06um] Done beads06um in 1809.7s | u_inf=0.1886 um/s, edge_norm=1.0438, edge_norm_frame=1.0465
+[beads20um] Done beads20um001 in 1790.4s | u_inf=0.1871 um/s, edge_norm=1.0079, edge_norm_frame=1.0032
+[beads06um] Done beads06um003 in 1787.0s | u_inf=0.2185 um/s, edge_norm=0.9743, edge_norm_frame=0.9727
+[beads7um] Done beads7um003 in 1581.7s | u_inf=0.4212 um/s, edge_norm=1.0110, edge_norm_frame=1.0111
+Successfully saved virtual tracer flow profile results to scratch/virtual_tracer_flow_profile_cache_uinf_frame.pkl
+
+real	72m20.741s
+user	17m33.567s
+sys	5m22.640s
+          edge_slowdown        edge_slowdown_sem        near_slowdown       
+source            cargo tracer             cargo tracer         cargo tracer
+bead_name                                                                   
+beads06um         0.391  0.006             0.146  0.019         0.320  0.005
+beads1um          0.262  0.011             0.081  0.012         0.217  0.010
+beads3um          0.348 -0.007             0.065  0.019         0.306 -0.007
+beads5um          0.158 -0.013             0.052  0.001         0.118 -0.012
+beads7um          0.402  0.004             0.073  0.009         0.296 -0.005
+beads20um        -0.684  0.019             0.380  0.024        -0.598  0.018

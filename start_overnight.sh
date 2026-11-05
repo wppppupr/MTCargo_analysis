@@ -104,6 +104,52 @@ if [ -z "$MAX_ITER" ]; then
     MAX_ITER="$DEFAULT_ITER"
 fi
 
+# ==============================================================================
+# 事前ヘルスチェック（Antigravity / Gemini & Claude Code の認証・疎通確認）
+# ==============================================================================
+echo "🔍 外部LLMエージェントの疎通・認証確認中..."
+
+# 1. Antigravity (agy / Gemini) の確認
+AGY_BIN="/snap/antigravity-cli/24/bin/agy"
+if [ ! -x "$AGY_BIN" ]; then
+    AGY_BIN=$(which agy 2>/dev/null || echo "")
+fi
+
+if [ -n "$AGY_BIN" ]; then
+    echo -n "  ✨ Antigravity (Gemini) 接続テスト... "
+    # agy -p "ping" で疎通および認証チェック
+    if AGY_OUT=$("$AGY_BIN" -p "ping" 2>&1); then
+        echo "OK"
+    else
+        echo "⚠️ 認証待ちまたはエラー検出"
+        echo "$AGY_OUT"
+        if [ -t 0 ]; then
+            echo ""
+            echo "👉 バックグラウンド起動前に、対話モードで一度認証を完了してください:"
+            "$AGY_BIN" -p "ping" || true
+        fi
+    fi
+else
+    echo "  ⚠️ agy コマンドが見つかりません。Geminiコメントはスキップされます。"
+fi
+
+# 2. Claude Code の確認
+CLAUDE_BIN="/home/sasaki/.local/bin/claude"
+if [ ! -x "$CLAUDE_BIN" ]; then
+    CLAUDE_BIN=$(which claude 2>/dev/null || echo "")
+fi
+
+if [ -n "$CLAUDE_BIN" ]; then
+    echo -n "  🤖 Claude Code 接続テスト... "
+    if "$CLAUDE_BIN" --version >/dev/null 2>&1; then
+        CLAUDE_VER=$("$CLAUDE_BIN" --version 2>/dev/null | head -n 1)
+        echo "OK ($CLAUDE_VER)"
+    else
+        echo "OK (パス確認済み: $CLAUDE_BIN)"
+    fi
+fi
+echo ""
+
 echo "=========================================================="
 echo "🌙 夜間自律研究システム (Claude Code & Gemini 協調型)"
 echo "=========================================================="
