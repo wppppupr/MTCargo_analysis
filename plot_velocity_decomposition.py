@@ -243,7 +243,11 @@ def _errorbar_pair(ax, df: pd.DataFrame, std_mask, sp_mask, key: str, fmt: str, 
                         label=label, zorder=zorder, **kw)
 
 
-def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0):
+def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0, method: str = 'm2'):
+    """method: 'm2' (フレームプール, 既定) または 'm1' (粒子等重み). m1 の図はファイル名に _m1 を付与."""
+    if method not in ('m1', 'm2'):
+        raise ValueError(f"method must be 'm1' or 'm2', got {method!r}")
+    suffix = '' if method == 'm2' else f'_{method}'
     setup_matplotlib()
     from matplotlib.lines import Line2D
 
@@ -267,11 +271,11 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0):
     fig, ax = plt.subplots(figsize=(8.0, 6.2))
     ax.plot(y_fine, phi_fine, color=c_A, linestyle='--', linewidth=2.0, alpha=0.8,
             label=r'Theoretical spatial cancellation $\Phi(R_c/\xi)$', zorder=2)
-    _errorbar_pair(ax, df_sorted, std_mask, sp_mask, 'm2_A', 's-', c_A,
+    _errorbar_pair(ax, df_sorted, std_mask, sp_mask, f'{method}_A', 's-', c_A,
                    r'$A = \frac{\langle|\langle\mathbf{u}\rangle_{R_c}|\rangle}{\langle|\mathbf{u}|\rangle_{R_c}}$ (Footprint Averaging / Polar Order)', 4)
-    _errorbar_pair(ax, df_sorted, std_mask, sp_mask, 'm2_eta', 'o-', c_eta,
+    _errorbar_pair(ax, df_sorted, std_mask, sp_mask, f'{method}_eta', 'o-', c_eta,
                    r'$\eta = \frac{\langle v_\parallel\rangle}{\langle|\langle\mathbf{u}\rangle_{R_c}|\rangle}$ (Transfer Efficiency: Non-averaging)', 6)
-    _errorbar_pair(ax, df_sorted, std_mask, sp_mask, 'm2_tot', 'd--', c_tot,
+    _errorbar_pair(ax, df_sorted, std_mask, sp_mask, f'{method}_tot', 'd--', c_tot,
                    r'$\frac{\langle v_\parallel\rangle}{\langle|\mathbf{u}|\rangle} = \eta \times A$ (Overall Transport Ratio)', 3,
                    ms=8, lw=1.8, elw=1.4, cap=4.0, alpha=0.85)
 
@@ -284,8 +288,8 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0):
         ax.annotate(
             f"{r['diameter_um']:g} " + r'$\mu\mathrm{m}$' +
             f"\n($R_c/\\xi={r['rc_over_xi']:.2f}$, $N={int(r['n_particles'])}$)\n" +
-            f"$\\eta = {r['m2_eta']:.2f}$",
-            xy=(r['rc_over_xi'], r['m2_eta']),
+            f"$\\eta = {r[f'{method}_eta']:.2f}$",
+            xy=(r['rc_over_xi'], r[f'{method}_eta']),
             xytext=(r['rc_over_xi'] * 0.45, 0.22),
             arrowprops=dict(arrowstyle='->', lw=1.3, color='#333333', connectionstyle='arc3,rad=-0.15'),
             fontsize=10.5, fontweight='semibold',
@@ -320,7 +324,7 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0):
               framealpha=0.95, facecolor='white', edgecolor='#CCCCCC', fontsize=10.0)
     ax.grid(True, which='both', linestyle='--', alpha=0.4)
     plt.tight_layout()
-    save_fig(fig, "contrast_fig9_velocity_decomposition_identity")
+    save_fig(fig, f"contrast_fig9_velocity_decomposition_identity{suffix}")
     plt.close(fig)
 
     # =========================================================================
@@ -332,11 +336,11 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0):
 
     ax1.plot(y_fine, phi_fine, color=c_A, linestyle='--', linewidth=1.8, alpha=0.8,
              label=r'Theory $\Phi(R_c/\xi)$', zorder=2)
-    _errorbar_pair(ax1, df_sorted, std_mask, sp_mask, 'm2_A', 's-', c_A,
+    _errorbar_pair(ax1, df_sorted, std_mask, sp_mask, f'{method}_A', 's-', c_A,
                    r'$A = \langle|\langle\mathbf{u}\rangle_{R_c}|\rangle / \langle|\mathbf{u}|\rangle_{R_c}$', 4, **small)
-    _errorbar_pair(ax1, df_sorted, std_mask, sp_mask, 'm2_eta', 'o-', c_eta,
+    _errorbar_pair(ax1, df_sorted, std_mask, sp_mask, f'{method}_eta', 'o-', c_eta,
                    r'$\eta = \langle v_\parallel\rangle / \langle|\langle\mathbf{u}\rangle_{R_c}|\rangle$ (Efficiency)', 6, **small)
-    _errorbar_pair(ax1, df_sorted, std_mask, sp_mask, 'm2_tot', 'd--', c_tot,
+    _errorbar_pair(ax1, df_sorted, std_mask, sp_mask, f'{method}_tot', 'd--', c_tot,
                    r'$\eta \times A$ (Total Transport Ratio)', 3, **small_tot)
     ax1.axhline(1.0, color='gray', linestyle=':', linewidth=1.2, alpha=0.7)
     ax1.axhline(0.0, color='black', linestyle='-', linewidth=0.8, alpha=0.5)
@@ -352,9 +356,9 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0):
     # Panel 2: log-log — 系列ごとに正値のみ (以前は eta>0 のマスクを全系列に流用していた)
     ax2.plot(y_fine, phi_fine, color=c_A, linestyle='--', linewidth=1.5, alpha=0.6, zorder=2)
     for key, fmt, c, lbl, z, kw in (
-            ('m2_A', 's-', c_A, r'Averaging Factor $A$', 4, small),
-            ('m2_eta', 'o-', c_eta, r'Efficiency $\eta$', 6, small),
-            ('m2_tot', 'd--', c_tot, r'Total Ratio $\eta \times A$', 3, small_tot)):
+            (f'{method}_A', 's-', c_A, r'Averaging Factor $A$', 4, small),
+            (f'{method}_eta', 'o-', c_eta, r'Efficiency $\eta$', 6, small),
+            (f'{method}_tot', 'd--', c_tot, r'Total Ratio $\eta \times A$', 3, small_tot)):
         pos = (df_sorted[key] > 0).values
         _errorbar_pair(ax2, df_sorted, std_mask & pos, sp_mask & pos, key, fmt, c, lbl, z, **kw)
     ax2.set_xscale('log')
@@ -368,21 +372,23 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0):
     ax2.grid(True, which='both', linestyle='--', alpha=0.4)
 
     plt.tight_layout()
-    save_fig(fig2, "contrast_fig9b_velocity_decomposition_2panels")
+    save_fig(fig2, f"contrast_fig9b_velocity_decomposition_2panels{suffix}")
     plt.close(fig2)
 
 
 COMPARE_BEADS_DEFAULT = ('beads06um', 'beads20um')
 
 
-def _particle_boot_ci(p_means: pd.DataFrame, col: str, rng: np.random.Generator):
+def _particle_boot_ci(p_means: pd.DataFrame, col: str, rng: np.random.Generator,
+                      n_boot: int = N_BOOT):
     vals = p_means[col].values
     n = len(vals)
-    boots = vals[rng.integers(0, n, size=(N_BOOT, n))].mean(axis=1)
+    boots = vals[rng.integers(0, n, size=(n_boot, n))].mean(axis=1)
     return float(vals.mean()), float(np.percentile(boots, 2.5)), float(np.percentile(boots, 97.5))
 
 
-def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAULT):
+def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAULT,
+                         n_boot: int = N_BOOT):
     """2 サイズ (既定: beads06um vs beads20um) の速度量を比較する 3 パネル図.
 
     (a) 粒子平均速度 <v_par>, <|<u_Rc>|>, <|u|> の棒グラフ (粒子ブートストラップ 95% CI)
@@ -391,6 +397,14 @@ def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAU
     """
     setup_matplotlib()
     info = {b['name']: b for b in vcd.BEADS_INFO}
+    present = set(df_merged['bead_name'].unique())
+    bad = [b for b in bead_names if b not in info or b not in present]
+    if bad:
+        print(f"[warn] skipped unknown/empty beads: {bad} (available: {sorted(present & set(info))})")
+    bead_names = tuple(b for b in bead_names if b in info and b in present)
+    if not bead_names:
+        print('[warn] no valid beads to compare; size comparison skipped')
+        return pd.DataFrame()
     rng = np.random.default_rng(SEED)
     qty = [('v_parallel', r'$\langle v_\parallel\rangle$'),
            ('u_fp', r'$\langle|\langle\mathbf{u}\rangle_{R_c}|\rangle$'),
@@ -415,7 +429,7 @@ def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAU
         label = f"{b['label']} (N={len(p_means)} particles)"
 
         # (a) bar chart of means
-        stats = [_particle_boot_ci(p_means, c, rng) for c, _ in qty]
+        stats = [_particle_boot_ci(p_means, c, rng, n_boot) for c, _ in qty]
         x = np.arange(len(qty)) + (k - (len(bead_names) - 1) / 2) * width
         m = np.array([s[0] for s in stats])
         err = np.array([[s[0] - s[1] for s in stats], [s[2] - s[0] for s in stats]])
@@ -489,6 +503,8 @@ def main():
                     help='粒子数がこれ未満のビーズを low_n として警告・表に記録 (既定: 5)')
     ap.add_argument('--no-local-scalar', action='store_true',
                     help='<|u|> に粒子局所スカラー速さではなく velocities_mean.csv の全体平均を使う')
+    ap.add_argument('--method', choices=['m1', 'm2'], default='m2',
+                    help='図に用いる平均法: m2=フレームプール(既定), m1=粒子等重み (出力名に _m1)')
     ap.add_argument('--compare-only', action='store_true',
                     help='サイズ比較図のみ出力 (全サイズの分解統計を省略)')
     args = ap.parse_args()
@@ -497,7 +513,7 @@ def main():
     df_merged = load_and_preprocess_data(use_local_scalar=not args.no_local_scalar)
 
     if args.compare_only:
-        plot_size_comparison(df_merged, tuple(args.compare))
+        plot_size_comparison(df_merged, tuple(args.compare), n_boot=args.n_boot)
         print("All tasks completed successfully!")
         return
     print(f"Loaded {len(df_merged)} valid instantaneous measurements across "
@@ -517,13 +533,13 @@ def main():
         (OUT_DIRS[0] / "velocity_decomposition_identity_summary.pkl").read_bytes()
     )
 
-    print("\n=== Velocity Decomposition Summary (Method 2: Cluster Bootstrap) ===")
-    cols_show = ['diameter_um', 'rc_over_xi', 'n_particles', 'low_n', 'm2_A', 'm2_eta', 'm2_tot']
+    print(f"\n=== Velocity Decomposition Summary (method={args.method}) ===")
+    cols_show = ['diameter_um', 'rc_over_xi', 'n_particles', 'low_n'] + [f'{args.method}_{k}' for k in ('A', 'eta', 'tot')]
     print(df_res[cols_show].to_string(index=False, float_format=lambda x: f"{x:.4f}"))
 
     print("\nGenerating figures...")
-    plot_identity_decomposition(df_res, large_d_um=args.large_d)
-    plot_size_comparison(df_merged, tuple(args.compare))
+    plot_identity_decomposition(df_res, large_d_um=args.large_d, method=args.method)
+    plot_size_comparison(df_merged, tuple(args.compare), n_boot=args.n_boot)
     print("All tasks completed successfully!")
 
 
