@@ -137,8 +137,11 @@ def mark_instruction_completed(task_text: str):
         content = f.read()
     
     # - [ ] task_text を - [x] task_text に置換
+    # repl にバックスラッシュ（例: LaTeXの \xi）が含まれても置換エスケープエラーにならないよう関数を渡す
     pattern = re.compile(rf"^(-\s*\[\s*\]\s*{re.escape(task_text)})", re.MULTILINE)
-    new_content = pattern.sub(rf"- [x] {task_text} *(完了: {datetime.datetime.now().strftime('%H:%M')})*", content)
+    completed_time = datetime.datetime.now().strftime('%H:%M')
+    replacement_str = f"- [x] {task_text} *(完了: {completed_time})*"
+    new_content = pattern.sub(lambda _: replacement_str, content)
     
     with open(inst_file, "w", encoding="utf-8") as f:
         f.write(new_content)
