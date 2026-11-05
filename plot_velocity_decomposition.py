@@ -119,6 +119,8 @@ def load_and_preprocess_data(use_local_scalar=True):
                 df_vm['exp_dir'] = ed.name
                 vm_list.append(df_vm[['exp_dir', 'frame', 'mean_velocity']])
 
+    if not vm_list:
+        raise FileNotFoundError(f"velocities_mean.csv not found under {ROOT_DIR}")
     df_vm_all = pd.concat(vm_list, ignore_index=True)
     df_merged = pd.merge(df_inst, df_vm_all, on=['exp_dir', 'frame'], how='inner')
 
@@ -140,314 +142,194 @@ def load_and_preprocess_data(use_local_scalar=True):
     return df_merged
 
 
-def compute_decomposition_statistics(df_merged: pd.DataFrame):
-    np.random.seed(SEED)
+_QTY_COLS = ['v_parallel', 'u_fp', 'u_px']
+
+
+def _ratio_stats(num_boot: np.ndarray, den_boot: np.ndarray, point: float, prefix: str) -> Dict:
+    r = num_boot / den_boot
+    return {
+        prefix: point,
+        f'{prefix}_sem': float(np.std(r)),
+        f'{prefix}_ci95': (float(np.percentile(r, 2.5)), float(np.percentile(r, 97.5))),
+    }
+
+
+def compute_decomposition_statistics(df_merged: pd.DataFrame, n_boot: int = N_BOOT):
+    """各ビーズについて A, eta, eta*A を粒子ブートストラップで評価 (ベクトル化版).
+
+    Method 1: 粒子ごとの時間平均 -> 粒子を等重みでリサンプル
+    Method 2: クラスターブートストラップ (リサンプルした粒子の全フレームをプール).
+              プール平均 = sum(粒子ごとの和) / sum(粒子ごとのフレーム数) なので
+              concat 不要で (n_boot, n_p) の整数インデックスのみで計算できる.
+    """
+    rng = np.random.default_rng(SEED)
     results = []
 
     for b_item in vcd.BEADS_INFO:
         bname = b_item['name']
-        d_um = b_item['diameter_um']
-        r_um = b_item['radius_um']
         sub = df_merged[df_merged['bead_name'] == bname]
-        rc_xi = float(sub['rc_over_xi'].mean())
-        xi_val = float(sub['xi'].mean())
+        if sub.empty:
+            print(f"[warn] {bname}: no valid frames, skipped")
+            continue
 
-        p_ids = sub['unique_pid'].unique()
-        n_p = len(p_ids)
-        n_frames = len(sub)
+        grp = sub.groupby('unique_pid')[_QTY_COLS]
+        p_means = grp.mean().values          # (n_p, 3)
+        p_sums = grp.sum().values            # (n_p, 3)
+        p_counts = grp.size().values.astype(float)  # (n_p,)
+        n_p = len(p_counts)
 
-        # -------------------------------------------------------------
-        # Method 1: Particle-level time means -> Bootstrap over particles
-        # (Equal weight to each particle)
-        # -------------------------------------------------------------
-        p_means = sub.groupby('unique_pid')[['v_parallel', 'u_fp', 'u_px']].mean().reset_index()
-        m1_v_par = p_means['v_parallel'].mean()
-        m1_u_fp = p_means['u_fp'].mean()
-        m1_u_px = p_means['u_px'].mean()
+        idx = rng.integers(0, n_p, size=(n_boot, n_p))
 
-        m1_A_pt = m1_u_fp / m1_u_px
-        m1_eta_pt = m1_v_par / m1_u_fp
-        m1_tot_pt = m1_v_par / m1_u_px
+        # Method 1: equal weight per particle
+        m1 = p_means.mean(axis=0)
+        b1 = p_means[idx].mean(axis=1)       # (n_boot, 3)
 
-        boot_m1_A = []
-        boot_m1_eta = []
-        boot_m1_tot = []
-        p_indices = np.arange(n_p)
-        for _ in range(N_BOOT):
-            idx = np.random.choice(p_indices, size=n_p, replace=True)
-            samp = p_means.iloc[idx]
-            xm = samp['v_parallel'].mean()
-            ym = samp['u_fp'].mean()
-            zm = samp['u_px'].mean()
-            boot_m1_A.append(ym / zm)
-            boot_m1_eta.append(xm / ym)
-            boot_m1_tot.append(xm / zm)
-
-        # -------------------------------------------------------------
-        # Method 2: Cluster Bootstrap with frame pooling
-        # (Cluster bootstrap: frames aggregated per sampled particle)
-        # -------------------------------------------------------------
-        m2_v_par = sub['v_parallel'].mean()
-        m2_u_fp = sub['u_fp'].mean()
-        m2_u_px = sub['u_pixel' if 'u_pixel' in sub.columns else 'u_px'].mean()
-
-        m2_A_pt = m2_u_fp / m2_u_px
-        m2_eta_pt = m2_v_par / m2_u_fp
-        m2_tot_pt = m2_v_par / m2_u_px
-
-        p_dict = {pid: grp[['v_parallel', 'u_fp', 'u_px']].values for pid, grp in sub.groupby('unique_pid')}
-        boot_m2_A = []
-        boot_m2_eta = []
-        boot_m2_tot = []
-        for _ in range(N_BOOT):
-            samp_pids = np.random.choice(p_ids, size=n_p, replace=True)
-            arrs = [p_dict[pid] for pid in samp_pids]
-            cat = np.concatenate(arrs, axis=0)
-            xm = np.mean(cat[:, 0])
-            ym = np.mean(cat[:, 1])
-            zm = np.mean(cat[:, 2])
-            boot_m2_A.append(ym / zm)
-            boot_m2_eta.append(xm / ym)
-            boot_m2_tot.append(xm / zm)
+        # Method 2: frame-pooled cluster bootstrap
+        m2 = sub[_QTY_COLS].mean().values
+        b2 = p_sums[idx].sum(axis=1) / p_counts[idx].sum(axis=1)[:, None]
 
         rec = {
             'bead_name': bname,
-            'diameter_um': d_um,
-            'radius_um': r_um,
-            'xi_um': xi_val,
-            'rc_over_xi': rc_xi,
+            'diameter_um': b_item['diameter_um'],
+            'radius_um': b_item['radius_um'],
+            'xi_um': float(sub['xi'].mean()),
+            'rc_over_xi': float(sub['rc_over_xi'].mean()),
             'n_particles': n_p,
-            'n_frames': n_frames,
-            # Method 1
-            'm1_v_par': m1_v_par,
-            'm1_u_fp': m1_u_fp,
-            'm1_u_px': m1_u_px,
-            'm1_A': m1_A_pt,
-            'm1_A_sem': float(np.std(boot_m1_A)),
-            'm1_A_ci95': (float(np.percentile(boot_m1_A, 2.5)), float(np.percentile(boot_m1_A, 97.5))),
-            'm1_eta': m1_eta_pt,
-            'm1_eta_sem': float(np.std(boot_m1_eta)),
-            'm1_eta_ci95': (float(np.percentile(boot_m1_eta, 2.5)), float(np.percentile(boot_m1_eta, 97.5))),
-            'm1_tot': m1_tot_pt,
-            'm1_tot_sem': float(np.std(boot_m1_tot)),
-            'm1_tot_ci95': (float(np.percentile(boot_m1_tot, 2.5)), float(np.percentile(boot_m1_tot, 97.5))),
-            # Method 2
-            'm2_v_par': m2_v_par,
-            'm2_u_fp': m2_u_fp,
-            'm2_u_px': m2_u_px,
-            'm2_A': m2_A_pt,
-            'm2_A_sem': float(np.std(boot_m2_A)),
-            'm2_A_ci95': (float(np.percentile(boot_m2_A, 2.5)), float(np.percentile(boot_m2_A, 97.5))),
-            'm2_eta': m2_eta_pt,
-            'm2_eta_sem': float(np.std(boot_m2_eta)),
-            'm2_eta_ci95': (float(np.percentile(boot_m2_eta, 2.5)), float(np.percentile(boot_m2_eta, 97.5))),
-            'm2_tot': m2_tot_pt,
-            'm2_tot_sem': float(np.std(boot_m2_tot)),
-            'm2_tot_ci95': (float(np.percentile(boot_m2_tot, 2.5)), float(np.percentile(boot_m2_tot, 97.5))),
+            'n_frames': len(sub),
         }
+        for tag, pt, bt in (('m1', m1, b1), ('m2', m2, b2)):
+            v, f, u = pt
+            rec.update({f'{tag}_v_par': v, f'{tag}_u_fp': f, f'{tag}_u_px': u})
+            rec.update(_ratio_stats(bt[:, 1], bt[:, 2], f / u, f'{tag}_A'))
+            rec.update(_ratio_stats(bt[:, 0], bt[:, 1], v / f, f'{tag}_eta'))
+            rec.update(_ratio_stats(bt[:, 0], bt[:, 2], v / u, f'{tag}_tot'))
         results.append(rec)
 
     df_res = pd.DataFrame(results).sort_values('rc_over_xi').reset_index(drop=True)
     return df_res
 
 
-def plot_identity_decomposition(df_res: pd.DataFrame):
+def _errorbar_pair(ax, df: pd.DataFrame, std_mask, sp_mask, key: str, fmt: str, color: str,
+                   label: str, zorder: int, ms: float = 9, lw: float = 2.2, elw: float = 1.6,
+                   cap: float = 4.5, mew_open: float = 2.5, alpha: float = 1.0):
+    """標準ビーズ (塗り, 線で結ぶ) と大径ビーズ (白抜き) を同じ系列として描画. 95% CI 誤差棒."""
+    marker = fmt.rstrip('-:')
+    for mask, is_open in ((std_mask, False), (sp_mask, True)):
+        if not np.any(mask):
+            continue
+        d = df.loc[mask]
+        y = d[key].values
+        ci = np.array(d[f'{key}_ci95'].tolist())
+        yerr = np.vstack([y - ci[:, 0], ci[:, 1] - y])
+        kw = dict(color=color, ecolor=color, elinewidth=elw, capsize=cap, capthick=elw * 0.85,
+                  alpha=alpha)
+        if is_open:
+            ax.errorbar(d['rc_over_xi'], y, yerr=yerr, fmt=marker, mfc='white', mec=color,
+                        mew=mew_open, markersize=ms + 1, zorder=zorder + 1, **kw)
+        else:
+            ax.errorbar(d['rc_over_xi'], y, yerr=yerr, fmt=fmt, markersize=ms, linewidth=lw,
+                        label=label, zorder=zorder, **kw)
+
+
+def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0):
     setup_matplotlib()
+    from matplotlib.lines import Line2D
+
+    c_eta = '#D95F02'     # Mechanical coupling efficiency
+    c_A   = '#1B9E77'     # Footprint geometric averaging
+    c_tot = '#7570B3'     # Overall ratio eta * A
+
+    df_sorted = df_res.sort_values('rc_over_xi').reset_index(drop=True)
+    std_mask = (df_sorted['diameter_um'] < large_d_um).values
+    sp_mask = ~std_mask
+
+    # x 範囲・理論曲線はデータから決定
+    rc_all = df_sorted['rc_over_xi'].values
+    x_lo, x_hi = rc_all.min() / 1.8, rc_all.max() * 1.8
+    y_fine = np.logspace(np.log10(x_lo), np.log10(x_hi), 200)
+    phi_fine = calc_disk_polar_order(y_fine)
 
     # =========================================================================
     # Figure 9: Master Single-Panel Decomposition Plot
-    # Shows A (Geometric Averaging Factor), eta (Transfer Efficiency), and total
-    # vs Rc / xi on log-linear and log-log scale.
     # =========================================================================
     fig, ax = plt.subplots(figsize=(8.0, 6.2))
-
-    # Colors and markers
-    c_eta = '#D95F02'     # Red-orange: Mechanical coupling efficiency
-    c_A   = '#1B9E77'     # Green-teal: Footprint geometric averaging
-    c_tot = '#7570B3'     # Purple: Overall ratio eta * A
-
-    # Sort by rc_over_xi
-    df_sorted = df_res.sort_values('rc_over_xi')
-
-    # Points for standard beads (Rc/xi < 1.0) and 20um (Rc/xi > 1.0)
-    std_mask = df_sorted['diameter_um'] < 15.0
-    sp_mask  = df_sorted['diameter_um'] >= 15.0
-
-    rc_std = df_sorted.loc[std_mask, 'rc_over_xi'].values
-    rc_sp  = df_sorted.loc[sp_mask,  'rc_over_xi'].values
-
-    # Theoretical curve Phi(Rc/xi)
-    y_fine = np.logspace(np.log10(0.025), np.log10(1.8), 200)
-    phi_fine = calc_disk_polar_order(y_fine)
     ax.plot(y_fine, phi_fine, color=c_A, linestyle='--', linewidth=2.0, alpha=0.8,
             label=r'Theoretical spatial cancellation $\Phi(R_c/\xi)$', zorder=2)
+    _errorbar_pair(ax, df_sorted, std_mask, sp_mask, 'm2_A', 's-', c_A,
+                   r'$A = \frac{\langle|\langle\mathbf{u}\rangle_{R_c}|\rangle}{\langle|\mathbf{u}|\rangle_{R_c}}$ (Footprint Averaging / Polar Order)', 4)
+    _errorbar_pair(ax, df_sorted, std_mask, sp_mask, 'm2_eta', 'o-', c_eta,
+                   r'$\eta = \frac{\langle v_\parallel\rangle}{\langle|\langle\mathbf{u}\rangle_{R_c}|\rangle}$ (Transfer Efficiency: Non-averaging)', 6)
+    _errorbar_pair(ax, df_sorted, std_mask, sp_mask, 'm2_tot', 'd--', c_tot,
+                   r'$\frac{\langle v_\parallel\rangle}{\langle|\mathbf{u}|\rangle} = \eta \times A$ (Overall Transport Ratio)', 3,
+                   ms=8, lw=1.8, elw=1.4, cap=4.0, alpha=0.85)
 
-    # Plot A: Geometric Averaging Factor <|<u_Rc>|> / <|u|>
-    # Standard points
-    ax.errorbar(
-        rc_std, df_sorted.loc[std_mask, 'm2_A'],
-        yerr=[df_sorted.loc[std_mask, 'm2_A'] - df_sorted.loc[std_mask, 'm2_A_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[std_mask, 'm2_A_ci95'].apply(lambda x: x[1]) - df_sorted.loc[std_mask, 'm2_A']],
-        fmt='s-', color=c_A, ecolor=c_A, elinewidth=1.6, capsize=4.5, capthick=1.4,
-        markersize=9, linewidth=2.2, label=r'$A = \frac{\langle|\langle\mathbf{u}\rangle_{R_c}|\rangle}{\langle|\mathbf{u}|\rangle_{R_c}}$ (Footprint Averaging / Polar Order)',
-        zorder=4
-    )
-    # 20 um point (distinct open marker)
-    ax.errorbar(
-        rc_sp, df_sorted.loc[sp_mask, 'm2_A'],
-        yerr=[df_sorted.loc[sp_mask, 'm2_A'] - df_sorted.loc[sp_mask, 'm2_A_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[sp_mask, 'm2_A_ci95'].apply(lambda x: x[1]) - df_sorted.loc[sp_mask, 'm2_A']],
-        fmt='s', mfc='white', mec=c_A, mew=2.5, color=c_A, ecolor=c_A, elinewidth=1.6, capsize=4.5, capthick=1.4,
-        markersize=10, zorder=5
-    )
-
-    # Plot eta: Coupling Efficiency <v_parallel> / <|<u_Rc>|>
-    ax.errorbar(
-        rc_std, df_sorted.loc[std_mask, 'm2_eta'],
-        yerr=[df_sorted.loc[std_mask, 'm2_eta'] - df_sorted.loc[std_mask, 'm2_eta_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[std_mask, 'm2_eta_ci95'].apply(lambda x: x[1]) - df_sorted.loc[std_mask, 'm2_eta']],
-        fmt='o-', color=c_eta, ecolor=c_eta, elinewidth=1.6, capsize=4.5, capthick=1.4,
-        markersize=9, linewidth=2.2, label=r'$\eta = \frac{\langle v_\parallel\rangle}{\langle|\langle\mathbf{u}\rangle_{R_c}|\rangle}$ (Transfer Efficiency: Non-averaging)',
-        zorder=6
-    )
-    ax.errorbar(
-        rc_sp, df_sorted.loc[sp_mask, 'm2_eta'],
-        yerr=[df_sorted.loc[sp_mask, 'm2_eta'] - df_sorted.loc[sp_mask, 'm2_eta_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[sp_mask, 'm2_eta_ci95'].apply(lambda x: x[1]) - df_sorted.loc[sp_mask, 'm2_eta']],
-        fmt='o', mfc='white', mec=c_eta, mew=2.5, color=c_eta, ecolor=c_eta, elinewidth=1.6, capsize=4.5, capthick=1.4,
-        markersize=10, zorder=7
-    )
-
-    # Plot Overall Ratio: <v_parallel> / <|u|> = eta * A
-    ax.errorbar(
-        rc_std, df_sorted.loc[std_mask, 'm2_tot'],
-        yerr=[df_sorted.loc[std_mask, 'm2_tot'] - df_sorted.loc[std_mask, 'm2_tot_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[std_mask, 'm2_tot_ci95'].apply(lambda x: x[1]) - df_sorted.loc[std_mask, 'm2_tot']],
-        fmt='d--', color=c_tot, ecolor=c_tot, elinewidth=1.4, capsize=4.0, capthick=1.2,
-        markersize=8, linewidth=1.8, label=r'$\frac{\langle v_\parallel\rangle}{\langle|\mathbf{u}|\rangle} = \eta \times A$ (Overall Transport Ratio)',
-        alpha=0.85, zorder=3
-    )
-    ax.errorbar(
-        rc_sp, df_sorted.loc[sp_mask, 'm2_tot'],
-        yerr=[df_sorted.loc[sp_mask, 'm2_tot'] - df_sorted.loc[sp_mask, 'm2_tot_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[sp_mask, 'm2_tot_ci95'].apply(lambda x: x[1]) - df_sorted.loc[sp_mask, 'm2_tot']],
-        fmt='d', mfc='white', mec=c_tot, mew=2.5, color=c_tot, ecolor=c_tot, elinewidth=1.4, capsize=4.0, capthick=1.2,
-        markersize=9, zorder=4
-    )
-
-    # Reference lines
     ax.axhline(1.0, color='gray', linestyle=':', linewidth=1.2, alpha=0.7, label='Ideal Perfect Coupling ($y = 1$)')
     ax.axhline(0.0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
 
-    # Annotate 20 um bead
-    ax.annotate(
-        r'20 $\mu\mathrm{m}$' + f'\n($R_c/\\xi=2.56$, $N=3$)\n' + r'$\eta = 0.02 \approx 0$',
-        xy=(rc_sp[0], df_sorted.loc[sp_mask, 'm2_eta'].values[0]),
-        xytext=(rc_sp[0] * 0.45, 0.22),
-        arrowprops=dict(arrowstyle='->', lw=1.3, color='#333333', connectionstyle='arc3,rad=-0.15'),
-        fontsize=10.5, fontweight='semibold',
-        bbox=dict(boxstyle='round,pad=0.35', fc='#FFF8EE', ec='#D95F02', alpha=0.9, lw=1.2)
-    )
+    # 大径ビーズの注記 (値はデータから算出; 以前はハードコード)
+    if sp_mask.any():
+        r = df_sorted.loc[sp_mask].iloc[-1]
+        ax.annotate(
+            f"{r['diameter_um']:g} " + r'$\mu\mathrm{m}$' +
+            f"\n($R_c/\\xi={r['rc_over_xi']:.2f}$, $N={int(r['n_particles'])}$)\n" +
+            f"$\\eta = {r['m2_eta']:.2f}$",
+            xy=(r['rc_over_xi'], r['m2_eta']),
+            xytext=(r['rc_over_xi'] * 0.45, 0.22),
+            arrowprops=dict(arrowstyle='->', lw=1.3, color='#333333', connectionstyle='arc3,rad=-0.15'),
+            fontsize=10.5, fontweight='semibold',
+            bbox=dict(boxstyle='round,pad=0.35', fc='#FFF8EE', ec=c_eta, alpha=0.9, lw=1.2)
+        )
 
-    # Annotate A vs eta contrast
     ax.text(
         0.05, 0.92,
         'Exact Identity (No Fitting Required):\n'
         r'$\frac{\langle v_\parallel\rangle}{\langle|\mathbf{u}|\rangle_{R_c}} = \eta \times A$' + '\n\n'
         r'$\bullet\ A \to 1$ at small $R_c/\xi$, follows theory $\Phi$' + '\n'
         r'$\bullet\ \eta \to 0$ as $R_c/\xi > 1$ (Decoupling)',
-        transform=ax.transAxes,
-        fontsize=10.5, verticalalignment='top',
+        transform=ax.transAxes, fontsize=10.5, verticalalignment='top',
         bbox=dict(boxstyle='round,pad=0.5', fc='#F4F6F9', ec='#334155', alpha=0.95, lw=1.2)
     )
 
-    # Labels and scales
     ax.set_xscale('log')
-    ax.set_xlim(0.04, 4.0)
+    ax.set_xlim(x_lo, x_hi)
     ax.set_ylim(-0.10, 1.45)
     ax.set_xlabel(r'Normalized Cargo Size $R_c / \xi$', fontsize=14, labelpad=8)
     ax.set_ylabel('Velocity Ratio [-]', fontsize=14, labelpad=8)
     ax.set_title(r'Exact Velocity Decomposition: $\frac{\langle v_\parallel\rangle}{\langle|\mathbf{u}|\rangle_{R_c}} = \eta \times A$',
                  fontsize=15, pad=12, fontweight='bold')
 
-    # Legend
     handles, labels = ax.get_legend_handles_labels()
-    # Add dummy handle for 20um open marker explanation
-    from matplotlib.lines import Line2D
-    dummy_open = Line2D([0], [0], marker='o', color='w', markeredgecolor='black', markeredgewidth=2.0,
-                        markersize=9, label=r'Open: $20\,\mu\mathrm{m}$ Cargo ($R_c > \xi$)')
-    handles.append(dummy_open)
-    labels.append(r'Open: $20\,\mu\mathrm{m}$ Cargo ($R_c > \xi$)')
-
+    if sp_mask.any():
+        open_lbl = rf'Open: $\geq{large_d_um:g}\,\mu\mathrm{{m}}$ Cargo ($R_c > \xi$)'
+        handles.append(Line2D([0], [0], marker='o', color='w', markeredgecolor='black',
+                              markeredgewidth=2.0, markersize=9, label=open_lbl))
+        labels.append(open_lbl)
     ax.legend(handles=handles, labels=labels, loc='upper right', frameon=True,
               framealpha=0.95, facecolor='white', edgecolor='#CCCCCC', fontsize=10.0)
-
     ax.grid(True, which='both', linestyle='--', alpha=0.4)
     plt.tight_layout()
-
     save_fig(fig, "contrast_fig9_velocity_decomposition_identity")
     plt.close(fig)
 
     # =========================================================================
-    # Figure 9b: 2-Panel Comprehensive Edition (Linear vs Log-Log & Method Comparison)
+    # Figure 9b: 2-Panel (Linear vs Log-Log)
     # =========================================================================
     fig2, (ax1, ax2) = plt.subplots(1, 2, figsize=(14.5, 5.8))
+    small = dict(ms=8, lw=2.0, elw=1.6, cap=4, mew_open=2.2)
+    small_tot = dict(ms=7, lw=1.6, elw=1.4, cap=3.5, mew_open=2.2, alpha=0.85)
 
-    # Panel 1: Linear scale (Identical to main Fig 9)
     ax1.plot(y_fine, phi_fine, color=c_A, linestyle='--', linewidth=1.8, alpha=0.8,
              label=r'Theory $\Phi(R_c/\xi)$', zorder=2)
-    ax1.errorbar(
-        rc_std, df_sorted.loc[std_mask, 'm2_A'],
-        yerr=[df_sorted.loc[std_mask, 'm2_A'] - df_sorted.loc[std_mask, 'm2_A_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[std_mask, 'm2_A_ci95'].apply(lambda x: x[1]) - df_sorted.loc[std_mask, 'm2_A']],
-        fmt='s-', color=c_A, ecolor=c_A, elinewidth=1.6, capsize=4, capthick=1.2,
-        markersize=8, linewidth=2.0, label=r'$A = \langle|\langle\mathbf{u}\rangle_{R_c}|\rangle / \langle|\mathbf{u}|\rangle_{R_c}$',
-        zorder=4
-    )
-    ax1.errorbar(
-        rc_sp, df_sorted.loc[sp_mask, 'm2_A'],
-        yerr=[df_sorted.loc[sp_mask, 'm2_A'] - df_sorted.loc[sp_mask, 'm2_A_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[sp_mask, 'm2_A_ci95'].apply(lambda x: x[1]) - df_sorted.loc[sp_mask, 'm2_A']],
-        fmt='s', mfc='white', mec=c_A, mew=2.2, color=c_A, ecolor=c_A, elinewidth=1.6, capsize=4, capthick=1.2,
-        markersize=9, zorder=5
-    )
-
-    ax1.errorbar(
-        rc_std, df_sorted.loc[std_mask, 'm2_eta'],
-        yerr=[df_sorted.loc[std_mask, 'm2_eta'] - df_sorted.loc[std_mask, 'm2_eta_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[std_mask, 'm2_eta_ci95'].apply(lambda x: x[1]) - df_sorted.loc[std_mask, 'm2_eta']],
-        fmt='o-', color=c_eta, ecolor=c_eta, elinewidth=1.6, capsize=4, capthick=1.2,
-        markersize=8, linewidth=2.0, label=r'$\eta = \langle v_\parallel\rangle / \langle|\langle\mathbf{u}\rangle_{R_c}|\rangle$ (Efficiency)',
-        zorder=6
-    )
-    ax1.errorbar(
-        rc_sp, df_sorted.loc[sp_mask, 'm2_eta'],
-        yerr=[df_sorted.loc[sp_mask, 'm2_eta'] - df_sorted.loc[sp_mask, 'm2_eta_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[sp_mask, 'm2_eta_ci95'].apply(lambda x: x[1]) - df_sorted.loc[sp_mask, 'm2_eta']],
-        fmt='o', mfc='white', mec=c_eta, mew=2.2, color=c_eta, ecolor=c_eta, elinewidth=1.6, capsize=4, capthick=1.2,
-        markersize=9, zorder=7
-    )
-
-    ax1.errorbar(
-        rc_std, df_sorted.loc[std_mask, 'm2_tot'],
-        yerr=[df_sorted.loc[std_mask, 'm2_tot'] - df_sorted.loc[std_mask, 'm2_tot_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[std_mask, 'm2_tot_ci95'].apply(lambda x: x[1]) - df_sorted.loc[std_mask, 'm2_tot']],
-        fmt='d--', color=c_tot, ecolor=c_tot, elinewidth=1.4, capsize=3.5, capthick=1.0,
-        markersize=7, linewidth=1.6, label=r'$\eta \times A$ (Total Transport Ratio)',
-        alpha=0.85, zorder=3
-    )
-    ax1.errorbar(
-        rc_sp, df_sorted.loc[sp_mask, 'm2_tot'],
-        yerr=[df_sorted.loc[sp_mask, 'm2_tot'] - df_sorted.loc[sp_mask, 'm2_tot_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[sp_mask, 'm2_tot_ci95'].apply(lambda x: x[1]) - df_sorted.loc[sp_mask, 'm2_tot']],
-        fmt='d', mfc='white', mec=c_tot, mew=2.2, color=c_tot, ecolor=c_tot, elinewidth=1.4, capsize=3.5, capthick=1.0,
-        markersize=8, zorder=4
-    )
-
+    _errorbar_pair(ax1, df_sorted, std_mask, sp_mask, 'm2_A', 's-', c_A,
+                   r'$A = \langle|\langle\mathbf{u}\rangle_{R_c}|\rangle / \langle|\mathbf{u}|\rangle_{R_c}$', 4, **small)
+    _errorbar_pair(ax1, df_sorted, std_mask, sp_mask, 'm2_eta', 'o-', c_eta,
+                   r'$\eta = \langle v_\parallel\rangle / \langle|\langle\mathbf{u}\rangle_{R_c}|\rangle$ (Efficiency)', 6, **small)
+    _errorbar_pair(ax1, df_sorted, std_mask, sp_mask, 'm2_tot', 'd--', c_tot,
+                   r'$\eta \times A$ (Total Transport Ratio)', 3, **small_tot)
     ax1.axhline(1.0, color='gray', linestyle=':', linewidth=1.2, alpha=0.7)
     ax1.axhline(0.0, color='black', linestyle='-', linewidth=0.8, alpha=0.5)
     ax1.set_xscale('log')
-    ax1.set_xlim(0.04, 4.0)
+    ax1.set_xlim(x_lo, x_hi)
     ax1.set_ylim(-0.10, 1.45)
     ax1.set_xlabel(r'Normalized Cargo Size $R_c / \xi$', fontsize=13)
     ax1.set_ylabel('Velocity Ratio [-]', fontsize=13)
@@ -455,63 +337,17 @@ def plot_identity_decomposition(df_res: pd.DataFrame):
     ax1.legend(loc='upper right', frameon=True, framealpha=0.9, fontsize=9.5)
     ax1.grid(True, which='both', linestyle='--', alpha=0.4)
 
-    # Panel 2: Log-Log Scale (Highlighting Power-Law Decay of eta vs A)
-    # Only positive values plotted on log-log
-    pos_mask = df_sorted['m2_eta'] > 0
-    pos_std = std_mask & pos_mask
-    pos_sp  = sp_mask & pos_mask
-
-    ax2.errorbar(
-        df_sorted.loc[pos_std, 'rc_over_xi'], df_sorted.loc[pos_std, 'm2_A'],
-        yerr=[df_sorted.loc[pos_std, 'm2_A'] - df_sorted.loc[pos_std, 'm2_A_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[pos_std, 'm2_A_ci95'].apply(lambda x: x[1]) - df_sorted.loc[pos_std, 'm2_A']],
-        fmt='s-', color=c_A, ecolor=c_A, elinewidth=1.6, capsize=4, capthick=1.2,
-        markersize=8, linewidth=2.0, label=r'Averaging Factor $A$', zorder=4
-    )
-    if pos_sp.any():
-        ax2.errorbar(
-            df_sorted.loc[pos_sp, 'rc_over_xi'], df_sorted.loc[pos_sp, 'm2_A'],
-            yerr=[df_sorted.loc[pos_sp, 'm2_A'] - df_sorted.loc[pos_sp, 'm2_A_ci95'].apply(lambda x: x[0]),
-                  df_sorted.loc[pos_sp, 'm2_A_ci95'].apply(lambda x: x[1]) - df_sorted.loc[pos_sp, 'm2_A']],
-            fmt='s', mfc='white', mec=c_A, mew=2.2, color=c_A, ecolor=c_A, elinewidth=1.6, capsize=4, capthick=1.2,
-            markersize=9, zorder=5
-        )
-
-    ax2.errorbar(
-        df_sorted.loc[pos_std, 'rc_over_xi'], df_sorted.loc[pos_std, 'm2_eta'],
-        yerr=[df_sorted.loc[pos_std, 'm2_eta'] - df_sorted.loc[pos_std, 'm2_eta_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[pos_std, 'm2_eta_ci95'].apply(lambda x: x[1]) - df_sorted.loc[pos_std, 'm2_eta']],
-        fmt='o-', color=c_eta, ecolor=c_eta, elinewidth=1.6, capsize=4, capthick=1.2,
-        markersize=8, linewidth=2.0, label=r'Efficiency $\eta$', zorder=6
-    )
-    if pos_sp.any():
-        ax2.errorbar(
-            df_sorted.loc[pos_sp, 'rc_over_xi'], df_sorted.loc[pos_sp, 'm2_eta'],
-            yerr=[df_sorted.loc[pos_sp, 'm2_eta'] - df_sorted.loc[pos_sp, 'm2_eta_ci95'].apply(lambda x: x[0]),
-                  df_sorted.loc[pos_sp, 'm2_eta_ci95'].apply(lambda x: x[1]) - df_sorted.loc[pos_sp, 'm2_eta']],
-            fmt='o', mfc='white', mec=c_eta, mew=2.2, color=c_eta, ecolor=c_eta, elinewidth=1.6, capsize=4, capthick=1.2,
-            markersize=9, zorder=7
-        )
-
-    ax2.errorbar(
-        df_sorted.loc[pos_std, 'rc_over_xi'], df_sorted.loc[pos_std, 'm2_tot'],
-        yerr=[df_sorted.loc[pos_std, 'm2_tot'] - df_sorted.loc[pos_std, 'm2_tot_ci95'].apply(lambda x: x[0]),
-              df_sorted.loc[pos_std, 'm2_tot_ci95'].apply(lambda x: x[1]) - df_sorted.loc[pos_std, 'm2_tot']],
-        fmt='d--', color=c_tot, ecolor=c_tot, elinewidth=1.4, capsize=3.5, capthick=1.0,
-        markersize=7, linewidth=1.6, label=r'Total Ratio $\eta \times A$', alpha=0.85, zorder=3
-    )
-    if pos_sp.any():
-        ax2.errorbar(
-            df_sorted.loc[pos_sp, 'rc_over_xi'], df_sorted.loc[pos_sp, 'm2_tot'],
-            yerr=[df_sorted.loc[pos_sp, 'm2_tot'] - df_sorted.loc[pos_sp, 'm2_tot_ci95'].apply(lambda x: x[0]),
-                  df_sorted.loc[pos_sp, 'm2_tot_ci95'].apply(lambda x: x[1]) - df_sorted.loc[pos_sp, 'm2_tot']],
-            fmt='d', mfc='white', mec=c_tot, mew=2.2, color=c_tot, ecolor=c_tot, elinewidth=1.4, capsize=3.5, capthick=1.0,
-            markersize=8, zorder=4
-        )
-
+    # Panel 2: log-log — 系列ごとに正値のみ (以前は eta>0 のマスクを全系列に流用していた)
+    ax2.plot(y_fine, phi_fine, color=c_A, linestyle='--', linewidth=1.5, alpha=0.6, zorder=2)
+    for key, fmt, c, lbl, z, kw in (
+            ('m2_A', 's-', c_A, r'Averaging Factor $A$', 4, small),
+            ('m2_eta', 'o-', c_eta, r'Efficiency $\eta$', 6, small),
+            ('m2_tot', 'd--', c_tot, r'Total Ratio $\eta \times A$', 3, small_tot)):
+        pos = (df_sorted[key] > 0).values
+        _errorbar_pair(ax2, df_sorted, std_mask & pos, sp_mask & pos, key, fmt, c, lbl, z, **kw)
     ax2.set_xscale('log')
     ax2.set_yscale('log')
-    ax2.set_xlim(0.04, 4.0)
+    ax2.set_xlim(x_lo, x_hi)
     ax2.set_ylim(0.015, 1.8)
     ax2.set_xlabel(r'Normalized Cargo Size $R_c / \xi$', fontsize=13)
     ax2.set_ylabel('Velocity Ratio [-] (Log Scale)', fontsize=13)
@@ -634,6 +470,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--compare', nargs='+', default=list(COMPARE_BEADS_DEFAULT),
                     help='比較するビーズ名 (既定: beads06um beads20um)')
+    ap.add_argument('--n-boot', type=int, default=N_BOOT, help=f'ブートストラップ回数 (既定: {N_BOOT})')
+    ap.add_argument('--large-d', type=float, default=15.0,
+                    help='白抜き記号で示す大径ビーズの直径閾値 [um] (既定: 15)')
     ap.add_argument('--compare-only', action='store_true',
                     help='サイズ比較図のみ出力 (全サイズの分解統計を省略)')
     args = ap.parse_args()
@@ -645,10 +484,11 @@ def main():
         plot_size_comparison(df_merged, tuple(args.compare))
         print("All tasks completed successfully!")
         return
-    print(f"Loaded {len(df_merged)} valid instantaneous measurements across 22 experiments.")
+    print(f"Loaded {len(df_merged)} valid instantaneous measurements across "
+          f"{df_merged['exp_dir'].nunique()} experiments.")
 
-    print("Computing decomposition statistics & particle bootstrap (N=2000)...")
-    df_res = compute_decomposition_statistics(df_merged)
+    print(f"Computing decomposition statistics & particle bootstrap (N={args.n_boot})...")
+    df_res = compute_decomposition_statistics(df_merged, n_boot=args.n_boot)
 
     # Save summary tables
     for d in OUT_DIRS:
@@ -664,7 +504,7 @@ def main():
     print(df_res[cols_show].to_string(index=False, float_format=lambda x: f"{x:.4f}"))
 
     print("\nGenerating figures...")
-    plot_identity_decomposition(df_res)
+    plot_identity_decomposition(df_res, large_d_um=args.large_d)
     plot_size_comparison(df_merged, tuple(args.compare))
     print("All tasks completed successfully!")
 
