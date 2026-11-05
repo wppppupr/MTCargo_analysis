@@ -494,7 +494,7 @@ def _particle_boot_paired(p_means: pd.DataFrame, cols: List[str], rng: np.random
 
 
 def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAULT,
-                         n_boot: int = N_BOOT):
+                         n_boot: int = N_BOOT, seed: int = SEED):
     """2 サイズ (既定: beads06um vs beads20um) の速度量を比較する 3 パネル図.
 
     (a) 粒子平均速度 <v_par>, <|<u_Rc>|>, <|u|> の棒グラフ (粒子ブートストラップ 95% CI)
@@ -511,7 +511,7 @@ def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAU
     if not bead_names:
         print('[warn] no valid beads to compare; size comparison skipped')
         return pd.DataFrame()
-    rng = np.random.default_rng(SEED)
+    rng = np.random.default_rng(seed)
     qty = [('v_parallel', r'$\langle v_\parallel\rangle$'),
            ('u_fp', r'$\langle|\langle\mathbf{u}\rangle_{R_c}|\rangle$'),
            ('u_px', r'$\langle|\mathbf{u}|\rangle$')]
@@ -624,7 +624,7 @@ def main():
     ap.add_argument('--no-mark-low-n', action='store_true',
                     help='low_n ビーズの破線リング・N 注記を描かない')
     ap.add_argument('--seed', type=int, default=SEED,
-                    help=f'分解統計ブートストラップの乱数シード (既定: {SEED}; CI の再現性確認用)')
+                    help=f'ブートストラップ (分解統計・サイズ比較) の乱数シード (既定: {SEED}; CI の再現性確認用)')
     ap.add_argument('--compare-only', action='store_true',
                     help='サイズ比較図のみ出力 (全サイズの分解統計を省略)')
     args = ap.parse_args()
@@ -637,7 +637,7 @@ def main():
     df_merged = load_and_preprocess_data(use_local_scalar=not args.no_local_scalar)
 
     if args.compare_only:
-        plot_size_comparison(df_merged, tuple(args.compare), n_boot=args.n_boot)
+        plot_size_comparison(df_merged, tuple(args.compare), n_boot=args.n_boot, seed=args.seed)
         print("All tasks completed successfully!")
         return
     print(f"Loaded {len(df_merged)} valid instantaneous measurements across "
@@ -664,7 +664,7 @@ def main():
     print("\nGenerating figures...")
     plot_identity_decomposition(df_res, large_d_um=args.large_d, method=args.method,
                                 mark_low_n=not args.no_mark_low_n)
-    plot_size_comparison(df_merged, tuple(args.compare), n_boot=args.n_boot)
+    plot_size_comparison(df_merged, tuple(args.compare), n_boot=args.n_boot, seed=args.seed)
     print("All tasks completed successfully!")
 
 
