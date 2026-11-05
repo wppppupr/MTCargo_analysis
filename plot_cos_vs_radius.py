@@ -825,7 +825,13 @@ def plot_cos_vs_window_6panels(
             ax.set_title(f"{lbl}", fontsize=14, fontweight='bold')
             continue
 
-        sub = sub.copy()
+        # 貨物下のマスク領域 (R < R_c) を除外し、貨物外側の有効な窓領域のみを抽出
+        sub = sub[sub['window_radius_um'] >= r_c * 0.95].copy()
+        if sub.empty:
+            ax.text(0.5, 0.5, "No Valid Window Data (>= R_c)", ha='center', va='center', transform=ax.transAxes, fontsize=14)
+            ax.set_title(f"{lbl}", fontsize=14, fontweight='bold')
+            continue
+
         sub['unique_pid'] = sub['exp_dir'].astype(str) + '_' + sub['particle'].astype(str)
         n_p_total = sub['unique_pid'].nunique()
         n_e_total = sub['exp_dir'].nunique()
