@@ -318,6 +318,9 @@ def main():
     parser.add_argument('--tau_resolve_factor', type=float, default=3.0,
                         help="Exponential-fit tau is treated as resolved only if tau <= factor * max(Delta t) "
                              "and tau_err < tau; otherwise a model-free 2-sigma lower bound is plotted (default 3)")
+    parser.add_argument('--tau_life', type=float, default=128.0,
+                        help="Flow-field lifetime tau_life [s] drawn as a reference line on the tau-vs-diameter "
+                             "figure (default 128). Merged with the observation-window line if they coincide.")
     args = parser.parse_args()
 
     if args.delta_t is not None:
@@ -641,7 +644,7 @@ def main():
         if len(df_metric) else df_metric
     if len(df_tau):
         fig, ax = plt.subplots(figsize=(6.5, 4.8))
-        dt_max_all = max(d for d in DELTA_T_SEC_LIST if d > 0) if any(d > 0 for d in DELTA_T_SEC_LIST) else 128
+        dt_max_all = max(d for d in DELTA_T_SEC_LIST if d > 0) if any(d > 0 for d in DELTA_T_SEC_LIST) else args.tau_life
         y_cap = args.tau_resolve_factor * dt_max_all
         for b in BEADS_INFO:
             r = df_tau[df_tau['bead_name'] == b['name']]
@@ -659,16 +662,30 @@ def main():
                 y = min(lo, y_cap)  # inf (減衰が有意でない) は表示上限にクリップ
                 ax.errorbar(b['diameter_um'], y, yerr=[[0], [0.35 * y]], lolims=True, fmt=b['marker'],
                             mfc='white', color=b['color'], markersize=8.0, capsize=0, label=b['label'] + r' ($\geq$)')
-        ax.axhline(128, color='gray', ls=':', lw=1.2, label=r'$\tau_{\mathrm{life}} \approx 128\,\mathrm{s}$')
-        ax.axhline(dt_max_all, color='k', ls='-.', lw=0.9, alpha=0.6,
-                   label=r'Observation window $\Delta t_{\max}$')
+        tau_life_lbl = rf'$\tau_{{\mathrm{{life}}}} \approx {args.tau_life:g}\,\mathrm{{s}}$'
+        if np.isclose(args.tau_life, dt_max_all, rtol=0.02):
+            # 2 本の水平線が完全に重なり凡例だけ 2 つになるのを避け、1 本にまとめる
+            ax.axhline(dt_max_all, color='gray', ls=':', lw=1.4,
+                       label=tau_life_lbl + r' $=$ window $\Delta t_{\max}$')
+        else:
+            ax.axhline(args.tau_life, color='gray', ls=':', lw=1.2, label=tau_life_lbl)
+            ax.axhline(dt_max_all, color='k', ls='-.', lw=0.9, alpha=0.6,
+                       label=rf'Observation window $\Delta t_{{\max}} = {dt_max_all:g}\,\mathrm{{s}}$')
+        # 分解可能上限 (factor * Delta t_max) より上は未分解領域として薄く塗る
+        ax.axhspan(y_cap, y_cap * 1.6, color='lightgray', alpha=0.35, zorder=0, lw=0,
+                   label=rf'Unresolvable ($\tau > {args.tau_resolve_factor:g}\,\Delta t_{{\max}}$)')
         ax.set_xscale('log')
         ax.set_xlabel(r'Bead diameter $d$ [$\mu\mathrm{m}$]')
         ax.set_ylabel(r'Relaxation time $\tau$ of slowdown depth [$\mathrm{s}$]')
         ax.set_title(r'Pre-arrival slowdown relaxation time vs cargo size')
-        ax.text(0.02, 0.02, r'Open + arrow: unresolved fit $\rightarrow$ $2\sigma$ lower bound from $D(\Delta t_{\max})/D(0)$',
-                transform=ax.transAxes, fontsize=8.0, color='dimgray')
-        ax.legend(loc='best', fontsize=8.0)
+        ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f'{v:g}'))
+        ax.xaxis.set_minor_formatter(ticker.NullFormatter())
+        d_plotted = sorted(b['diameter_um'] for b in BEADS_INFO if b['name'] in set(df_tau['bead_name']))
+        ax.set_xticks(d_plotted)
+        ax.set_xlim(d_plotted[0] / 1.25, d_plotted[-1] * 1.25)
+        ax.text(0.02, 0.97, r'Open + arrow: unresolved fit' '\n' r'$\rightarrow$ $2\sigma$ lower bound from $D(\Delta t_{\max})/D(0)$',
+                transform=ax.transAxes, va='top', fontsize=8.0, color='dimgray')
+        ax.legend(loc='upper right', fontsize=8.0)
         ax.grid(True, which='both')
         save_fig(fig, f"cargo_slowdown_tau_vs_diameter{suffix}")
         plt.close(fig)
