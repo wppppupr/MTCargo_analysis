@@ -368,7 +368,8 @@ def plot_fig1_coupling_spectrum(df_inst: pd.DataFrame, null_results: dict):
     ax_b.plot(rc_xi_arr, cos_i_arr, color='black', linewidth=1.5, linestyle='-', alpha=0.6, zorder=4)
 
     ax_b.axvline(1.0, color='gray', linestyle='--', linewidth=1.2, alpha=0.7)
-    ax_b.text(1.05, 0.40, r'$R_c = \xi$', fontsize=13, color='gray', fontweight='bold')
+    # 右上は凡例が占有するため、ラベルは臨界線の左側 (データの無い上部領域) に右寄せで配置
+    ax_b.text(0.95, 0.40, r'$R_c = \xi$', fontsize=13, color='gray', fontweight='bold', ha='right')
 
     ax_b.set_xscale('log')
     ax_b.set_xlim(0.04, 4.0)
