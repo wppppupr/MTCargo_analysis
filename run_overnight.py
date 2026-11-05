@@ -28,7 +28,8 @@ CONFIG = {
     "REPORT_FILE": Path(__file__).resolve().parent / "MORNING_REPORT.md",
     "INSTRUCTION_FILE": Path(__file__).resolve().parent / "OVERNIGHT_INSTRUCTION.md",
     "CLAUDE_CMD": "/home/sasaki/.local/bin/claude",
-    "AGY_CMD": "/snap/antigravity-cli/24/bin/agy"
+    "AGY_CMD": "/snap/antigravity-cli/24/bin/agy",
+    "COOLDOWN_HISTORY_LEN": 4   # 直近何回のイテレーションで触ったファイルを再選択禁止にするか
 }
 
 
@@ -81,7 +82,7 @@ def call_claude_code(prompt: str, timeout: int = 400) -> tuple[int, str]:
     return run_cmd(cmd, timeout=timeout)
 
 
-def call_gemini(prompt: str, timeout: int = 300) -> tuple[int, str]:
+def call_gemini(prompt: str, timeout: int = 120) -> tuple[int, str]:
     """
     Antigravity CLI (Gemini) を呼び出して物理的考察を取得
     """
@@ -91,8 +92,9 @@ def call_gemini(prompt: str, timeout: int = 300) -> tuple[int, str]:
     ]
     log(f"✨ Gemini 呼び出し中... (Prompt長: {len(prompt)}文字)")
     code, out = run_cmd(cmd, timeout=timeout)
-    if code != 0:
-        log(f"⚠️ Gemini CLI呼び出しスキップまたは警告 (code: {code})")
+    if code != 0 or "Waiting for authentication" in out:
+        log(f"⚠️ Gemini CLI呼び出しスキップ (認証待ちまたはエラー code: {code})")
+        return code, "⚠️ Gemini認証待ちのためスキップ（ターミナルで agy -p 'hi' で事前認証すると有効化されます）"
     return code, out
 
 
@@ -188,10 +190,32 @@ def append_to_morning_report(entry: str):
         f.write(entry + "\n\n")
 
 
-def execute_cycle(iteration: int, custom_instruction: str = None) -> dict:
+def get_candidate_scripts(cooldown_files: list[str]) -> list[str]:
+    """
+    自律改善モードで選定可能な主要解析スクリプト一覧を取得（クールダウン中のファイルを除外）
+    """
+    workdir = CONFIG["WORKDIR"]
+    candidates = []
+    # 主要な解析・プロットスクリプトのプレフィックス
+    patterns = ["plot_*.py", "calc_*.py", "MSD.py", "MSAD.py", "contrast_analysis.py", 
+                "displacement_analysis.py", "spatial_heterogeneity_analysis.py",
+                "angular_correlation.py", "benchmark_velocity_methods.py"]
+    
+    cooldown_set = set(cooldown_files)
+    for pat in patterns:
+        for p in workdir.glob(pat):
+            fname = p.name
+            if fname not in cooldown_set and not fname.startswith("test_"):
+                candidates.append(fname)
+    return sorted(candidates)
+
+
+def execute_cycle(iteration: int, custom_instruction: str = None, cooldown_files: list[str] = None) -> tuple[dict, list[str]]:
     """
     1イテレーションの実行サイクル
     """
+    if cooldown_files is None:
+        cooldown_files = []
     log(f"==========================================")
     log(f"🚀 Iteration {iteration} / {CONFIG['MAX_ITERATIONS']} 開始")
     log(f"==========================================")
@@ -217,9 +241,20 @@ def execute_cycle(iteration: int, custom_instruction: str = None) -> dict:
 ※この指示に直接従って、必要なコード修正または解析スクリプトの実行を行ってください。
 """
     else:
-        task_section = """
-【自律改善モード】
-直近で作業中または改善の余地があるPythonスクリプト（例: plot_velocity_decomposition.py や contrast_analysis.py など）を1点選び、コードの整理・最適化・エラー防止・または新しい可視化パラメータの追加を行ってください。
+        cooldown_msg = f"※直近作業済みのため【再編集・微調整を禁止】するファイル: {', '.join(cooldown_files)}" if cooldown_files else ""
+        task_section = f"""
+【自律発展モード：今夜の研究テーマの深掘り】
+{cooldown_msg}
+
+【研究コンテキスト】
+本リポジトリは、アクティブマター微小管流動場におけるカーゴ輸送効率 η、有効半径 Rc/ξ、流速相殺、および回転（自転・ロール）効果を解析しています。
+
+【最重要ルール：無駄な解析の厳禁】
+1. 研究者の確認負担を増やさないため、今夜の主眼（カーゴ結合効率、流動場相殺、回転効果、仮想トレーサー比較）と無関係なスクリプトをランダムに実行することは【厳禁】です。
+2. 単なるコード整形、コメント追加、型アノテーションの追加のみのコミットも【厳禁】です。
+3. もし、これ以上新規のプロット作成や検証を行う強い物理的理由・仮説がない場合は、無理に作業せず
+   「【完了宣言】本夜の主課題は十分検証されたため自律終了します」
+   とだけ報告してください。システムが自動で安全に終了します。
 """
 
     claude_prompt = f"""
@@ -230,16 +265,20 @@ def execute_cycle(iteration: int, custom_instruction: str = None) -> dict:
 {task_section}
 
 【厳守事項】
-1. トークン節約のため、不要な全体探索は行わず、対象ファイルを直接ピンポイントで編集してください。
-2. もし指示された解析スクリプトを実行する必要がある場合は、実行して生成データや図を出力してください。
-3. 修正・実行完了後、以下の3点を簡潔（3〜4行）に報告してください：
-   - 行った変更または解析内容
+1. トークン節約のため、不要な全体探索は行わず、対象スクリプトを直接ピンポイントで実行・編集してください。
+2. もし指示されたタスクが完了したら、その結果（生成された図や数値結果）を簡潔にまとめてください。
+3. 報告には以下の3点を簡潔（3〜4行）に含めてください：
+   - 行った変更または解析内容（物理的狙い）
    - 実行したコマンドとその結果
-   - 生成された図やログファイル名（もしあれば）
+   - 生成された図やログファイル名（または終了宣言）
 """
 
     code, claude_output = call_claude_code(claude_prompt)
     record["claude_notes"] = claude_output[-500:] if len(claude_output) > 500 else claude_output
+
+    # 自律完了・終了宣言の検出（無駄な解析防止）
+    stop_phrases = ["【完了宣言】", "自律終了", "NO_FURTHER_ANALYSIS", "十分検証されたため終了"]
+    record["should_stop"] = any(phrase in claude_output for phrase in stop_phrases)
 
     # 構文チェック
     check_code, modified_files = run_cmd(["git", "diff", "--name-only"])
@@ -322,7 +361,7 @@ MTCargo_analysis 研究プロジェクトの進捗評価です。
 
     append_to_morning_report(report_entry)
     log(f"✅ Iteration {iteration} 完了")
-    return record
+    return record, py_files
 
 
 def main():
@@ -339,6 +378,7 @@ def main():
     log(f"・最大イテレーション数: {CONFIG['MAX_ITERATIONS']} 回（トークン保護）")
     log(f"・強制停止時刻: 午前 {CONFIG['STOP_HOUR']} 時（出社時の枠回復を保証）")
     log(f"・朝刊レポート: {CONFIG['REPORT_FILE']}")
+    log(f"・微調整ループ防止（直近 {CONFIG['COOLDOWN_HISTORY_LEN']} 回作業ファイルの再選択禁止 & 成果物生成を義務化）")
 
     # ユーザーリクエストの読み込み
     instructions = []
@@ -358,14 +398,19 @@ def main():
         log("🔍 [Dry Run] 接続テストと設定確認のみを実行します...")
         diff = get_git_diff_summary()
         log(f"Git Diff 取得テスト: OK ({len(diff)} chars)")
+        candidates = get_candidate_scripts([])
+        log(f"解析スクリプト候補テスト: {len(candidates)} 件検出 (例: {', '.join(candidates[:5])})")
         figs = find_recent_figures(60)
         log(f"最近の図の検出テスト: {len(figs)} 件検出")
         log("Dry run 完了。正常に動作可能です。")
         return
 
     # 朝刊レポート初期化
-    req_summary = "\n".join([f"- {t}" for t in instructions]) if instructions else "- 自律改善モード（おまかせ）"
+    req_summary = "\n".join([f"- {t}" for t in instructions]) if instructions else "- 自律改善モード（おまかせ・微調整ループ防止）"
     append_to_morning_report(f"## 📋 運用開始\n- 開始時刻: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n- 今夜のリクエスト:\n{req_summary}")
+
+    cooldown_history: list[str] = []
+    has_initial_instructions = bool(instructions)
 
     for i in range(1, CONFIG["MAX_ITERATIONS"] + 1):
         if is_past_stop_time():
@@ -375,7 +420,24 @@ def main():
 
         # 指示リストがあれば順に消費、なければ自動改善
         current_inst = instructions.pop(0) if instructions else None
-        execute_cycle(i, current_inst)
+        record, modified_py = execute_cycle(i, current_inst, cooldown_files=cooldown_history[-CONFIG["COOLDOWN_HISTORY_LEN"]:])
+
+        # 変更されたファイルをクールダウン履歴に追加
+        for f in modified_py:
+            if f not in cooldown_history:
+                cooldown_history.append(f)
+
+        # 1. Claudeからの自律終了宣言を検知した場合
+        if record.get("should_stop", False):
+            log("🛑 自律終了宣言を検出しました。無駄な解析の量産を防ぐためループを終了します。")
+            append_to_morning_report("**🏁 自律終了**: 今夜の課題が十分検証されたため、無駄な解析の量産を防ぎ早期終了しました。")
+            break
+
+        # 2. ユーザー指示タスクがすべて完了した場合、無駄なループを回さず安全に早期終了
+        if has_initial_instructions and not instructions:
+            log("🎉 ユーザーからリクエストされた全タスクが完了しました！無駄な解析を避けるため早期終了します。")
+            append_to_morning_report("**🎯 全リクエスト完了**: 指示されたタスクをすべて完了したため、朝の確認負担を減らすためここで安全に終了しました。")
+            break
 
         if i < CONFIG["MAX_ITERATIONS"]:
             log(f"⏳ クールダウン中 ({CONFIG['COOLDOWN_SECONDS']}秒待機)...")
