@@ -95,3 +95,13 @@ error: authentication failed or timed out
 - 今夜のリクエスト:
 - 以下の結合効率とR_c/\xiの関係を考えてください。
 
+## 📋 運用開始
+- 開始時刻: 2026-11-05 20:12:55
+- 今夜のリクエスト:
+- /mnt/NAS-A/sasaki/MTC/result3.mdを読んで、必要な解析や結果、議論の怪しいところをまとめたり詰めて欲しいです。
+
+- 結果: result3.md をレビュー → `/mnt/NAS-A/sasaki/MTC/result3_review_20261105.md`（コピー: figure/eta_robustness_result3/）
+  - 階層ブートストラップで η の CI は 1.5–2 倍に広がる（3.37 µm と 5.00 µm の差は残る）
+  - フレームごとの η_i は小粒子で二山（停止 ≈0 と走行 ≈0.8–1）→ D2/D3 の前提を見直す必要あり
+  - |u_fp|/u∞>1.5 は活性が時間とともに下がることによる（動画ごとの定数 u∞ が不適切）。η そのものは影響を受けない
+  - スクリプト: scratch/check_eta_robustness_result3.py

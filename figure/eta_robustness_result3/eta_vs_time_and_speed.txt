@@ -1,0 +1,8 @@
+η by frame window (early <400 / late >=400) and by absolute |<u>_fp| tercile (global edges)
+u_fp edges [0.051 0.137]
+beads06um  early η=0.510(n=2795) late η=0.567(n=655) | η by u_fp tercile low/mid/high = 0.182 / 0.334 / 0.637 | frac frames u_fp<0.051: 0.37
+beads1um   early η=0.336(n=3398) late η=0.364(n=1041) | η by u_fp tercile low/mid/high = 0.318 / 0.393 / 0.323 | frac frames u_fp<0.051: 0.31
+beads3um   early η=0.389(n=4160) late η=0.425(n=1398) | η by u_fp tercile low/mid/high = 0.393 / 0.336 / 0.423 | frac frames u_fp<0.051: 0.24
+beads5um   early η=0.176(n=2564) late η=0.180(n=5023) | η by u_fp tercile low/mid/high = 0.179 / 0.193 / 0.168 | frac frames u_fp<0.051: 0.45
+beads7um   early η=0.185(n=2800) late η=0.272(n=1129) | η by u_fp tercile low/mid/high = 0.071 / 0.156 / 0.224 | frac frames u_fp<0.051: 0.17
+beads20um  early η=0.014(n=901) late η=0.039(n=2105) | η by u_fp tercile low/mid/high = 0.165 / 0.037 / 0.011 | frac frames u_fp<0.051: 0.41

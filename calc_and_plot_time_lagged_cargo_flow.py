@@ -7,14 +7,17 @@ calc_and_plot_time_lagged_cargo_flow.py
 (a) 集積仮説 (Accumulation): 貨物が、もともと遅い領域に行き着く。
 (b) 撹乱仮説 (Disturbance): 貨物が障害物になって、周りの微小管を乱し遅い領域を作る。
 
-【手法】
-- 時刻 t の貨物の位置 x_c(t) のまわりで、遅延時刻 t_flow = t - \Delta t の流れ場を使って
-  動径分布 |u|(r/\xi) を計算する。
-  - \Delta t > 0: 貨物が到着する「前」(BEFORE) の流れ場
-  - \Delta t = 0: 貨物がその場に「いる時」(PRESENT) の流れ場
-  - \Delta t < 0: 貨物が通過した「後」(AFTER) の流れ場
-- \Delta t のスケールは、移流時間 \tau_adv ~ \xi / |v_c| (約 40〜80s) および流れの寿命 \tau_life (~100〜200s)。
-- \Delta t を変化させたときの「低下の深さ」の推移から、集積 (a) か 撹乱 (b) かを判定する。
+【判定基準】
+- 時刻 t の貨物の位置 x_c(t) のまわりで、少し前の時刻 t - \Delta t の流れ場を使って |u|(r/\xi) を計算。
+- 貨物が来る前から低下があり、\Delta t を大きくするにつれて徐々に浅くなる -> (a) 集積。
+- 低下が到着後にしか現れない -> (b) 撹乱。
+
+【時間差 \Delta t の設定】
+- \Delta t = 0 s (同時刻 / 貨物滞在時)
+- \Delta t = 12 s (3 frames)
+- \Delta t = 32 s (8 frames)
+- \Delta t = 64 s (16 frames) ~ \xi / |v_c|
+- \Delta t = 128 s (32 frames) ~ 流れ場の寿命 \tau_life
 """
 
 import os
@@ -91,11 +94,8 @@ SCALE_UM_PER_PX = 0.11
 DT_SEC = 4.0
 V_UNIT = SCALE_UM_PER_PX / DT_SEC # um/s
 
-# 評価する時間差 \Delta t (秒単位)
-# 正: 貨物が到着する「前」 (t - \Delta t)
-# 0: 貨物が「いる時」 (t)
-# 負: 貨物が通過した「後」 (t - \Delta t = t + |\Delta t|)
-DELTA_T_SEC_LIST = [0, 8, 20, 40, 80, 160]
+# 評価する時間遅れ \Delta t (秒単位)
+DELTA_T_SEC_LIST = [0, 12, 32, 64, 128]
 
 def setup_matplotlib():
     plt.rcParams.update({
@@ -143,9 +143,9 @@ def load_xi_dict():
                 print(f"Warning: Failed to load {p}: {e}")
     return xi_map
 
-def process_experiment_timelag(exp_dir_str: str, b_info: dict, max_r_edge_um: float = 20.0, bin_width_um: float = 0.50, n_samples: int = 20):
+def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_um: float = 20.0, bin_width_um: float = 0.50, n_samples: int = 12):
     """
-    1実験について、複数の時間差 \Delta t に対する動径プロファイルを一括計算
+    メモリキャッシングを活用した高速タイムラグ解析
     """
     exp_dir = Path(exp_dir_str)
     h5_path = exp_dir / "GFP_flows.h5"
@@ -174,7 +174,6 @@ def process_experiment_timelag(exp_dir_str: str, b_info: dict, max_r_edge_um: fl
         num_frames = flows.shape[0]
         H, W = flows.shape[2], flows.shape[3]
         
-        # t_bead の有効範囲: t_bead - max_dt_fr >= 0 かつ t_bead < num_frames
         valid_frames = [f for f in sorted(df_tracks['frame'].unique()) if f >= max_dt_fr and f < num_frames]
         if len(valid_frames) == 0:
             return None
@@ -182,51 +181,54 @@ def process_experiment_timelag(exp_dir_str: str, b_info: dict, max_r_edge_um: fl
         sample_indices = np.linspace(0, len(valid_frames) - 1, min(len(valid_frames), n_samples), dtype=int)
         sampled_t_beads = [valid_frames[i] for i in sample_indices]
         
-        # 構造: profiles_by_dt[dt_sec] = {'sums': ..., 'counts': ...}
+        # 必要なフローフレームのみを一括取得して速度行列をメモリに保持
+        needed_flow_frames = set()
+        for t_bead in sampled_t_beads:
+            for dt_fr in delta_frames:
+                needed_flow_frames.add(t_bead - dt_fr)
+        sorted_flow_frames = sorted(list(needed_flow_frames))
+        
+        speed_cache = {}
+        for f_idx in sorted_flow_frames:
+            fl = flows[f_idx]
+            speed_cache[f_idx] = np.sqrt(fl[0].astype(np.float32)**2 + fl[1].astype(np.float32)**2).astype(np.float16)
+
         profiles_by_dt = {dt_sec: {'sums': np.zeros(n_bins, dtype=np.float64), 'counts': np.zeros(n_bins, dtype=np.int64)}
                           for dt_sec in DELTA_T_SEC_LIST}
-        
+                          
         for t_bead in sampled_t_beads:
             sub_tracks = df_tracks[df_tracks['frame'] == t_bead]
             if len(sub_tracks) == 0:
                 continue
                 
-            for dt_sec, dt_fr in zip(DELTA_T_SEC_LIST, delta_frames):
-                t_flow = t_bead - dt_fr
-                if t_flow < 0 or t_flow >= num_frames:
-                    continue
-                    
-                flow_fr = flows[t_flow]
-                u = flow_fr[0].astype(np.float32)
-                v = flow_fr[1].astype(np.float32)
-                speed = np.sqrt(u**2 + v**2)
+            # ビーズの位置・マスクをこの時刻で一括計算
+            bead_geoms = []
+            for _, row in sub_tracks.iterrows():
+                bx, by = row['x'], row['y']
+                max_d = Rc_px + max_r_edge_px
+                x_min = max(0, int(np.floor(bx - max_d)))
+                x_max = min(W, int(np.ceil(bx + max_d)) + 1)
+                y_min = max(0, int(np.floor(by - max_d)))
+                y_max = min(H, int(np.ceil(by + max_d)) + 1)
                 
-                # t_bead での貨物位置 x_c(t_bead) の周りで、t_flow の速度を動径サンプリング
-                for _, row in sub_tracks.iterrows():
-                    bx, by = row['x'], row['y']
-                    max_d = Rc_px + max_r_edge_px
-                    x_min = max(0, int(np.floor(bx - max_d)))
-                    x_max = min(W, int(np.ceil(bx + max_d)) + 1)
-                    y_min = max(0, int(np.floor(by - max_d)))
-                    y_max = min(H, int(np.ceil(by + max_d)) + 1)
-                    
-                    sub_spd = speed[y_min:y_max, x_min:x_max]
-                    y_idx, x_idx = np.ogrid[y_min:y_max, x_min:x_max]
-                    dist = np.sqrt((x_idx - bx)**2 + (y_idx - by)**2)
-                    r_edge = dist - Rc_px
-                    valid = (r_edge >= 0) & (r_edge < max_r_edge_px)
-                    
-                    if not np.any(valid):
-                        continue
-                        
+                y_idx, x_idx = np.ogrid[y_min:y_max, x_min:x_max]
+                dist = np.sqrt((x_idx - bx)**2 + (y_idx - by)**2)
+                r_edge = dist - Rc_px
+                valid = (r_edge >= 0) & (r_edge < max_r_edge_px)
+                if np.any(valid):
                     b_idx = np.digitize(r_edge[valid], bins_px) - 1
                     b_c = np.bincount(b_idx, minlength=n_bins)
-                    b_s = np.bincount(b_idx, weights=sub_spd[valid], minlength=n_bins)
+                    bead_geoms.append((x_min, x_max, y_min, y_max, valid, b_idx, b_c))
                     
+            # 各時間差 \Delta t の速度場を積算
+            for dt_sec, dt_fr in zip(DELTA_T_SEC_LIST, delta_frames):
+                spd = speed_cache[t_bead - dt_fr]
+                for (x_min, x_max, y_min, y_max, valid, b_idx, b_c) in bead_geoms:
+                    sub_spd = spd[y_min:y_max, x_min:x_max][valid].astype(np.float32)
+                    b_s = np.bincount(b_idx, weights=sub_spd, minlength=n_bins)
                     profiles_by_dt[dt_sec]['counts'] += b_c
                     profiles_by_dt[dt_sec]['sums'] += b_s
 
-    # 各 \Delta t ごとの規格化プロファイルと遠方プラトー流速 u_inf
     far_mask = bin_centers_um >= 12.0
     norm_profiles_by_dt = {}
     u_inf_by_dt = {}
@@ -255,17 +257,17 @@ def process_experiment_timelag(exp_dir_str: str, b_info: dict, max_r_edge_um: fl
 def main():
     parser = argparse.ArgumentParser(description="Time-lagged cargo flow profile analysis: accumulation vs disturbance.")
     parser.add_argument('--force_recompute', action='store_true', help="Force recomputation ignoring cache")
-    parser.add_argument('--n_samples', type=int, default=20, help="Number of bead time frames sampled (default 20)")
+    parser.add_argument('--n_samples', type=int, default=12, help="Number of bead time frames sampled (default 12)")
     args = parser.parse_args()
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_file = CACHE_DIR / "time_lagged_flow_cache.pkl"
+    cache_file = CACHE_DIR / "time_lagged_flow_fast_cache.pkl"
 
     if cache_file.exists() and not args.force_recompute:
         print(f"Loading cached time-lagged profiles from {cache_file}...")
         df_all = pd.read_pickle(cache_file)
     else:
-        print(f"Computing time-lagged flow profiles across {len(TARGET_DIRS)} experiments...")
+        print(f"Computing time-lagged flow profiles across {len(TARGET_DIRS)} experiments (fast cached)...")
         t0 = time.time()
         results = []
         for exp_idx, exp_dir in enumerate(TARGET_DIRS):
@@ -280,7 +282,7 @@ def main():
                 
             print(f"[{exp_idx+1}/{len(TARGET_DIRS)}] Processing {b_name}: {Path(exp_dir).name}...")
             t_exp = time.time()
-            res = process_experiment_timelag(exp_dir, b_info, max_r_edge_um=20.0, bin_width_um=0.50, n_samples=args.n_samples)
+            res = process_experiment_timelag_fast(exp_dir, b_info, max_r_edge_um=20.0, bin_width_um=0.50, n_samples=args.n_samples)
             if res is not None:
                 results.append(res)
                 print(f"    Done in {time.time() - t_exp:.1f} s.")
@@ -292,13 +294,8 @@ def main():
     xi_map = load_xi_dict()
     setup_matplotlib()
 
-    # =========================================================================
-    # 1. 各ビーズ条件・各 \Delta t ごとの無次元プロファイル |u|(r/\xi) / u_inf を集計
-    # =========================================================================
     max_scaled_r = 2.5
     scaled_r_grid = np.linspace(0.04, max_scaled_r, 50)
-    
-    # 構造: ensemble_by_bead[bead_name][dt_sec] = {'mean': ..., 'sem': ...}
     ensemble_by_bead = {}
     
     for b in BEADS_INFO:
@@ -332,12 +329,12 @@ def main():
                     'sem': sem_c,
                     'edge_val': mean_c[0],
                     'edge_sem': sem_c[0],
-                    'depth': 1.0 - mean_c[0], # 低下の深さ (Slowdown depth)
+                    'depth': 1.0 - mean_c[0],
                     'n_exps': len(curves)
                 }
 
     # =========================================================================
-    # Figure 1: 代表的なビーズ径 (3.37 um) における \Delta t 依存性プロファイル |u|(r/\xi) / u_inf
+    # Figure 1: 代表的なビーズ径 (3.37 um) における \Delta t 依存性プロファイル
     # =========================================================================
     fig, ax = plt.subplots(figsize=(8.0, 5.5))
     dt_colors = plt.cm.viridis(np.linspace(0.05, 0.90, len(DELTA_T_SEC_LIST)))
@@ -392,14 +389,14 @@ def main():
         ax.axhline(1.0, color='gray', linestyle=':', lw=1.2)
         ax.axvline(1.0, color='black', linestyle='--', alpha=0.4, lw=1.0)
         n_curves = len(p_data[0]['mean']) if 0 in p_data else 0
-        ax.set_title(f"{b['label']} (N={n_curves})", fontsize=13, fontweight='bold')
+        ax.set_title(f"{b['label']} (N={len(sub)})", fontsize=13, fontweight='bold')
         ax.grid(True)
         if idx in [0, 3]:
             ax.set_ylabel(r'$|\mathbf{u}|(r/\xi) \,/\, u_{\infty}$ [-]')
         if idx >= 3:
             ax.set_xlabel(r'Scaled distance $r \,/\, \xi$ [-]')
         ax.set_xlim(0, max_scaled_r)
-        ax.set_ylim(0.50, 1.05)
+        ax.set_ylim(0.45, 1.05)
         if idx == 0:
             ax.legend(loc='lower right', fontsize=8.5)
             
@@ -410,10 +407,9 @@ def main():
     plt.close(fig)
 
     # =========================================================================
-    # Figure 3: 【決定打・判定プロット】低下の深さ (Depth = 1 - |u_edge|/u_inf) vs \Delta t
+    # Figure 3: 【判定プロット】低下の深さ (Depth = 1 - |u_edge|/u_inf) vs \Delta t
     # =========================================================================
     fig, ax = plt.subplots(figsize=(8.0, 5.5))
-    
     summary_records = []
     
     for b in BEADS_INFO:
@@ -456,14 +452,13 @@ def main():
     ax.legend(loc='upper right', frameon=True, framealpha=0.9, fontsize=10.0)
     ax.grid(True)
     
-    # アノテーションによる判定ガイド
-    ax.text(0.04, 0.85, "Hypothesis (a) Accumulation:\nSlowdown persists prior to arrival ($\Delta t > 0$)\nand gradually relaxes with flow lifetime",
-            transform=ax.transAxes, fontsize=9.5, bbox=dict(boxstyle='round,pad=0.4', facecolor='azure', alpha=0.9, edgecolor='steelblue'))
+    # 判定の物理的ガイドボックス
+    ax.text(0.04, 0.82, "Criterion for Hypothesis (a) Accumulation:\nSlowdown persists before arrival ($\Delta t > 0$)\nand gradually relaxes with flow lifetime.\n\nCriterion for Hypothesis (b) Disturbance:\nSlowdown appears only upon arrival ($\Delta t = 0$).",
+            transform=ax.transAxes, fontsize=9.2, bbox=dict(boxstyle='round,pad=0.4', facecolor='azure', alpha=0.9, edgecolor='steelblue'))
     
     save_fig(fig, "cargo_slowdown_depth_vs_delta_t")
     plt.close(fig)
 
-    # サマリー CSV 出力
     df_sum = pd.DataFrame(summary_records)
     for out_dir in OUT_DIRS:
         df_sum.to_csv(out_dir / "cargo_timelagged_slowdown_summary.csv", index=False)
