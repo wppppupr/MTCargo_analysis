@@ -1,0 +1,76 @@
+Computing time-lagged flow profiles across 22 experiments (fast cached)...
+[1/22] Processing beads06um: beads06um...
+    Done in 19.3 s.
+[2/22] Processing beads06um: beads06um001...
+    Done in 17.1 s.
+[3/22] Processing beads06um: beads06um002...
+    Done in 14.0 s.
+[4/22] Processing beads06um: beads06um003...
+    Done in 19.3 s.
+[5/22] Processing beads1um: beads1um001_crop...
+    Done in 16.4 s.
+[6/22] Processing beads1um: beads1um002...
+    Done in 15.7 s.
+[7/22] Processing beads1um: beads1um003...
+    Done in 19.0 s.
+[8/22] Processing beads1um: beads1um_crop...
+    Done in 14.8 s.
+[9/22] Processing beads3um: beads3um...
+    Done in 19.4 s.
+[10/22] Processing beads3um: beads3um001...
+    Done in 19.4 s.
+[11/22] Processing beads3um: beads3um002...
+    Done in 19.5 s.
+[12/22] Processing beads3um: beads3um003...
+    Done in 19.3 s.
+[13/22] Processing beads5um: beads5um...
+    Done in 14.5 s.
+[14/22] Processing beads5um: beads5um001...
+    Done in 14.0 s.
+[15/22] Processing beads5um: beads5um002...
+    Done in 18.9 s.
+[16/22] Processing beads5um: beads5um003...
+    Done in 18.8 s.
+[17/22] Processing beads7um: beads7um...
+    Done in 19.1 s.
+[18/22] Processing beads7um: beads7um002...
+    Done in 19.3 s.
+[19/22] Processing beads7um: beads7um003...
+    Done in 19.7 s.
+[20/22] Processing beads20um: beads20um001...
+    Done in 19.2 s.
+[21/22] Processing beads20um: beads20um002...
+    Done in 18.7 s.
+[22/22] Processing beads20um: beads20um_crop...
+    Done in 13.2 s.
+All experiments processed in 388.8 s. Cached to /home/sasaki/MTCargo_analysis/scratch/time_lagged_flow_fast_cache_uinf_frame.pkl.
+Loaded 25 xi values from bg_angular_correlation_length_per_experiment.csv
+Saved figure: cargo_timelagged_flow_profile_beads3um_uinf_frame.png and .svg
+Saved figure: cargo_timelagged_flow_profile_6panels_uinf_frame.png and .svg
+Saved figure: cargo_slowdown_depth_vs_delta_t_uinf_frame.png and .svg
+Saved figure: cargo_slowdown_tau_vs_diameter_uinf_frame.png and .svg
+
+=== Criterion metrics (tau: relaxation time, asym: after-before asymmetry / D(0)) ===
+bead_name  diameter_um  D0_fit  tau_relax_s  tau_relax_err_s  tau_resolved  retention_dtmax_s  retention_ratio  retention_ratio_err  tau_lower_2sigma_s
+beads06um         0.63   0.377      480.979          835.264         False                128            0.818                0.380              45.023
+ beads1um         1.18   0.262      793.296         2116.711         False                128            0.771                0.378              30.841
+ beads3um         3.37   0.378      488.767          384.504         False                128            0.786                0.182             148.166
+ beads5um         5.00   0.194      316.776          283.514          True                128            0.633                0.277              50.352
+ beads7um         7.24   0.365     3129.715        15570.671         False                128            0.933                0.208             194.190
+beads20um        20.00     NaN          NaN              NaN         False                128              NaN                  NaN                 NaN
+
+=== Analysis Summary: Slowdown Depth vs Delta t ===
+delta_t_sec    0      12     32     64     128
+bead_name                                     
+beads06um    0.383  0.407  0.308  0.279  0.313
+beads1um     0.267  0.250  0.213  0.266  0.206
+beads20um   -0.850 -0.867 -0.873 -0.774 -0.554
+beads3um     0.369  0.381  0.356  0.325  0.290
+beads5um     0.180  0.178  0.194  0.188  0.114
+beads7um     0.382  0.383  0.333  0.371  0.356
+
+All time-lagged analyses completed successfully!
+
+real	6m33.173s
+user	1m12.743s
+sys	0m36.890s

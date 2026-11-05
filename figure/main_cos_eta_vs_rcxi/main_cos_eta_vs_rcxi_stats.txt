@@ -1,0 +1,39 @@
+cos psi & eta vs R_c/xi (per-video xi); bead bootstrap 68% CI
+bead_name  rc_over_xi  rcxi_min  rcxi_max  n_videos  n_beads  n_frames    cos   eta  cos_lo  cos_hi  eta_lo  eta_hi
+beads06um       0.059     0.058     0.074         4       13      3450  0.394 0.522   0.351   0.436   0.458   0.579
+ beads1um       0.132     0.075     0.140         4       17      4439  0.284 0.339   0.234   0.337   0.287   0.400
+ beads3um       0.283     0.283     0.329         4       13      5558  0.265 0.396   0.232   0.297   0.342   0.453
+ beads5um       0.821     0.591     0.862         4       13      7587  0.114 0.177   0.091   0.139   0.149   0.213
+ beads7um       0.390     0.390     0.433         3       12      3929  0.187 0.203   0.164   0.215   0.165   0.250
+beads20um       3.129     1.335     3.129         3        3      3006 -0.039 0.024  -0.116   0.038   0.010   0.038
+
+bead_name          exp_dir  xi_um  rc_over_xi  n_beads  n_frames    cos    eta
+beads06um     beads06um001  5.409       0.058        2       367  0.657  0.743
+beads06um     beads06um003  5.298       0.059        5      1432  0.385  0.552
+beads06um     beads06um002  4.289       0.073        2       290  0.437  0.556
+beads06um        beads06um  4.278       0.074        4      1361  0.253  0.313
+ beads1um    beads1um_crop  7.849       0.075        4       519  0.043  0.084
+ beads1um      beads1um003  4.474       0.132        5      2074  0.222  0.284
+ beads1um      beads1um002  4.468       0.132        1       283  0.299  0.474
+ beads1um beads1um001_crop  4.209       0.140        7      1563  0.464  0.479
+ beads3um         beads3um  5.954       0.283        4      1777  0.234  0.276
+ beads3um      beads3um003  5.946       0.283        4      1743  0.227  0.520
+ beads3um      beads3um002  5.284       0.319        2      1044  0.375  0.509
+ beads3um      beads3um001  5.127       0.329        3       994  0.281  0.407
+ beads5um         beads5um  4.229       0.591        2       344  0.136  0.179
+ beads5um      beads5um001  3.644       0.686        5       624  0.109  0.341
+ beads5um      beads5um003  3.044       0.821        4      3595  0.104  0.123
+ beads5um      beads5um002  2.900       0.862        2      3024  0.124  0.208
+ beads7um      beads7um003  9.285       0.390        6      2214  0.203  0.194
+ beads7um      beads7um002  8.965       0.404        2       900  0.167  0.214
+ beads7um         beads7um  8.369       0.433        4       815  0.172  0.231
+beads20um   beads20um_crop  7.493       1.335        1       101 -0.198 -0.034
+beads20um     beads20um001  6.998       1.429        1       905  0.032  0.014
+beads20um     beads20um002  3.196       3.129        1      2000  0.049  0.044
+
+Spearman cos vs R_c/xi (per-video, n=22): rho=-0.776, p=2.16e-05
+Spearman eta vs R_c/xi (per-video, n=22): rho=-0.739, p=8.5e-05
+Spearman cos vs R_c/xi (per-size, n=6): rho=-1.000, p=0
+Spearman eta vs R_c/xi (per-size, n=6): rho=-0.943, p=0.0048
+Spearman cos vs R_c/xi (per-video, n_beads>=2, n=18): rho=-0.703, p=0.00114
+Spearman eta vs R_c/xi (per-video, n_beads>=2, n=18): rho=-0.606, p=0.00771
