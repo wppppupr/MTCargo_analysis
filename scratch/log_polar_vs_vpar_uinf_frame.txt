@@ -1,0 +1,36 @@
+Loading footprint heterogeneity data with masked cargo region (u_inf_mode=frame)...
+  beads06um                    u_inf(movie)=0.189  u_inf(t) 0.135-0.229 um/s (frames 0-529)
+  beads06um001                 u_inf(movie)=0.231  u_inf(t) 0.164-0.279 um/s (frames 0-445)
+  beads06um002                 u_inf(movie)=0.277  u_inf(t) 0.225-0.415 um/s (frames 0-204)
+  beads06um003                 u_inf(movie)=0.268  u_inf(t) 0.120-0.646 um/s (frames 0-525)
+  beads1um001_crop             u_inf(movie)=0.175  u_inf(t) 0.122-0.211 um/s (frames 0-341)
+  beads1um002                  u_inf(movie)=0.205  u_inf(t) 0.161-0.235 um/s (frames 0-300)
+  beads1um003                  u_inf(movie)=0.201  u_inf(t) 0.091-0.395 um/s (frames 0-794)
+  beads1um_crop                u_inf(movie)=0.177  u_inf(t) 0.158-0.215 um/s (frames 0-138)
+  beads3um                     u_inf(movie)=0.259  u_inf(t) 0.221-0.288 um/s (frames 0-502)
+  beads3um001                  u_inf(movie)=0.222  u_inf(t) 0.173-0.257 um/s (frames 0-440)
+  beads3um002                  u_inf(movie)=0.294  u_inf(t) 0.196-0.474 um/s (frames 0-521)
+  beads3um003                  u_inf(movie)=0.185  u_inf(t) 0.098-0.301 um/s (frames 0-795)
+  beads5um                     u_inf(movie)=0.137  u_inf(t) 0.084-0.198 um/s (frames 0-171)
+  beads5um001                  u_inf(movie)=0.156  u_inf(t) 0.110-0.253 um/s (frames 0-200)
+  beads5um002                  u_inf(movie)=0.151  u_inf(t) 0.051-0.400 um/s (frames 0-1799)
+  beads5um003                  u_inf(movie)=0.139  u_inf(t) 0.050-0.300 um/s (frames 0-1799)
+  beads7um                     u_inf(movie)=0.284  u_inf(t) 0.194-0.382 um/s (frames 0-271)
+  beads7um002                  u_inf(movie)=0.353  u_inf(t) 0.170-0.579 um/s (frames 0-449)
+  beads7um003                  u_inf(movie)=0.322  u_inf(t) 0.173-0.493 um/s (frames 0-742)
+  beads20um001                 u_inf(movie)=0.145  u_inf(t) 0.065-0.211 um/s (frames 0-904)
+  beads20um002                 u_inf(movie)=0.125  u_inf(t) 0.054-0.299 um/s (frames 0-1999)
+  beads20um_crop               u_inf(movie)=0.170  u_inf(t) 0.139-0.230 um/s (frames 0-100)
+Loaded 27,969 instantaneous observations.
+
+Computing common quantile bins with adaptive merging (min 50 points per bin)...
+Evaluating particle-level cluster bootstrap (N=2000)...
+Saved binned CSV to /home/sasaki/MTCargo_analysis/figure/polar_vs_normalized_velocity/polar_vs_vpar_norm_binned_uinf_frame.csv
+
+Generating updated figures...
+Saved: /home/sasaki/MTCargo_analysis/figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.png / .svg
+Saved: /mnt/NAS-Ebanaru/sasaki/MTsingleBeads/figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.png / .svg
+Saved: /home/sasaki/MTCargo_analysis/figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.png / .svg
+Saved: /mnt/NAS-Ebanaru/sasaki/MTsingleBeads/figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.png / .svg
+
+[Complete] All plots updated successfully.

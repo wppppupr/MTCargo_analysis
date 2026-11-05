@@ -57,9 +57,32 @@ BEADS_INFO = [
     {"name": "beads20um", "diameter_um": 20.0, "radius_um": 10.00, "marker": "s", "color": style_colors[5], "label": r"$20.0\,\mu\mathrm{m}$"},
 ]
 
-def load_data() -> pd.DataFrame:
+FIG_SUFFIX = ""
+
+
+def sampled_frames_for_exp(exp_dir: Path, n_u: int) -> Optional[np.ndarray]:
+    """
+    calc_and_plot_cargo_flow_profile.py が u_inf(t) を取ったフレーム番号を再構成する
+    (available_frames 上の linspace サンプリングを同じ手順で再現)。
+    """
+    import h5py
+    csv_path = exp_dir / "beads_tracks.csv"
+    h5_path = exp_dir / "GFP_flows.h5"
+    if not (csv_path.exists() and h5_path.exists()):
+        return None
+    with h5py.File(str(h5_path), 'r') as hf:
+        num_frames = hf[list(hf.keys())[0]].shape[0]
+    frames = pd.read_csv(csv_path, usecols=['frame'])['frame'].unique()
+    available = np.array([f for f in sorted(frames) if f < num_frames])
+    idx = np.linspace(0, len(available) - 1, min(len(available), n_u), dtype=int)
+    return available[idx]
+
+
+def load_data(u_inf_mode: str = 'frame') -> pd.DataFrame:
     """
     足元アニュラス（貨物真下マスク）の局所ポーラーオーダーと無次元化速度データをロード・結合する。
+    u_inf_mode='frame': 遠方プラトー (r>=20um) のフレームごとの u_inf(t) を時間補間して各観測フレームに割り当て
+                        (活性の時間低下を打ち消す)。'movie': 動画ごとの定数 u_inf (従来)。
     """
     cache_fp = CURRENT_DIR / 'scratch' / 'footprint_heterogeneity_cache.pkl'
     cache_ext = CURRENT_DIR / 'scratch' / 'cargo_flow_profile_extended_cache.pkl'
@@ -73,7 +96,25 @@ def load_data() -> pd.DataFrame:
     df_ext = pd.read_pickle(cache_ext)
 
     ext_map = {Path(p).name: float(u) for p, u in zip(df_ext['exp_dir'], df_ext['u_inf'])}
-    df_fp['u_inf'] = df_fp['exp_dir'].map(ext_map)
+    df_fp['u_inf_movie'] = df_fp['exp_dir'].map(ext_map)
+    df_fp['u_inf'] = df_fp['u_inf_movie']
+
+    if u_inf_mode == 'frame':
+        if 'u_inf_frames' not in df_ext.columns:
+            raise SystemExit("Extended cache lacks u_inf_frames. Re-run calc_and_plot_cargo_flow_profile.py --force_recompute.")
+        for p, uf in zip(df_ext['exp_dir'], df_ext['u_inf_frames']):
+            name = Path(p).name
+            uf = np.asarray(uf, dtype=float)
+            fr_s = sampled_frames_for_exp(Path(p), len(uf)) if len(uf) else None
+            if fr_s is None or len(fr_s) != len(uf):
+                # u_inf が取れなかったフレームがあると対応が崩れるので、動画定数にフォールバック
+                print(f"  [warn] {name}: frame mapping unavailable ({len(uf)} u_inf(t)); fallback to movie u_inf")
+                continue
+            m = df_fp['exp_dir'] == name
+            df_fp.loc[m, 'u_inf'] = np.interp(df_fp.loc[m, 'frame'].values, fr_s, uf)
+            print(f"  {name:28s} u_inf(movie)={ext_map[name]:.3f}  u_inf(t) {uf.min():.3f}-{uf.max():.3f} um/s "
+                  f"(frames {fr_s[0]}-{fr_s[-1]})")
+
     df_fp['vpar_norm'] = df_fp['v_parallel'] / df_fp['u_inf']
     df_fp['vvirt_norm'] = df_fp['u_fp'] / df_fp['u_inf']
     
@@ -84,6 +125,7 @@ def load_data() -> pd.DataFrame:
 
 def save_fig_all(fig: plt.Figure, base_name: str):
     """PNG & SVG で保存"""
+    base_name = base_name + FIG_SUFFIX
     for out_dir in OUT_DIRS:
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -353,8 +395,15 @@ def plot_overlay_comparison(df_binned: pd.DataFrame):
     plt.close(fig)
 
 def main():
-    print("Loading footprint heterogeneity data with masked cargo region...")
-    df = load_data()
+    global FIG_SUFFIX
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--u_inf_mode', choices=['frame', 'movie'], default='frame',
+                        help="u_inf の取り方: frame=フレームごと u_inf(t) (default), movie=動画ごとの定数 (従来)")
+    args = parser.parse_args()
+    FIG_SUFFIX = "_uinf_frame" if args.u_inf_mode == 'frame' else ""
+
+    print(f"Loading footprint heterogeneity data with masked cargo region (u_inf_mode={args.u_inf_mode})...")
+    df = load_data(args.u_inf_mode)
     print(f"Loaded {len(df):,} instantaneous observations.")
 
     print("\nComputing common quantile bins with adaptive merging (min 50 points per bin)...")
@@ -364,8 +413,8 @@ def main():
     # ビン統計テーブルの保存
     for out_dir in OUT_DIRS:
         out_dir.mkdir(parents=True, exist_ok=True)
-        df_binned.to_csv(out_dir / "polar_vs_vpar_norm_binned.csv", index=False)
-    print(f"Saved binned CSV to {OUT_DIRS[0] / 'polar_vs_vpar_norm_binned.csv'}")
+        df_binned.to_csv(out_dir / f"polar_vs_vpar_norm_binned{FIG_SUFFIX}.csv", index=False)
+    print(f"Saved binned CSV to {OUT_DIRS[0] / f'polar_vs_vpar_norm_binned{FIG_SUFFIX}.csv'}")
 
     print("\nGenerating updated figures...")
     plot_6panels_comparison(df_binned)

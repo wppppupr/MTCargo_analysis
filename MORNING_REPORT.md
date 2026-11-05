@@ -1337,3 +1337,15 @@ error: authentication failed or timed out
 ## 🏁 全工程完了
 おはようございます！上記の変更点および生成された図をご確認ください。
 
+## 📋 運用開始
+- 開始時刻: 2026-11-06 01:51:49
+- 今夜のリクエスト:
+- u∞ をフレームごとに取り直したので、polar_vs_normalized_velocityにも適用する。
+- 貨物の像による見かけの流れの低下
+- κ の選び方の偏り。
+
+
+### polar_vs_normalized_velocity に u∞(t) を適用
+- `plot_polar_order_vs_normalized_velocity.py`: `--u_inf_mode {frame,movie}` を追加（デフォルトは frame）。flow-profile キャッシュ中の u∞(t)（25 フレーム分）について、サンプリングしたフレーム番号を再構成し、時間補間で各観測フレームに割り当てた。22 本中 22 本で対応が取れた。
+- 結果: 高 Φ 側の足元の流れ |u_fp|/u∞ が 5 µm で 1.91→1.16、20 µm で 2.57→1.22 に下がり、ほぼ 1 になった（動画定数の u∞ では、活性が高い初期フレームが過大評価されていた）。v∥/u∞ の変化はほとんどのサイズで ±0.05 以内。5 µm の最高 Φ ビンだけは 0.31→0.19。
+- 出力: `figure/polar_vs_normalized_velocity/*_uinf_frame.{png,svg,csv}`、ログ: `scratch/log_polar_vs_vpar_uinf_frame.txt`
