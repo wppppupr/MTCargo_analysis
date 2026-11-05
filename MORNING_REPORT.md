@@ -1400,3 +1400,30 @@ error: authentication failed or timed out
 - 結果: A(c) はどのサイズでも c とともに単調に増える（0.63 µm: 0.65→0.85、7 µm: 0.41→0.55）。モンテカルロでは、真の κ=0 でも A(0.8) が 0.63–1.2 になる（雑音の床）。観測値はすべて、この床と同じかそれより低い。したがって A(0.8) は雑音の床を測っているだけで、逆算による補正は全サイズで不可能（NaN）だった。選別なしの B は 0.59 / 0.20 / 0.44 / 0.20 / 0.23 / 0.01（0.63→20 µm）で、A(0.8) より 1.4–25 倍小さい。
 - 結論: 「κ が転がりの上限 0.43–0.57 を超える」という前回の結論は、選び方の偏りでほぼ説明できる。B で見ると、1.18・5・7・20 µm は転がりの予測より下、0.63・3.37 µm は予測の付近にある。注意点が 2 つある。σ を v⊥ から取ったので雑音の床は過大評価気味。また B は u の測定雑音の影響で下がる方向に偏りうる。
 - 出力: `figure/kappa_selection_bias/kappa_selection_bias.{png,svg}`, `kappa_selection_bias_per_size.csv`, `kappa_selection_bias_stats.txt`、ログ: `scratch/log_kappa_selection_bias.txt`
+### 🔹 Iteration 3 (02:03:49) - 状態: `success`
+* **リクエスト**: κ の選び方の偏り。
+* **変更ファイル**: `なし`
+* **📊 生成されたプロット**:
+  - ![figure/cargo_image_injection/cargo_image_injection.png](figure/cargo_image_injection/cargo_image_injection.png)
+  - ![figure/cargo_image_injection/cargo_image_injection.svg](figure/cargo_image_injection/cargo_image_injection.svg)
+  - ![figure/kappa_selection_bias/kappa_selection_bias.png](figure/kappa_selection_bias/kappa_selection_bias.png)
+  - ![figure/kappa_selection_bias/kappa_selection_bias.svg](figure/kappa_selection_bias/kappa_selection_bias.svg)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels.png](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels.png)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels.svg](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels.svg)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.png](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.png)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.svg](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.svg)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay.png](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay.png)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay.svg](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay.svg)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.png](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.png)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.svg](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.svg)
+* **Claudeの作業報告**:
+> bias/kappa_selection_bias.{png,svg}`、数値は `kappa_selection_bias_per_size.csv` と `kappa_selection_bias_stats.txt`、ログは `scratch/log_kappa_selection_bias.txt` です。`MORNING_REPORT.md` に追記し、`OVERNIGHT_INSTRUCTION.md` のこの項目に完了の印を付けました（コミットはしていません）。以上で終了します。
+* **Geminiの物理的コメント**:
+> ⚠️ Gemini認証待ちのためスキップ（ターミナルで agy -p 'hi' で事前認証すると有効化されます）
+
+
+**🎯 全リクエスト完了**: 指示されたタスクをすべて完了したため、朝の確認負担を減らすためここで安全に終了しました。
+
+## 🏁 全工程完了
+おはようございます！上記の変更点および生成された図をご確認ください。
+
