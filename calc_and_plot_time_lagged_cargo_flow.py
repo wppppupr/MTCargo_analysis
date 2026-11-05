@@ -305,6 +305,13 @@ def main():
         print(f"Computing time-lagged flow profiles across {len(TARGET_DIRS)} experiments (fast cached)...")
         t0 = time.time()
         results = []
+        # 実験ごとの途中結果キャッシュ: 長時間計算が中断 (timeout 等) されても再実行時に続きから再開できる。
+        # サンプリングされるフレームは \Delta t の集合と n_samples に依存するため、最終キャッシュと同じキーで分離する。
+        partial_dir = CACHE_DIR / "time_lagged_partial" / cache_file.stem
+        if args.force_recompute and partial_dir.exists():
+            for f in partial_dir.glob("*.pkl"):
+                f.unlink()
+        partial_dir.mkdir(parents=True, exist_ok=True)
         for exp_idx, exp_dir in enumerate(TARGET_DIRS):
             b_name = None
             for b in BEADS_INFO:
@@ -315,13 +322,30 @@ def main():
             if not b_name:
                 continue
                 
-            print(f"[{exp_idx+1}/{len(TARGET_DIRS)}] Processing {b_name}: {Path(exp_dir).name}...")
+            exp_path = Path(exp_dir)
+            part_file = partial_dir / f"{exp_path.parent.name}__{exp_path.name}.pkl"
+            if part_file.exists():
+                res = pd.read_pickle(part_file)
+                print(f"[{exp_idx+1}/{len(TARGET_DIRS)}] {b_name}: {exp_path.name} -> resumed from partial cache.")
+                if res is not None:
+                    results.append(res)
+                continue
+
+            print(f"[{exp_idx+1}/{len(TARGET_DIRS)}] Processing {b_name}: {exp_path.name}...")
             t_exp = time.time()
-            res = process_experiment_timelag_fast(exp_dir, b_info, max_r_edge_um=20.0, bin_width_um=0.50, n_samples=args.n_samples,
-                                                  delta_t_sec_list=DELTA_T_SEC_LIST)
+            try:
+                res = process_experiment_timelag_fast(exp_dir, b_info, max_r_edge_um=20.0, bin_width_um=0.50, n_samples=args.n_samples,
+                                                      delta_t_sec_list=DELTA_T_SEC_LIST)
+            except (OSError, KeyError, ValueError) as e:
+                # 1 実験の HDF5 破損・NAS 読み込み失敗で全体を落とさない (部分キャッシュは書かず次回再試行)
+                print(f"    Warning: skipped due to {type(e).__name__}: {e}")
+                continue
+            pd.to_pickle(res, part_file)  # None (データ欠損) も記録して再探索を避ける
             if res is not None:
                 results.append(res)
                 print(f"    Done in {time.time() - t_exp:.1f} s.")
+            else:
+                print("    Skipped (missing GFP_flows.h5 / beads_tracks.csv or no valid frames).")
                 
         df_all = pd.DataFrame(results)
         df_all.to_pickle(cache_file)
