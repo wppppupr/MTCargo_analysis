@@ -147,74 +147,102 @@ def load_cached_data():
     return df_inst, df_imsd, disp_data
 
 
-def compute_null_models(df_inst: pd.DataFrame, n_iter: int = 100):
-    """粒子ごとの時間シャッフル & 同一実験内粒子スワップによる下限ヌルモデルの算出"""
-    np.random.seed(42)
+_NULL_COLS = ['cargo_dx', 'cargo_dy', 'cargo_spd', 'flow_u', 'flow_v', 'flow_spd']
+
+
+def _cos_psi(cdx, cdy, cspd, u, v, fspd):
+    """cos(psi) = (v_c . u) / (|v_c||u|)。ゼロ速度による inf/NaN は呼び出し側で除外する。"""
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return (cdx * u + cdy * v) / (cspd * fspd)
+
+
+def _finite_mean(chunks):
+    if not chunks:
+        return np.nan
+    arr = np.concatenate(chunks)
+    arr = arr[np.isfinite(arr)]
+    return arr.mean() if arr.size else np.nan
+
+
+def _summarize(vals):
+    vals = np.asarray(vals, dtype=float)
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        return np.nan, np.nan
+    return vals.mean(), vals.std()
+
+
+def compute_null_models(df_inst: pd.DataFrame, n_iter: int = 100, seed: int = 42):
+    """粒子ごとの時間シャッフル & 同一実験内粒子スワップによる下限ヌルモデルの算出
+
+    DataFrame のグループ分割・列抽出をループ外で1回だけ行い、反復内は numpy 演算のみ。
+    乱数呼び出し順は旧実装 (np.random.seed(seed) + np.random.permutation) と同一なので結果は再現する。
+    ゼロ速度フレームによる inf/NaN は平均から除外する。
+    """
+    rng = np.random.RandomState(seed)
     null_results = {}
 
     for b_item in BEADS_INFO:
         bname = b_item['name']
-        sub = df_inst[df_inst['bead_name'] == bname].copy()
-        
+        sub = df_inst[df_inst['bead_name'] == bname]
+
+        # --- 前処理: 時間シャッフル用 (粒子ごとの列配列; len<2 は除外) ---
+        particle_arrays = [
+            tuple(grp[c].to_numpy() for c in _NULL_COLS)
+            for _, grp in sub.groupby(['exp_dir', 'particle'])
+            if len(grp) >= 2
+        ]
+
+        # --- 前処理: スワップ用 (実験ごとに pid -> 列配列) ---
+        exp_entries = []
+        for _, e_grp in sub.groupby('exp_dir'):
+            pids = e_grp['particle'].unique()
+            whole = tuple(e_grp[c].to_numpy() for c in _NULL_COLS)
+            per_pid = {}
+            if len(pids) >= 2:
+                pcol = e_grp['particle'].to_numpy()
+                per_pid = {pid: tuple(a[pcol == pid] for a in whole) for pid in pids}
+            exp_entries.append((pids, whole, per_pid))
+
         # 1. 時間シャッフル
         shuf_means = []
         for _ in range(n_iter):
-            shuf_cbs = []
-            for (exp, pid), grp in sub.groupby(['exp_dir', 'particle']):
-                if len(grp) < 2:
-                    continue
-                idx = np.random.permutation(len(grp))
-                cdx_s = grp['cargo_dx'].values[idx]
-                cdy_s = grp['cargo_dy'].values[idx]
-                cspd_s = grp['cargo_spd'].values[idx]
-                u = grp['flow_u'].values
-                v = grp['flow_v'].values
-                v_fn = grp['flow_spd'].values
-                cb_shuf = (cdx_s * u + cdy_s * v) / (cspd_s * v_fn)
-                shuf_cbs.extend(cb_shuf)
-            if shuf_cbs:
-                shuf_means.append(np.mean(shuf_cbs))
+            chunks = []
+            for cdx, cdy, cspd, u, v, fspd in particle_arrays:
+                idx = rng.permutation(len(cdx))
+                chunks.append(_cos_psi(cdx[idx], cdy[idx], cspd[idx], u, v, fspd))
+            if chunks:
+                shuf_means.append(_finite_mean(chunks))
 
         # 2. 粒子スワップ
         swap_means = []
-        exp_grps = sub.groupby('exp_dir')
         for _ in range(n_iter):
-            swap_cbs = []
-            for exp_name, e_grp in exp_grps:
-                pids = e_grp['particle'].unique()
+            chunks = []
+            for pids, whole, per_pid in exp_entries:
                 if len(pids) < 2:
-                    idx = np.random.permutation(len(e_grp))
-                    cdx_s = e_grp['cargo_dx'].values[idx]
-                    cdy_s = e_grp['cargo_dy'].values[idx]
-                    cspd_s = e_grp['cargo_spd'].values[idx]
-                    cb_sw = (cdx_s * e_grp['flow_u'].values + cdy_s * e_grp['flow_v'].values) / (cspd_s * e_grp['flow_spd'].values)
-                    swap_cbs.extend(cb_sw)
+                    cdx, cdy, cspd, u, v, fspd = whole
+                    idx = rng.permutation(len(cdx))
+                    chunks.append(_cos_psi(cdx[idx], cdy[idx], cspd[idx], u, v, fspd))
                     continue
-                pids_perm = np.random.permutation(pids)
-                p_map = dict(zip(pids, pids_perm))
+                p_map = dict(zip(pids, rng.permutation(pids)))
                 for pid in pids:
-                    target_pid = p_map[pid]
-                    grp_a = e_grp[e_grp['particle'] == pid]
-                    grp_b = e_grp[e_grp['particle'] == target_pid]
-                    min_len = min(len(grp_a), len(grp_b))
-                    if min_len < 2:
+                    a = per_pid[pid]
+                    b = per_pid[p_map[pid]]
+                    n = min(len(a[0]), len(b[0]))
+                    if n < 2:
                         continue
-                    cdx_b = grp_b['cargo_dx'].values[:min_len]
-                    cdy_b = grp_b['cargo_dy'].values[:min_len]
-                    cspd_b = grp_b['cargo_spd'].values[:min_len]
-                    u_a = grp_a['flow_u'].values[:min_len]
-                    v_a = grp_a['flow_v'].values[:min_len]
-                    vfn_a = grp_a['flow_spd'].values[:min_len]
-                    cb_sw = (cdx_b * u_a + cdy_b * v_a) / (cspd_b * vfn_a)
-                    swap_cbs.extend(cb_sw)
-            if swap_cbs:
-                swap_means.append(np.mean(swap_cbs))
+                    chunks.append(_cos_psi(b[0][:n], b[1][:n], b[2][:n],
+                                           a[3][:n], a[4][:n], a[5][:n]))
+            if chunks:
+                swap_means.append(_finite_mean(chunks))
 
+        t_mean, t_std = _summarize(shuf_means)
+        s_mean, s_std = _summarize(swap_means)
         null_results[bname] = {
-            'time_shuf_mean': np.mean(shuf_means),
-            'time_shuf_std': np.std(shuf_means),
-            'swap_mean': np.mean(swap_means) if swap_means else np.nan,
-            'swap_std': np.std(swap_means) if swap_means else np.nan,
+            'time_shuf_mean': t_mean,
+            'time_shuf_std': t_std,
+            'swap_mean': s_mean,
+            'swap_std': s_std,
         }
 
     return null_results
@@ -642,14 +670,26 @@ def plot_fig4_velocity_transfer(df_inst: pd.DataFrame):
     plt.close(fig)
 
 
-def main():
+def parse_args(argv=None):
+    import argparse
+    p = argparse.ArgumentParser(description=__doc__.split('\n')[1] if __doc__ else None)
+    p.add_argument('--n-iter', type=int, default=100, help='ヌルモデルの反復回数 (default: 100)')
+    p.add_argument('--seed', type=int, default=42, help='ヌルモデルの乱数シード (default: 42)')
+    args = p.parse_args(argv)
+    if args.n_iter < 1:
+        p.error('--n-iter must be >= 1')
+    return args
+
+
+def main(argv=None):
+    args = parse_args(argv)
     setup_matplotlib()
     print("Loading cached data...")
     df_inst, df_imsd, disp_data = load_cached_data()
     print(f"Data loaded: {len(df_inst)} inst, {len(df_imsd)} imsd")
 
     print("\nComputing Null Models (Time Shuffle & Trajectory Swap)...")
-    null_results = compute_null_models(df_inst, n_iter=100)
+    null_results = compute_null_models(df_inst, n_iter=args.n_iter, seed=args.seed)
 
     print("\nGenerating Figure 1: Coupling Spectrum & Null Models...")
     plot_fig1_coupling_spectrum(df_inst, null_results)
