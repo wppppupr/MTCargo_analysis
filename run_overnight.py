@@ -3,7 +3,7 @@
 MTCargo_analysis: 夜間自律研究オーケストレーター (Overnight Research Orchestrator)
 
 【最重要方針：トークン節約 & 翌朝の作業枠温存】
-1. 最大イテレーション数を厳格に制限（デフォルト3回）。
+1. 最大イテレーション数を厳格に制限（デフォルト5回、--max-iter / -n で任意指定可能）。
 2. 深夜（デフォルト午前4時）までに強制終了し、出社時にはClaudeのレートリミット枠（5時間枠）を満タン回復。
 3. エラー修復は最大1回まで。失敗した場合は深追いせず翌朝の人間（あなた）の判断待ちに回す。
 4. ユーザーからの解析要望（OVERNIGHT_INSTRUCTION.md または引数）を最優先で実行。
@@ -20,7 +20,7 @@ import datetime
 from pathlib import Path
 
 CONFIG = {
-    "MAX_ITERATIONS": 3,
+    "MAX_ITERATIONS": 5,
     "STOP_HOUR": 4,             # 午前4時以降は新規イテレーションを開始しない
     "MAX_REPAIR_ATTEMPTS": 1,   # エラー自動修正は最大1回（トークン浪費防止）
     "COOLDOWN_SECONDS": 60,     # イテレーション間隔（秒）
@@ -326,7 +326,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="MTCargo_analysis 夜間自律研究オーケストレーター")
     parser.add_argument("--dry-run", action="store_true", help="動作確認のみ実行")
-    parser.add_argument("--max-iter", type=int, default=CONFIG["MAX_ITERATIONS"], help="最大イテレーション数")
+    parser.add_argument("-n", "--max-iter", type=int, default=CONFIG["MAX_ITERATIONS"], help="最大イテレーション数")
     parser.add_argument("-i", "--instruction", type=str, default=None, help="今夜の解析リクエスト（CLIから直接指定）")
     args = parser.parse_args()
 
