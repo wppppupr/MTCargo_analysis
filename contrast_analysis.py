@@ -669,9 +669,19 @@ def _errpoint(ax, x, y, yerr, color, marker, label, n, min_traj):
     ax.annotate(f'n={n}', (x, y), xytext=(8, -12), textcoords='offset points', fontsize=9, color=color)
 
 
+def _trend(ax, x, y, n, min_traj, color):
+    """Rc/xi 順の傾向線。n >= min_traj の点のみ実線で結び、低 n 点を含む全体は点線で示す。"""
+    x, y, n = (np.asarray(a, dtype=float) for a in (x, y, n))
+    ok = np.isfinite(x) & np.isfinite(y)
+    ax.plot(x[ok], y[ok], color=color, linewidth=1.2, linestyle=':', alpha=0.6, zorder=3)
+    rel = ok & (n >= min_traj)
+    ax.plot(x[rel], y[rel], color=color, linewidth=2.0, linestyle='-', alpha=0.7, zorder=4)
+
+
 def plot_fig4_velocity_transfer(df_inst: pd.DataFrame, n_boot: int = 500, ci: float = 95.0, seed: int = 42,
-                                min_traj: int = 5):
+                                min_traj: int = 5, scatter_vmax: float = 0.35):
     """
+    scatter_vmax: パネル (c) の軸上限 [um/s]。0 以下ならデータの 99.5 パーセンタイルから自動決定。
     min_traj: 軌跡数がこれ未満の粒径は白抜きマーカーで描き、CI が信頼できないことを示す。
               各点の横に軌跡数 n を注記する。
     Figure 4: 速度伝達係数 kappa = vc / <u_fp> と速度比
@@ -697,7 +707,7 @@ def plot_fig4_velocity_transfer(df_inst: pd.DataFrame, n_boot: int = 500, ci: fl
     markers = [b['marker'] for b in BEADS_INFO]
     kappa_err = _yerr(st['kappa'], st['kappa_lo'], st['kappa_hi'])
     ratio_err = _yerr(st['speed_ratio'], st['ratio_lo'], st['ratio_hi'])
-    n_traj = st['n_traj'].astype(int).tolist()
+    n_traj = st['n_traj'].fillna(0).astype(int).tolist()
     low_n = [labels[i] for i in range(len(n_traj)) if 0 < n_traj[i] < min_traj]
     if low_n:
         print(f"  [fig4] n_traj < {min_traj} (open markers, CI unreliable): {', '.join(low_n)}")
@@ -706,13 +716,14 @@ def plot_fig4_velocity_transfer(df_inst: pd.DataFrame, n_boot: int = 500, ci: fl
     rc_xi_arr = np.array(rc_xi_list)[sort_idx]
     kappa_arr = np.array(kappa_list)[sort_idx]
     ratio_arr = np.array(ratio_list)[sort_idx]
+    n_arr = np.array(n_traj)[sort_idx]
 
     # Panel (a): kappa vs Rc/xi
     ax_a.axhline(1.0, color='#2b83ba', linestyle='--', linewidth=1.8, label='Perfect Transfer ($\\kappa = 1.0$)')
     for i in sort_idx:
         _errpoint(ax_a, rc_xi_list[i], kappa_list[i], kappa_err[:, [i]], colors[i], markers[i], labels[i],
                   n_traj[i], min_traj)
-    ax_a.plot(rc_xi_arr, kappa_arr, color='#882255', linewidth=2.0, linestyle='-', alpha=0.7, zorder=4)
+    _trend(ax_a, rc_xi_arr, kappa_arr, n_arr, min_traj, '#882255')
     ax_a.axvline(1.0, color='gray', linestyle='--', linewidth=1.2, alpha=0.7)
     ax_a.set_xscale('log')
     ax_a.set_xlim(0.04, 4.0)
@@ -728,7 +739,7 @@ def plot_fig4_velocity_transfer(df_inst: pd.DataFrame, n_boot: int = 500, ci: fl
     for i in sort_idx:
         _errpoint(ax_b, rc_xi_list[i], ratio_list[i], ratio_err[:, [i]], colors[i], markers[i], labels[i],
                   n_traj[i], min_traj)
-    ax_b.plot(rc_xi_arr, ratio_arr, color='#44AA99', linewidth=2.0, linestyle='-', alpha=0.7, zorder=4)
+    _trend(ax_b, rc_xi_arr, ratio_arr, n_arr, min_traj, '#44AA99')
     ax_b.axvline(1.0, color='gray', linestyle='--', linewidth=1.2, alpha=0.7)
     ax_b.set_xscale('log')
     ax_b.set_xlim(0.04, 4.0)
@@ -740,22 +751,35 @@ def plot_fig4_velocity_transfer(df_inst: pd.DataFrame, n_boot: int = 500, ci: fl
     ax_b.grid(True)
 
     # Panel (c1)/(c2): 最小・最大粒径の散布 (Rc/xi・kappa はデータから算出)
-    rc_by_name = {BEADS_INFO[i]['name']: (rc_xi_list[i], kappa_list[i]) for i in range(len(BEADS_INFO))}
-    max_v = 0.35
+    rc_by_name = {BEADS_INFO[i]['name']: (rc_xi_list[i], kappa_list[i], n_traj[i]) for i in range(len(BEADS_INFO))}
+    v_conv = SCALE_UM_PER_PX / DT_SEC
+    max_v = scatter_vmax
+    if max_v <= 0:
+        sel = df_inst['bead_name'].isin([BEADS_INFO[0]['name'], BEADS_INFO[-1]['name']])
+        vals = df_inst.loc[sel, ['flow_spd', 'cargo_spd']].to_numpy(dtype=float).ravel() * v_conv
+        vals = vals[np.isfinite(vals)]
+        max_v = float(np.percentile(vals, 99.5)) if vals.size else 0.35
+        print(f"  [fig4] auto scatter vmax = {max_v:.3f} um/s (99.5th pct)")
     for ax_c, b_item, cmap, tag in ((ax_c1, BEADS_INFO[0], 'Blues', 'c1'),
                                     (ax_c2, BEADS_INFO[-1], 'Greens', 'c2')):
         sub_c = df_inst[df_inst['bead_name'] == b_item['name']]
         if len(sub_c):
-            ax_c.hexbin(sub_c['flow_spd'] * SCALE_UM_PER_PX / DT_SEC,
-                        sub_c['cargo_spd'] * SCALE_UM_PER_PX / DT_SEC,
-                        gridsize=35, cmap=cmap, mincnt=1, bins='log', extent=(0, max_v, 0, max_v))
+            fx = sub_c['flow_spd'].to_numpy(dtype=float) * v_conv
+            cy = sub_c['cargo_spd'].to_numpy(dtype=float) * v_conv
+            fin = np.isfinite(fx) & np.isfinite(cy)
+            clip = np.mean((fx[fin] > max_v) | (cy[fin] > max_v)) if fin.any() else 0.0
+            if clip > 0.01:
+                print(f"  [fig4] ({tag}) {b_item['label']}: {clip:.1%} of points outside [0, {max_v:.3f}] um/s")
+            ax_c.hexbin(fx[fin], cy[fin], gridsize=35, cmap=cmap, mincnt=1, bins='log',
+                        extent=(0, max_v, 0, max_v))
         ax_c.plot([0, max_v], [0, max_v], color='#cc2222', linestyle='--', linewidth=1.8, label='1:1 Line')
         ax_c.set_xlim(0, max_v)
         ax_c.set_ylim(0, max_v)
         ax_c.set_xlabel(r'Footprint flow speed $|\langle\mathbf{u}\rangle_{R_c}|$ [$\mu\mathrm{m/s}$]')
         ax_c.set_ylabel(r'Cargo speed $|\mathbf{v}_c|$ [$\mu\mathrm{m/s}$]')
-        rc, kp = rc_by_name[b_item['name']]
-        ax_c.set_title(f"({tag}) {b_item['label']} ($R_c/\\xi={rc:.2f}$, $\\kappa={kp:.2f}$)", fontweight='bold')
+        rc, kp, nt = rc_by_name[b_item['name']]
+        ax_c.set_title(f"({tag}) {b_item['label']} ($R_c/\\xi={rc:.2f}$, $\\kappa={kp:.2f}$, n={nt})",
+                       fontweight='bold', color='#aa3333' if nt < min_traj else 'black')
         ax_c.legend(loc='upper left', fontsize=10)
         ax_c.grid(True)
 
@@ -778,6 +802,8 @@ def parse_args(argv=None):
     p.add_argument('--kappa-ci', type=float, default=95.0, help='Fig4 信頼区間 [%%] (default: 95)')
     p.add_argument('--kappa-min-traj', type=int, default=5,
                    help='Fig4 で軌跡数がこれ未満の粒径を白抜き表示 (default: 5)')
+    p.add_argument('--scatter-vmax', type=float, default=0.35,
+                   help='Fig4(c) 散布図の軸上限 [um/s]; 0 以下で 99.5%%ile 自動 (default: 0.35)')
     args = p.parse_args(argv)
     if args.pdf_bw <= 0:
         p.error('--pdf-bw must be > 0')
@@ -819,7 +845,7 @@ def main(argv=None):
     print("\nGenerating Figure 4: Velocity Transfer & Speed Ratio...")
     summary = summary.merge(plot_fig4_velocity_transfer(
         df_inst, n_boot=args.kappa_boot, ci=args.kappa_ci, seed=args.seed,
-        min_traj=args.kappa_min_traj), on='bead_name', how='left')
+        min_traj=args.kappa_min_traj, scatter_vmax=args.scatter_vmax), on='bead_name', how='left')
     for out_dir in OUT_DIRS:
         out_dir.mkdir(parents=True, exist_ok=True)
         summary.to_csv(out_dir / "contrast_summary.csv", index=False)
