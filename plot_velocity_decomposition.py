@@ -178,7 +178,7 @@ def _ratio_stats(num_boot: np.ndarray, den_boot: np.ndarray, point: float, prefi
 
 
 def compute_decomposition_statistics(df_merged: pd.DataFrame, n_boot: int = N_BOOT,
-                                     min_particles: int = 5):
+                                     min_particles: int = 5, seed: int = SEED):
     """各ビーズについて A, eta, eta*A を粒子ブートストラップで評価 (ベクトル化版).
 
     Method 1: 粒子ごとの時間平均 -> 粒子を等重みでリサンプル
@@ -186,7 +186,7 @@ def compute_decomposition_statistics(df_merged: pd.DataFrame, n_boot: int = N_BO
               プール平均 = sum(粒子ごとの和) / sum(粒子ごとのフレーム数) なので
               concat 不要で (n_boot, n_p) の整数インデックスのみで計算できる.
     """
-    rng = np.random.default_rng(SEED)
+    rng = np.random.default_rng(seed)
     results = []
 
     for b_item in vcd.BEADS_INFO:
@@ -235,6 +235,19 @@ def compute_decomposition_statistics(df_merged: pd.DataFrame, n_boot: int = N_BO
 
     df_res = pd.DataFrame(results).sort_values('rc_over_xi').reset_index(drop=True)
     return df_res
+
+
+def _flatten_ci_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """CSV 出力用: タプル型の *_ci95 列を *_ci95_lo / *_ci95_hi の数値列に展開する.
+    (pkl はタプルのまま保存し、下流スクリプトとの互換性を保つ)"""
+    out = df.copy()
+    for c in [c for c in df.columns if c.endswith('_ci95')]:
+        ci = np.array(df[c].tolist(), dtype=float).reshape(-1, 2)
+        pos = out.columns.get_loc(c)
+        out = out.drop(columns=c)
+        out.insert(pos, f'{c}_lo', ci[:, 0])
+        out.insert(pos + 1, f'{c}_hi', ci[:, 1])
+    return out
 
 
 def _errorbar_pair(ax, df: pd.DataFrame, std_mask, sp_mask, key: str, fmt: str, color: str,
@@ -610,6 +623,8 @@ def main():
                     help='図に用いる平均法: m2=フレームプール(既定), m1=粒子等重み (出力名に _m1)')
     ap.add_argument('--no-mark-low-n', action='store_true',
                     help='low_n ビーズの破線リング・N 注記を描かない')
+    ap.add_argument('--seed', type=int, default=SEED,
+                    help=f'分解統計ブートストラップの乱数シード (既定: {SEED}; CI の再現性確認用)')
     ap.add_argument('--compare-only', action='store_true',
                     help='サイズ比較図のみ出力 (全サイズの分解統計を省略)')
     args = ap.parse_args()
@@ -630,12 +645,12 @@ def main():
 
     print(f"Computing decomposition statistics & particle bootstrap (N={args.n_boot})...")
     df_res = compute_decomposition_statistics(df_merged, n_boot=args.n_boot,
-                                              min_particles=args.min_particles)
+                                              min_particles=args.min_particles, seed=args.seed)
 
     # Save summary tables
     for d in OUT_DIRS:
         d.mkdir(parents=True, exist_ok=True)
-        df_res.to_csv(d / "velocity_decomposition_identity_summary.csv", index=False)
+        _flatten_ci_columns(df_res).to_csv(d / "velocity_decomposition_identity_summary.csv", index=False)
         df_res.to_pickle(d / "velocity_decomposition_identity_summary.pkl")
     (CURRENT_DIR / "scratch").mkdir(exist_ok=True)
     (CURRENT_DIR / "scratch" / "velocity_decomposition_identity_summary.pkl").write_bytes(
