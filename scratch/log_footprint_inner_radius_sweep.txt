@@ -14,3 +14,5 @@
 [beads5um] 1376 rows, 209.1s
 [beads5um001] 2496 rows, 242.4s
 [beads7um] 3260 rows, 334.2s
+[beads7um002] 3600 rows, 750.5s
+[beads3um003] 6972 rows, 1102.5s

@@ -1,0 +1,14 @@
+== simple ==  p_stop(R_c): beads06um:0.21[0.09,0.31], beads1um:0.17[0.12,0.20], beads3um:0.15[0.11,0.20], beads5um:0.23[0.12,0.33], beads7um:0.30[0.22,0.42], beads20um:0.35[0.18,0.78]
+  M0 const        th=[0.176]  chi2=8.7 (dof=5)  AIC=10.7
+  M1 p0+Poisson   th=[ 0.142 32.746]  chi2=5.1 (dof=4)  AIC=9.1
+  M1' Poisson     th=[8.68]  chi2=37.5 (dof=5)  AIC=39.5
+  M1 boot: p0=0.14[0.09,0.18]  R*=27.1[13.8,99.2] um  (R*=1e4 は飽和なし=線形極限)
+  small-cargo trend: slope dp/dR (R_c<=1.7um, WLS) = -0.018 /um
+  M2: k_RS = [0.039 0.031 0.033 0.043 0.054 0.04 ] /s ; log-log slope = 0.07 (N∝R_c なら 1)  ; k_SR = [0.15  0.156 0.184 0.146 0.129 0.073]
+== hyst ==  p_stop(R_c): beads06um:0.39[0.15,0.55], beads1um:0.33[0.24,0.40], beads3um:0.32[0.24,0.41], beads5um:0.49[0.27,0.65], beads7um:0.57[0.44,0.71], beads20um:0.55[0.32,1.00]
+  M0 const        th=[0.375]  chi2=11.9 (dof=5)  AIC=13.9
+  M1 p0+Poisson   th=[ 0.282 10.803]  chi2=5.2 (dof=4)  AIC=9.2
+  M1' Poisson     th=[3.502]  chi2=32.0 (dof=5)  AIC=34.0
+  M1 boot: p0=0.27[0.16,0.35]  R*=9.8[5.5,31.4] um  (R*=1e4 は飽和なし=線形極限)
+  small-cargo trend: slope dp/dR (R_c<=1.7um, WLS) = -0.021 /um
+  M2: k_RS = [0.029 0.024 0.027 0.027 0.038 0.01 ] /s ; log-log slope = -0.19 (N∝R_c なら 1)  ; k_SR = [0.044 0.048 0.056 0.028 0.028 0.008]
