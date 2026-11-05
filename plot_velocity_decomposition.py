@@ -244,6 +244,38 @@ def _errorbar_pair(ax, df: pd.DataFrame, std_mask, sp_mask, key: str, fmt: str, 
                         label=label, zorder=zorder, **kw)
 
 
+def _auto_ylim(df: pd.DataFrame, keys: List[str], default: Tuple[float, float],
+               log: bool = False, pad: float = 0.08) -> Tuple[float, float]:
+    """既定範囲を基本に, 点推定・95% CI がはみ出す場合のみ範囲を拡張 (無言のクリップ防止).
+
+    log=True の場合は正値のみを対象とし, 乗法的に余白を取る.
+    """
+    vals = []
+    for k in keys:
+        vals.append(df[k].values.astype(float))
+        ci = np.array(df[f'{k}_ci95'].tolist(), dtype=float).reshape(-1, 2)
+        vals.append(ci.ravel())
+    v = np.concatenate(vals)
+    v = v[np.isfinite(v)]
+    if log:
+        v = v[v > 0]
+    lo, hi = default
+    if v.size == 0:
+        return lo, hi
+    if log:
+        lo = min(lo, v.min() / (1 + 3 * pad))
+        hi = max(hi, v.max() * (1 + 3 * pad))
+    else:
+        span = max(hi - lo, 1e-12)
+        if v.min() < lo:
+            lo = v.min() - pad * span
+        if v.max() > hi:
+            hi = v.max() + pad * span
+    if (lo, hi) != tuple(default):
+        print(f"[info] y-range expanded {default} -> ({lo:.3g}, {hi:.3g}) to include all CIs")
+    return lo, hi
+
+
 def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0, method: str = 'm2'):
     """method: 'm2' (フレームプール, 既定) または 'm1' (粒子等重み). m1 の図はファイル名に _m1 を付与."""
     if method not in ('m1', 'm2'):
@@ -265,6 +297,9 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0, 
     x_lo, x_hi = rc_all.min() / 1.8, rc_all.max() * 1.8
     y_fine = np.logspace(np.log10(x_lo), np.log10(x_hi), 200)
     phi_fine = calc_disk_polar_order(y_fine)
+    keys_all = [f'{method}_{k}' for k in ('A', 'eta', 'tot')]
+    ylim_lin = _auto_ylim(df_sorted, keys_all, (-0.10, 1.45))
+    ylim_log = _auto_ylim(df_sorted, keys_all, (0.015, 1.8), log=True)
 
     # =========================================================================
     # Figure 9: Master Single-Panel Decomposition Plot
@@ -309,7 +344,7 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0, 
 
     ax.set_xscale('log')
     ax.set_xlim(x_lo, x_hi)
-    ax.set_ylim(-0.10, 1.45)
+    ax.set_ylim(*ylim_lin)
     ax.set_xlabel(r'Normalized Cargo Size $R_c / \xi$', fontsize=14, labelpad=8)
     ax.set_ylabel('Velocity Ratio [-]', fontsize=14, labelpad=8)
     ax.set_title(r'Exact Velocity Decomposition: $\frac{\langle v_\parallel\rangle}{\langle|\mathbf{u}|\rangle_{R_c}} = \eta \times A$',
@@ -347,7 +382,7 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0, 
     ax1.axhline(0.0, color='black', linestyle='-', linewidth=0.8, alpha=0.5)
     ax1.set_xscale('log')
     ax1.set_xlim(x_lo, x_hi)
-    ax1.set_ylim(-0.10, 1.45)
+    ax1.set_ylim(*ylim_lin)
     ax1.set_xlabel(r'Normalized Cargo Size $R_c / \xi$', fontsize=13)
     ax1.set_ylabel('Velocity Ratio [-]', fontsize=13)
     ax1.set_title('(a) Exact Identity Decomposition (Linear Scale)', fontsize=14, fontweight='bold')
@@ -365,7 +400,7 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0, 
     ax2.set_xscale('log')
     ax2.set_yscale('log')
     ax2.set_xlim(x_lo, x_hi)
-    ax2.set_ylim(0.015, 1.8)
+    ax2.set_ylim(*ylim_log)
     ax2.set_xlabel(r'Normalized Cargo Size $R_c / \xi$', fontsize=13)
     ax2.set_ylabel('Velocity Ratio [-] (Log Scale)', fontsize=13)
     ax2.set_title('(b) Scaling Comparison (Log-Log Scale)', fontsize=14, fontweight='bold')
