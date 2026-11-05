@@ -296,6 +296,8 @@ def main():
     parser.add_argument('--delta_t', type=int, nargs='+', default=None,
                         help="Lag times in seconds (multiples of 4 s). Negative = flow AFTER cargo passage. "
                              f"Default: {DELTA_T_SEC_LIST}")
+    parser.add_argument('--no_fit_overlay', action='store_true',
+                        help="Do not overlay fitted D0*exp(-dt/tau) curves on the depth-vs-dt figure")
     args = parser.parse_args()
 
     if args.delta_t is not None:
@@ -506,7 +508,8 @@ def main():
     # =========================================================================
     # Figure 3: 【判定プロット】低下の深さ (Depth = 1 - |u_edge|/u_inf) vs \Delta t
     # =========================================================================
-    fig, ax = plt.subplots(figsize=(8.0, 5.5))
+    fig_depth, ax = plt.subplots(figsize=(8.0, 5.5))
+    ax_depth = ax
     summary_records = []
     
     for b in BEADS_INFO:
@@ -559,9 +562,6 @@ def main():
     ax.text(0.04, 0.82, r"Criterion for Hypothesis (a) Accumulation:" "\n" r"Slowdown persists before arrival ($\Delta t > 0$)" "\n" r"and gradually relaxes with flow lifetime." "\n\n" r"Criterion for Hypothesis (b) Disturbance:" "\n" r"Slowdown appears only upon arrival ($\Delta t = 0$).",
             transform=ax.transAxes, fontsize=9.2, bbox=dict(boxstyle='round,pad=0.4', facecolor='azure', alpha=0.9, edgecolor='steelblue'))
     
-    save_fig(fig, f"cargo_slowdown_depth_vs_delta_t{suffix}")
-    plt.close(fig)
-
     df_sum = pd.DataFrame(summary_records)
     for out_dir in OUT_DIRS:
         df_sum.to_csv(out_dir / f"cargo_timelagged_slowdown_summary{suffix}.csv", index=False)
@@ -593,6 +593,41 @@ def main():
     df_metric = pd.DataFrame(metric_records)
     for out_dir in OUT_DIRS:
         df_metric.to_csv(out_dir / f"cargo_timelagged_criterion_metrics{suffix}.csv", index=False)
+    # Figure 3 にフィット曲線 D_0 exp(-\Delta t/\tau) を重ねてから保存
+    if not args.no_fit_overlay and len(df_metric):
+        x_fit = np.linspace(0, max(DELTA_T_SEC_LIST), 200)
+        for b in BEADS_INFO:
+            r = df_metric[df_metric['bead_name'] == b['name']]
+            if len(r) == 0 or not np.isfinite(r['tau_relax_s'].iloc[0]):
+                continue
+            d0f, tauf = r['D0_fit'].iloc[0], r['tau_relax_s'].iloc[0]
+            ax_depth.plot(x_fit, d0f * np.exp(-x_fit / tauf), ls='--', lw=1.3, color=b['color'], alpha=0.8, zorder=1)
+        ax_depth.plot([], [], ls='--', color='k', lw=1.3, label=r'Fit $D_0 e^{-\Delta t/\tau}$')
+        ax_depth.legend(loc='upper right', frameon=True, framealpha=0.9, fontsize=10.0)
+    save_fig(fig_depth, f"cargo_slowdown_depth_vs_delta_t{suffix}")
+    plt.close(fig_depth)
+
+    # 緩和時間 \tau vs ビーズ径: (a) なら \tau ~ 流れ場寿命で径に依らず有限, (b) なら \tau -> 下限 (~0)
+    df_tau = df_metric[np.isfinite(df_metric['tau_relax_s'])] if len(df_metric) else df_metric
+    if len(df_tau):
+        fig, ax = plt.subplots(figsize=(6.5, 4.8))
+        for b in BEADS_INFO:
+            r = df_tau[df_tau['bead_name'] == b['name']]
+            if len(r) == 0:
+                continue
+            err = r['tau_relax_err_s'].iloc[0]
+            ax.errorbar(b['diameter_um'], r['tau_relax_s'].iloc[0], yerr=err if np.isfinite(err) else None,
+                        fmt=b['marker'], color=b['color'], markersize=8.0, capsize=3.5, label=b['label'])
+        ax.axhline(128, color='gray', ls=':', lw=1.2, label=r'$\tau_{\mathrm{life}} \approx 128\,\mathrm{s}$')
+        ax.set_xscale('log')
+        ax.set_xlabel(r'Bead diameter $d$ [$\mu\mathrm{m}$]')
+        ax.set_ylabel(r'Relaxation time $\tau$ of slowdown depth [$\mathrm{s}$]')
+        ax.set_title(r'Pre-arrival slowdown relaxation time vs cargo size')
+        ax.legend(loc='best', fontsize=9.0)
+        ax.grid(True, which='both')
+        save_fig(fig, f"cargo_slowdown_tau_vs_diameter{suffix}")
+        plt.close(fig)
+
     print("\n=== Criterion metrics (tau: relaxation time, asym: after-before asymmetry / D(0)) ===")
     print(df_metric.round(3).to_string(index=False))
 
