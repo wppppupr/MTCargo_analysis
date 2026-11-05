@@ -25,14 +25,28 @@ notebooks/local_polar.ipynb で行われている局所ポーラーオーダー 
 
 import sys
 import glob
+import os
+import shutil
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
+import h5py
 import numpy as np
 import pandas as pd
 import xarray as xr
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
+
+# 親ディレクトリ等のパス設定
+CURRENT_DIR = Path(__file__).resolve().parent
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
+
+try:
+    from libs.fft_convolution import FFTConvolver
+except ImportError:
+    from fft_convolution import FFTConvolver
 
 # ==============================================================================
 # 設定・定数
@@ -142,6 +156,124 @@ def exp_fit_constrained(x: np.ndarray, xi_star: float, c: float) -> np.ndarray:
     return (1.0 - c) * np.exp(-x / xi_star) + c
 
 
+def compute_nematic_order_for_experiment(
+    exp_dir: Path,
+    sizes: List[int],
+    sample_frames: int = 25,
+) -> Optional[np.ndarray]:
+    """
+    1つの実験の GFP_flows.h5 から、各半径 R における局所ネマチック秩序 S(R)
+    S(R) = < | <e^{2i alpha}>_R | > の時間平均を算出する。
+    貨物粒子の影響を除外するため、beads_tracks.csv から safe_masks を作成して
+    粒子近傍を除外した背景領域でコンボリューションと平均を行う。
+    結果は exp_dir / 'local_nematic_bg.zarr' にキャッシュされる。
+    """
+    zarr_out = exp_dir / "local_nematic_bg.zarr"
+    if zarr_out.exists():
+        try:
+            ds_nem = xr.open_zarr(zarr_out, consolidated=False)
+            if 'nematic_order' in ds_nem:
+                # 窓サイズが一致しているか確認
+                z_sizes = ds_nem.coords['window size'].values
+                if len(z_sizes) == len(sizes) and np.allclose(z_sizes, sizes):
+                    s_mean = ds_nem.nematic_order.mean(dim=['frame']).compute().values
+                    if np.all(np.isfinite(s_mean)):
+                        return s_mean
+        except Exception as e:
+            print(f"[WARN] Failed reading existing cache {zarr_out}: {e}. Recomputing.")
+
+    h5_path = exp_dir / "GFP_flows.h5"
+    if not h5_path.exists():
+        return None
+
+    tracks_csv = exp_dir / "beads_tracks.csv"
+    df_tracks = None
+    if tracks_csv.exists():
+        try:
+            df_tracks = pd.read_csv(tracks_csv)
+        except Exception:
+            pass
+
+    try:
+        with h5py.File(str(h5_path), 'r') as f:
+            key = list(f.keys())[0]
+            flow_data = f[key]
+            num_frames = flow_data.shape[0]
+            if flow_data.shape[-1] == 2:
+                rows, cols = flow_data.shape[1], flow_data.shape[2]
+                channel_first = False
+            else:
+                rows, cols = flow_data.shape[2], flow_data.shape[3]
+                channel_first = True
+
+            # 安全マスク (粒子近傍除外)
+            if df_tracks is not None and not df_tracks.empty:
+                y_all = np.clip(np.round(df_tracks['y'].values).astype(int), 0, rows - 1)
+                x_all = np.clip(np.round(df_tracks['x'].values).astype(int), 0, cols - 1)
+                particle_mask = np.zeros((rows, cols), dtype=bool)
+                particle_mask[y_all, x_all] = True
+                from scipy.ndimage import distance_transform_edt
+                dist_map = distance_transform_edt(~particle_mask)
+                safe_masks = [(dist_map > (s + 5)) for s in sizes]
+            else:
+                safe_masks = [np.ones((rows, cols), dtype=bool) for _ in sizes]
+
+            convolver = FFTConvolver(shape=(rows, cols), sizes=sizes, kernel_type='disk', device='scipy')
+
+            selected_frames = np.linspace(0, num_frames - 1, min(sample_frames, num_frames), dtype=int)
+            nem_order_array = np.full((len(sizes), len(selected_frames)), np.nan, dtype=np.float32)
+
+            for i, t in enumerate(selected_frames):
+                if channel_first:
+                    m_x = flow_data[t, 0, ...].astype(np.float32)
+                    m_y = flow_data[t, 1, ...].astype(np.float32)
+                else:
+                    m_x = flow_data[t, ..., 0].astype(np.float32)
+                    m_y = flow_data[t, ..., 1].astype(np.float32)
+
+                v_mag = np.hypot(m_x, m_y)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    m_ux = np.where(v_mag > 0, m_x / v_mag, 0.0).astype(np.float32)
+                    m_uy = np.where(v_mag > 0, m_y / v_mag, 0.0).astype(np.float32)
+
+                cos2 = (m_ux**2 - m_uy**2).astype(np.float32)
+                sin2 = (2.0 * m_ux * m_uy).astype(np.float32)
+
+                s_vals = convolver.convolve_and_sample_bg_polar(m_ux=cos2, m_uy=sin2, safe_masks=safe_masks)
+                nem_order_array[:, i] = s_vals
+
+        # キャッシュの保存
+        try:
+            int_sizes = [int(s) for s in sizes]
+            int_frames = [int(f) for f in selected_frames]
+            ds_out = xr.Dataset(
+                data_vars={
+                    'nematic_order': xr.DataArray(
+                        nem_order_array,
+                        dims=['window size', 'frame'],
+                        coords={'window size': int_sizes, 'frame': int_frames}
+                    )
+                },
+                attrs={
+                    'description': 'Background local nematic order S(R) = <|<e^{2i alpha}>_R|>',
+                    'window_sizes': int_sizes,
+                    'sampled_frames': int(len(selected_frames))
+                }
+            )
+            if zarr_out.exists():
+                shutil.rmtree(zarr_out, ignore_errors=True)
+            ds_out.to_zarr(str(zarr_out), mode='w', consolidated=False)
+            print(f"[INFO] Cached background nematic order to {zarr_out}")
+        except Exception as e:
+            print(f"[WARN] Failed to write cache {zarr_out}: {e}")
+
+        s_mean = np.nanmean(nem_order_array, axis=1)
+        return s_mean
+    except Exception as e:
+        print(f"[WARN] Error computing nematic order for {exp_dir}: {e}")
+        return None
+
+
 def load_local_polar_for_experiment(
     exp_dir: Path,
     xi_exp: float,
@@ -150,7 +282,7 @@ def load_local_polar_for_experiment(
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     1つの実験ディレクトリから local_polar_w.zarr と local_polar_bg.zarr を読み込み、
-    相関長 xi_exp で無次元化した DataFrame を作成する。
+    さらに局所ネマチック秩序 S(R) も計算して、相関長 xi_exp で無次元化した DataFrame を作成する。
     ビーズ内部（マスク領域）や無効な値 (NaN, Inf, 極小値) は除外する。
     """
     p_df = pd.DataFrame()
@@ -186,6 +318,7 @@ def load_local_polar_for_experiment(
                     'window_radius_um': r_um[valid_mask],
                     'window_radius_norm': r_norm[valid_mask],
                     'polar_order': p_mean[valid_mask],
+                    'nematic_order': np.nan,
                     'type': 'w_cargo',
                 })
         except Exception as e:
@@ -201,6 +334,11 @@ def load_local_polar_for_experiment(
             r_um = win_size_px * SCALE
             r_norm = r_um / xi_exp
 
+            # 背景局所ネマチック秩序 S(R) を計算 / キャッシュから読み出し
+            s_mean = compute_nematic_order_for_experiment(exp_dir, sizes=list(win_size_px))
+            if s_mean is None or len(s_mean) != len(win_size_px):
+                s_mean = np.full(len(win_size_px), np.nan, dtype=np.float32)
+
             valid_mask = np.isfinite(bg_mean) & (bg_mean > 0.0) & (bg_mean <= 1.05)
             if valid_mask.any():
                 bg_df = pd.DataFrame({
@@ -213,6 +351,7 @@ def load_local_polar_for_experiment(
                     'window_radius_um': r_um[valid_mask],
                     'window_radius_norm': r_norm[valid_mask],
                     'polar_order': bg_mean[valid_mask],
+                    'nematic_order': s_mean[valid_mask],
                     'type': 'wo_cargo',
                 })
         except Exception as e:
@@ -227,7 +366,7 @@ def load_control_for_experiment(
 ) -> pd.DataFrame:
     """
     コントロール微小管ディレクトリから local_polar_noCargo.zarr を読み込み、
-    xi_exp で無次元化した DataFrame を作成する。
+    さらに局所ネマチック秩序 S(R) も計算して、xi_exp で無次元化した DataFrame を作成する。
     """
     no_path = exp_dir / "local_polar_noCargo.zarr"
     if not no_path.exists():
@@ -239,6 +378,11 @@ def load_control_for_experiment(
         win_size_px = ds_no.coords['window size'].values
         r_um = win_size_px * SCALE
         r_norm = r_um / xi_exp
+
+        # コントロールの局所ネマチック秩序 S(R)
+        s_mean = compute_nematic_order_for_experiment(exp_dir, sizes=list(win_size_px))
+        if s_mean is None or len(s_mean) != len(win_size_px):
+            s_mean = np.full(len(win_size_px), np.nan, dtype=np.float32)
 
         valid_mask = np.isfinite(no_mean) & (no_mean > 0.0) & (no_mean <= 1.05)
         if valid_mask.any():
@@ -252,6 +396,7 @@ def load_control_for_experiment(
                 'window_radius_um': r_um[valid_mask],
                 'window_radius_norm': r_norm[valid_mask],
                 'polar_order': no_mean[valid_mask],
+                'nematic_order': s_mean[valid_mask],
                 'type': 'control',
             })
         return pd.DataFrame()
@@ -594,7 +739,7 @@ def plot_dimensionless_master_curves(
 
         ax_log.vlines(1.0, ymin=0, ymax=1.0, color='#333333', linestyle='--', lw=1.5)
         ax_log.set_xlabel(r'Dimensionless Window Radius $R/\xi$')
-        ax_log.set_ylabel(r'Polar Order $P$')
+        ax_log.set_ylabel(r'Polar Order $\Phi(R/\xi)$')
         ax_log.set_xscale('log')
         ax_log.set_xlim(0.05, 50.0)
         ax_log.set_ylim(0, 1.0)
@@ -613,6 +758,219 @@ def plot_dimensionless_master_curves(
         print(f"[INFO] Saved fit summary to {csv_path}")
         print("\n=== Exponential Fit Summary P(R/xi) = (1 - C)*exp(-(R/xi)/xi*) + C ===")
         print(df_fit.to_string(index=False))
+
+
+def plot_polar_nematic_curves(
+    df_bg: pd.DataFrame,
+    df_ctrl: pd.DataFrame,
+    style_colors: list,
+    out_dir: Path,
+):
+    """
+    局所ポーラー秩序 Phi(R/xi) と 局所ネマチック秩序 S(R/xi) を同じ図に描画するプロット。
+    result3.md セクション 2.3 の仕様に準拠:
+    - 横軸: Dimensionless Window Radius R/xi (線形軸および対数軸)
+    - 縦軸: Order Parameter (0 <= y <= 1.0)
+    - 背景版 (w/o Cargo) のオプティカルフローから計算した Phi(R/xi) と S(R/xi) を比較。
+    - Phi: 破線 (またはマーカー 'o')
+    - S: 実線 (またはマーカー 's')
+    """
+    if df_bg.empty and df_ctrl.empty:
+        return
+
+    # -----------------------------------------------------------------
+    # 1. 線形軸プロット (0 <= R/xi <= 10.0)
+    # -----------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(9.5, 6.8))
+
+    # コントロール
+    if not df_ctrl.empty:
+        g_ctrl = df_ctrl.groupby('window_size_px')
+        ctrl_r_norm = g_ctrl['window_radius_norm'].mean()
+        ctrl_phi_mean = g_ctrl['polar_order'].mean()
+        ax.plot(
+            ctrl_r_norm,
+            ctrl_phi_mean,
+            label=r'Control $\Phi(R/\xi)$',
+            color='#555555',
+            linestyle='--',
+            lw=2.2,
+            zorder=2
+        )
+        if 'nematic_order' in df_ctrl.columns and df_ctrl['nematic_order'].notna().any():
+            ctrl_s_mean = g_ctrl['nematic_order'].mean()
+            if ctrl_s_mean.notna().any():
+                ax.plot(
+                    ctrl_r_norm,
+                    ctrl_s_mean,
+                    label=r'Control $S(R/\xi)$',
+                    color='#111111',
+                    linestyle='-',
+                    lw=2.5,
+                    zorder=2
+                )
+
+    for cond in CONDITIONS_INFO:
+        df_c = df_bg[df_bg['condition'] == cond['key']]
+        if df_c.empty:
+            continue
+
+        g = df_c.groupby('window_size_px')
+        r_norm = g['window_radius_norm'].mean()
+        phi_mean = g['polar_order'].mean()
+        phi_std = g['polar_order'].std()
+
+        c_idx = cond['color_idx']
+        color = style_colors[c_idx % len(style_colors)]
+        label_base = cond['label']
+
+        # Phi(R/xi)
+        ax.errorbar(
+            r_norm,
+            phi_mean,
+            yerr=phi_std,
+            label=rf"{label_base}: $\Phi(R/\xi)$",
+            marker=cond['marker'],
+            linestyle='--',
+            color=color,
+            lw=1.8,
+            markersize=6.5,
+            capsize=2.5,
+            alpha=0.85,
+            zorder=3
+        )
+
+        # S(R/xi)
+        if 'nematic_order' in df_c.columns and df_c['nematic_order'].notna().any():
+            s_mean = g['nematic_order'].mean()
+            s_std = g['nematic_order'].std()
+            if s_mean.notna().any():
+                ax.errorbar(
+                    r_norm,
+                    s_mean,
+                    yerr=s_std,
+                    label=rf"{label_base}: $S(R/\xi)$",
+                    marker='s',
+                    linestyle='-',
+                    color=color,
+                    lw=2.2,
+                    markersize=6.5,
+                    capsize=2.5,
+                    alpha=0.95,
+                    zorder=4
+                )
+
+    ax.vlines(1.0, ymin=0, ymax=1.0, color='#333333', linestyle=':', lw=1.5, zorder=100)
+    ax.set_xlabel(r'Dimensionless Window Radius $R/\xi$', fontsize=13, fontweight='bold')
+    ax.set_ylabel(r'Order Parameter $\Phi(R/\xi)$ and $S(R/\xi)$', fontsize=13, fontweight='bold')
+    ax.set_xlim(0, 10.0)
+    ax.set_ylim(0, 1.05)
+    ax.set_title(r"Local Polar Order $\Phi(R/\xi)$ and Nematic Order $S(R/\xi)$ (w/o Cargo)",
+                 fontsize=13.5, fontweight='bold')
+    ax.grid(True, which='both', ls='--', alpha=0.35)
+    ax.legend(frameon=True, loc='center right', bbox_to_anchor=(1.35, 0.5), fontsize=9.5)
+    fig.tight_layout()
+
+    for ext in ['png', 'svg', 'pdf']:
+        fig.savefig(out_dir / f"local_polar_nematic_dimensionless_wo_cargo_linear.{ext}", bbox_inches='tight')
+    plt.close(fig)
+    print(f"[INFO] Saved local_polar_nematic_dimensionless_wo_cargo_linear to {out_dir}")
+
+    # -----------------------------------------------------------------
+    # 2. 対数軸プロット (0.05 <= R/xi <= 50)
+    # -----------------------------------------------------------------
+    fig_log, ax_log = plt.subplots(figsize=(9.5, 6.8))
+
+    if not df_ctrl.empty:
+        g_ctrl = df_ctrl.groupby('window_size_px')
+        ctrl_r_norm = g_ctrl['window_radius_norm'].mean()
+        ctrl_phi_mean = g_ctrl['polar_order'].mean()
+        ax_log.plot(
+            ctrl_r_norm,
+            ctrl_phi_mean,
+            label=r'Control $\Phi(R/\xi)$',
+            color='#555555',
+            linestyle='--',
+            lw=2.2,
+            zorder=2
+        )
+        if 'nematic_order' in df_ctrl.columns and df_ctrl['nematic_order'].notna().any():
+            ctrl_s_mean = g_ctrl['nematic_order'].mean()
+            if ctrl_s_mean.notna().any():
+                ax_log.plot(
+                    ctrl_r_norm,
+                    ctrl_s_mean,
+                    label=r'Control $S(R/\xi)$',
+                    color='#111111',
+                    linestyle='-',
+                    lw=2.5,
+                    zorder=2
+                )
+
+    for cond in CONDITIONS_INFO:
+        df_c = df_bg[df_bg['condition'] == cond['key']]
+        if df_c.empty:
+            continue
+
+        g = df_c.groupby('window_size_px')
+        r_norm = g['window_radius_norm'].mean()
+        phi_mean = g['polar_order'].mean()
+        phi_std = g['polar_order'].std()
+
+        c_idx = cond['color_idx']
+        color = style_colors[c_idx % len(style_colors)]
+        label_base = cond['label']
+
+        ax_log.errorbar(
+            r_norm,
+            phi_mean,
+            yerr=phi_std,
+            label=rf"{label_base}: $\Phi(R/\xi)$",
+            marker=cond['marker'],
+            linestyle='--',
+            color=color,
+            lw=1.8,
+            markersize=6.5,
+            capsize=2.5,
+            alpha=0.85,
+            zorder=3
+        )
+
+        if 'nematic_order' in df_c.columns and df_c['nematic_order'].notna().any():
+            s_mean = g['nematic_order'].mean()
+            s_std = g['nematic_order'].std()
+            if s_mean.notna().any():
+                ax_log.errorbar(
+                    r_norm,
+                    s_mean,
+                    yerr=s_std,
+                    label=rf"{label_base}: $S(R/\xi)$",
+                    marker='s',
+                    linestyle='-',
+                    color=color,
+                    lw=2.2,
+                    markersize=6.5,
+                    capsize=2.5,
+                    alpha=0.95,
+                    zorder=4
+                )
+
+    ax_log.vlines(1.0, ymin=0, ymax=1.0, color='#333333', linestyle=':', lw=1.5)
+    ax_log.set_xlabel(r'Dimensionless Window Radius $R/\xi$', fontsize=13, fontweight='bold')
+    ax_log.set_ylabel(r'Order Parameter $\Phi(R/\xi)$ and $S(R/\xi)$', fontsize=13, fontweight='bold')
+    ax_log.set_xscale('log')
+    ax_log.set_xlim(0.05, 50.0)
+    ax_log.set_ylim(0, 1.05)
+    ax_log.set_title(r"Local Polar Order $\Phi(R/\xi)$ and Nematic Order $S(R/\xi)$ (w/o Cargo, Log Scale)",
+                     fontsize=13.5, fontweight='bold')
+    ax_log.grid(True, which='both', ls='--', alpha=0.35)
+    ax_log.legend(frameon=True, loc='center right', bbox_to_anchor=(1.35, 0.5), fontsize=9.5)
+    fig_log.tight_layout()
+
+    for ext in ['png', 'svg', 'pdf']:
+        fig_log.savefig(out_dir / f"local_polar_nematic_dimensionless_wo_cargo_log.{ext}", bbox_inches='tight')
+    plt.close(fig_log)
+    print(f"[INFO] Saved local_polar_nematic_dimensionless_wo_cargo_log to {out_dir}")
 
 
 def plot_side_by_side_comparison(
@@ -737,10 +1095,13 @@ def main():
                 cond, df_p_c, df_bg_c, df_ctrl, style_colors, out_d
             )
 
-        # 5. 全体マスタカーブプロット (線形 & 対数)
+        # 5. 全体マスタカーブプロット (Phi だけのグラフ: 線形 & 対数)
         plot_dimensionless_master_curves(df_p, df_bg, df_ctrl, style_colors, out_d)
 
-        # 6. Side-by-side 比較プロット
+        # 6. Phi(R/xi) と S(R/xi) を同じ図に描くプロット (線形 & 対数)
+        plot_polar_nematic_curves(df_bg, df_ctrl, style_colors, out_d)
+
+        # 7. Side-by-side 比較プロット
         plot_side_by_side_comparison(df_p, df_bg, df_ctrl, style_colors, out_d)
 
     # 7. 生データの CSV エクスポート
