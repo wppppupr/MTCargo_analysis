@@ -494,12 +494,15 @@ def _particle_boot_paired(p_means: pd.DataFrame, cols: List[str], rng: np.random
 
 
 def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAULT,
-                         n_boot: int = N_BOOT, seed: int = SEED):
+                         n_boot: int = N_BOOT, seed: int = SEED, min_particles: int = 5):
     """2 サイズ (既定: beads06um vs beads20um) の速度量を比較する 3 パネル図.
 
     (a) 粒子平均速度 <v_par>, <|<u_Rc>|>, <|u|> の棒グラフ (粒子ブートストラップ 95% CI)
     (b) 瞬時 v_parallel の分布 (密度ヒストグラム)
     (c) 粒子平均 v_parallel vs |<u_Rc>| 散布図 (y=x 参照線)
+
+    粒子数 < min_particles のビーズは棒をハッチ表示し凡例に "low N" を付す
+    (粒子ブートストラップ CI は少数粒子では過小評価・離散化されるため).
     """
     setup_matplotlib()
     info = {b['name']: b for b in vcd.BEADS_INFO}
@@ -521,18 +524,29 @@ def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAU
     rows = []
     all_vpar = np.concatenate([df_merged.loc[df_merged['bead_name'] == b, 'v_parallel'].values
                                for b in bead_names])
+    all_vpar = all_vpar[np.isfinite(all_vpar)]
+    if all_vpar.size == 0:
+        print('[warn] no finite v_parallel for selected beads; size comparison skipped')
+        return pd.DataFrame()
     lo, hi = np.percentile(all_vpar, [0.5, 99.5])
+    if not hi > lo:  # 定数データ等で bin 幅 0 になるのを防ぐ
+        lo, hi = lo - 0.5, hi + 0.5
     bins = np.linspace(lo, hi, 60)
     ax_max = 0.0
 
     for k, bname in enumerate(bead_names):
         sub = df_merged[df_merged['bead_name'] == bname]
+        sub = sub[np.isfinite(sub[['v_parallel', 'u_fp', 'u_px']]).all(axis=1)]
         if sub.empty:
             print(f"[warn] no data for {bname}")
             continue
         b = info[bname]
         p_means = sub.groupby('unique_pid')[['v_parallel', 'u_fp', 'u_px']].mean()
-        label_base = f"{b['label']} (N={len(p_means)} particles)"
+        low_n = len(p_means) < min_particles
+        if low_n:
+            print(f"[warn] {bname}: only {len(p_means)} particles (< {min_particles}); "
+                  "bootstrap CI is unreliable (hatched bars)")
+        label_base = f"{b['label']} (N={len(p_means)} particles{', low N' if low_n else ''})"
 
         # (a) bar chart of means (paired bootstrap: 列間で同じ粒子リサンプル)
         pt, bt = _particle_boot_paired(p_means, [c for c, _ in qty], rng, n_boot)
@@ -549,8 +563,10 @@ def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAU
                  rf"$\eta$={r_eta['eta']:.2f} [{r_eta['eta_ci95'][0]:.2f}, {r_eta['eta_ci95'][1]:.2f}], "
                  rf"$A$={r_A['A']:.2f} [{r_A['A_ci95'][0]:.2f}, {r_A['A_ci95'][1]:.2f}]")
         axes[0].bar(x, m, width=width, color=b['color'], yerr=err, capsize=4,
-                    edgecolor='black', linewidth=0.8, label=label)
+                    edgecolor='black', linewidth=0.8, label=label,
+                    hatch='//' if low_n else None, alpha=0.6 if low_n else 1.0)
         rows.append({'bead_name': bname, 'n_particles': len(p_means), 'n_frames': len(sub),
+                     'low_n': low_n,
                      **{f'{c}_mean': s[0] for (c, _), s in zip(qty, stats)},
                      **{f'{c}_ci95': (s[1], s[2]) for (c, _), s in zip(qty, stats)},
                      **r_eta, **r_A})
@@ -602,7 +618,7 @@ def plot_size_comparison(df_merged: pd.DataFrame, bead_names=COMPARE_BEADS_DEFAU
         d.mkdir(parents=True, exist_ok=True)
         df_cmp.to_csv(d / f"speed_comparison_{tag}.csv", index=False)
     print(f"\n=== Speed comparison: {' vs '.join(bead_names)} [um/s] ===")
-    print(df_cmp[['bead_name', 'n_particles', 'n_frames', 'v_parallel_mean', 'u_fp_mean',
+    print(df_cmp[['bead_name', 'n_particles', 'low_n', 'n_frames', 'v_parallel_mean', 'u_fp_mean',
                   'u_px_mean', 'eta', 'eta_ci95', 'A', 'A_ci95']].to_string(index=False, float_format=lambda x: f"{x:.4f}"))
     return df_cmp
 
@@ -616,7 +632,7 @@ def main():
     ap.add_argument('--large-d', type=float, default=15.0,
                     help='白抜き記号で示す大径ビーズの直径閾値 [um] (既定: 15)')
     ap.add_argument('--min-particles', type=int, default=5,
-                    help='粒子数がこれ未満のビーズを low_n として警告・表に記録 (既定: 5)')
+                    help='粒子数がこれ未満のビーズを low_n として警告・表に記録、サイズ比較図ではハッチ表示 (既定: 5)')
     ap.add_argument('--no-local-scalar', action='store_true',
                     help='<|u|> に粒子局所スカラー速さではなく velocities_mean.csv の全体平均を使う')
     ap.add_argument('--method', choices=['m1', 'm2'], default='m2',
@@ -637,7 +653,8 @@ def main():
     df_merged = load_and_preprocess_data(use_local_scalar=not args.no_local_scalar)
 
     if args.compare_only:
-        plot_size_comparison(df_merged, tuple(args.compare), n_boot=args.n_boot, seed=args.seed)
+        plot_size_comparison(df_merged, tuple(args.compare), n_boot=args.n_boot, seed=args.seed,
+                             min_particles=args.min_particles)
         print("All tasks completed successfully!")
         return
     print(f"Loaded {len(df_merged)} valid instantaneous measurements across "
@@ -664,7 +681,8 @@ def main():
     print("\nGenerating figures...")
     plot_identity_decomposition(df_res, large_d_um=args.large_d, method=args.method,
                                 mark_low_n=not args.no_mark_low_n)
-    plot_size_comparison(df_merged, tuple(args.compare), n_boot=args.n_boot, seed=args.seed)
+    plot_size_comparison(df_merged, tuple(args.compare), n_boot=args.n_boot, seed=args.seed,
+                         min_particles=args.min_particles)
     print("All tasks completed successfully!")
 
 
