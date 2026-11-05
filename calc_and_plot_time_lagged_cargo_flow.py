@@ -283,6 +283,23 @@ def fit_relaxation_time(dt_vals, depth_vals, depth_sems):
     except (RuntimeError, ValueError):
         return np.nan, np.nan, np.nan
 
+def retention_tau_lower_bound(d0, d0_err, d_max, d_max_err, dt_max, n_sigma=2.0):
+    """
+    モデル非依存の保持率 R = D(\Delta t_max) / D(0) と、そこから導く \tau の下限
+    \tau_lo = -\Delta t_max / ln(R - n_sigma*\sigma_R)  (保持率の下側 = 最速減衰側。R が 1 に近いほど \tau_lo は大)。
+    指数フィットの \tau が観測窓を大きく超えて誤差 > 値になる (未分解) 場合の、保守的な報告値として使う。
+    R - n\sigma >= 1 なら減衰なしと区別不能 → \tau_lo = inf、R - n\sigma <= 0 なら下限を付けられない → NaN。
+    戻り値: (R, R_err, tau_lo)。D(0) <= 0 などで定義できなければ NaN。
+    """
+    if not (np.isfinite(d0) and d0 > 0 and np.isfinite(d_max) and dt_max > 0):
+        return np.nan, np.nan, np.nan
+    R = d_max / d0
+    R_err = abs(R) * np.hypot(d_max_err / d_max if d_max != 0 else 0.0, d0_err / d0)
+    r_lo = R - n_sigma * R_err  # 減衰が最も速い側 (= \tau 最小) の保持率
+    if not (0.0 < r_lo < 1.0):
+        return float(R), float(R_err), (np.nan if r_lo <= 0 else np.inf)
+    return float(R), float(R_err), float(-dt_max / np.log(r_lo))
+
 def main():
     global DELTA_T_SEC_LIST
     parser = argparse.ArgumentParser(description="Time-lagged cargo flow profile analysis: accumulation vs disturbance.")
@@ -298,6 +315,9 @@ def main():
                              f"Default: {DELTA_T_SEC_LIST}")
     parser.add_argument('--no_fit_overlay', action='store_true',
                         help="Do not overlay fitted D0*exp(-dt/tau) curves on the depth-vs-dt figure")
+    parser.add_argument('--tau_resolve_factor', type=float, default=3.0,
+                        help="Exponential-fit tau is treated as resolved only if tau <= factor * max(Delta t) "
+                             "and tau_err < tau; otherwise a model-free 2-sigma lower bound is plotted (default 3)")
     args = parser.parse_args()
 
     if args.delta_t is not None:
@@ -578,9 +598,17 @@ def main():
         d_map = dict(zip(g['delta_t_sec'], g['slowdown_depth']))
         e_map = dict(zip(g['delta_t_sec'], g['edge_sem']))
         d0_fit, tau, tau_err = fit_relaxation_time(g['delta_t_sec'], g['slowdown_depth'], g['edge_sem'])
-        rec = {'bead_name': b_name, 'diameter_um': g['diameter_um'].iloc[0],
-               'D0_fit': d0_fit, 'tau_relax_s': tau, 'tau_relax_err_s': tau_err}
         d0 = d_map.get(0, np.nan)
+        dt_pos = [dt for dt in d_map if dt > 0]
+        dt_max = max(dt_pos) if dt_pos else np.nan
+        R, R_err, tau_lo = (retention_tau_lower_bound(d0, e_map.get(0, 0.0), d_map[dt_max], e_map[dt_max], dt_max)
+                            if dt_pos else (np.nan, np.nan, np.nan))
+        tau_resolved = bool(np.isfinite(tau) and np.isfinite(tau_err) and tau_err < tau
+                            and np.isfinite(dt_max) and tau <= args.tau_resolve_factor * dt_max)
+        rec = {'bead_name': b_name, 'diameter_um': g['diameter_um'].iloc[0],
+               'D0_fit': d0_fit, 'tau_relax_s': tau, 'tau_relax_err_s': tau_err,
+               'tau_resolved': tau_resolved, 'retention_dtmax_s': dt_max,
+               'retention_ratio': R, 'retention_ratio_err': R_err, 'tau_lower_2sigma_s': tau_lo}
         pairs = sorted(dt for dt in d_map if dt > 0 and -dt in d_map)
         if pairs and np.isfinite(d0) and d0 > 0:
             a_vals = [(d_map[-dt] - d_map[dt]) / d0 for dt in pairs]
@@ -608,22 +636,39 @@ def main():
     plt.close(fig_depth)
 
     # 緩和時間 \tau vs ビーズ径: (a) なら \tau ~ 流れ場寿命で径に依らず有限, (b) なら \tau -> 下限 (~0)
-    df_tau = df_metric[np.isfinite(df_metric['tau_relax_s'])] if len(df_metric) else df_metric
+    # 未分解 (\tau >> 観測窓 or 誤差 > 値) のビーズは指数フィット値ではなく 2σ 下限を上向き矢印で示す
+    df_tau = df_metric[np.isfinite(df_metric['tau_relax_s']) | np.isfinite(df_metric['tau_lower_2sigma_s'])] \
+        if len(df_metric) else df_metric
     if len(df_tau):
         fig, ax = plt.subplots(figsize=(6.5, 4.8))
+        dt_max_all = max(d for d in DELTA_T_SEC_LIST if d > 0) if any(d > 0 for d in DELTA_T_SEC_LIST) else 128
+        y_cap = args.tau_resolve_factor * dt_max_all
         for b in BEADS_INFO:
             r = df_tau[df_tau['bead_name'] == b['name']]
             if len(r) == 0:
                 continue
-            err = r['tau_relax_err_s'].iloc[0]
-            ax.errorbar(b['diameter_um'], r['tau_relax_s'].iloc[0], yerr=err if np.isfinite(err) else None,
-                        fmt=b['marker'], color=b['color'], markersize=8.0, capsize=3.5, label=b['label'])
+            r = r.iloc[0]
+            if r['tau_resolved']:
+                err = r['tau_relax_err_s']
+                ax.errorbar(b['diameter_um'], r['tau_relax_s'], yerr=err if np.isfinite(err) else None,
+                            fmt=b['marker'], color=b['color'], markersize=8.0, capsize=3.5, label=b['label'])
+            else:
+                lo = r['tau_lower_2sigma_s']
+                if not np.isfinite(lo) or lo <= 0:
+                    continue
+                y = min(lo, y_cap)  # inf (減衰が有意でない) は表示上限にクリップ
+                ax.errorbar(b['diameter_um'], y, yerr=[[0], [0.35 * y]], lolims=True, fmt=b['marker'],
+                            mfc='white', color=b['color'], markersize=8.0, capsize=0, label=b['label'] + r' ($\geq$)')
         ax.axhline(128, color='gray', ls=':', lw=1.2, label=r'$\tau_{\mathrm{life}} \approx 128\,\mathrm{s}$')
+        ax.axhline(dt_max_all, color='k', ls='-.', lw=0.9, alpha=0.6,
+                   label=r'Observation window $\Delta t_{\max}$')
         ax.set_xscale('log')
         ax.set_xlabel(r'Bead diameter $d$ [$\mu\mathrm{m}$]')
         ax.set_ylabel(r'Relaxation time $\tau$ of slowdown depth [$\mathrm{s}$]')
         ax.set_title(r'Pre-arrival slowdown relaxation time vs cargo size')
-        ax.legend(loc='best', fontsize=9.0)
+        ax.text(0.02, 0.02, r'Open + arrow: unresolved fit $\rightarrow$ $2\sigma$ lower bound from $D(\Delta t_{\max})/D(0)$',
+                transform=ax.transAxes, fontsize=8.0, color='dimgray')
+        ax.legend(loc='best', fontsize=8.0)
         ax.grid(True, which='both')
         save_fig(fig, f"cargo_slowdown_tau_vs_diameter{suffix}")
         plt.close(fig)
