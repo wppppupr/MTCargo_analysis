@@ -343,7 +343,19 @@ def plot_fig1_coupling_spectrum(df_inst: pd.DataFrame, null_results: dict):
     ax_a.set_xlabel(r'Dimensionless cargo size $R_c / \xi$')
     ax_a.set_ylabel(r'Normalized orientation coupling $\langle\cos\psi\rangle$')
     ax_a.set_title(r'(a) Normalized Coupling $\hat{v} \cdot \frac{\langle u\rangle_{R_c}}{|\langle u\rangle_{R_c}|}$ vs $R_c/\xi$', fontweight='bold')
-    ax_a.legend(loc='lower left', fontsize=9.5, framealpha=0.9)
+    # 凡例を「基準線 (上限/下限/Null)」と「実測データ」に分割し、データの無い上部領域に配置
+    # (データ点は <cos psi> < 0.4 に集中するため、下部配置だと 0.63 µm 点や Null 線と重なる)
+    h_a, l_a = ax_a.get_legend_handles_labels()
+    is_ref = [('Bound' in l) or ('Null' in l) for l in l_a]
+    ref_h = [h for h, r in zip(h_a, is_ref) if r]
+    ref_l = [l for l, r in zip(l_a, is_ref) if r]
+    dat_h = [h for h, r in zip(h_a, is_ref) if not r]
+    dat_l = [l for l, r in zip(l_a, is_ref) if not r]
+    leg_ref = ax_a.legend(ref_h, ref_l, loc='upper left', bbox_to_anchor=(0.01, 0.94),
+                          fontsize=9.0, framealpha=0.9)
+    ax_a.add_artist(leg_ref)
+    ax_a.legend(dat_h, dat_l, loc='upper left', bbox_to_anchor=(0.01, 0.70), ncol=2,
+                fontsize=8.5, framealpha=0.9, columnspacing=0.8, handletextpad=0.4)
     ax_a.grid(True)
 
     # -------------------------------------------------------------
