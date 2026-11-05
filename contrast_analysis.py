@@ -48,6 +48,8 @@ BEADS_INFO = [
     {'name': 'beads20um', 'label': r'20.0 $\mu\mathrm{m}$', 'diameter_um': 20.0, 'radius_um': 10.000,
      'color': '#44AA99', 'marker': 's'},
 ]
+# パネル配置・Rc/xi 方向の折れ線が粒径順になるよう常に直径で昇順ソート
+BEADS_INFO.sort(key=lambda b: b['diameter_um'])
 
 SCALE_UM_PER_PX = 0.11
 DT_SEC = 4.0
