@@ -276,8 +276,29 @@ def _auto_ylim(df: pd.DataFrame, keys: List[str], default: Tuple[float, float],
     return lo, hi
 
 
-def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0, method: str = 'm2'):
-    """method: 'm2' (フレームプール, 既定) または 'm1' (粒子等重み). m1 の図はファイル名に _m1 を付与."""
+def _mark_low_n(ax, df: pd.DataFrame, keys: List[str], log: bool = False):
+    """low_n (粒子数不足) のビーズに灰色の破線リングと N 注記を重ね, CI が信頼できないことを明示."""
+    if 'low_n' not in df or not df['low_n'].any():
+        return False
+    d = df[df['low_n'].astype(bool)]
+    for k in keys:
+        y = d[k].values.astype(float)
+        ok = np.isfinite(y) & ((y > 0) if log else True)
+        ax.scatter(d['rc_over_xi'].values[ok], y[ok], s=260, facecolors='none',
+                   edgecolors='#555555', linewidths=1.2, linestyles='--', zorder=9)
+    for _, r in d.iterrows():
+        ys = [r[k] for k in keys if np.isfinite(r[k]) and (not log or r[k] > 0)]
+        if ys:
+            ax.annotate(f"N={int(r['n_particles'])}", xy=(r['rc_over_xi'], max(ys)),
+                        xytext=(0, 12), textcoords='offset points', ha='center',
+                        fontsize=8.5, color='#555555', zorder=10)
+    return True
+
+
+def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0, method: str = 'm2',
+                                mark_low_n: bool = True):
+    """method: 'm2' (フレームプール, 既定) または 'm1' (粒子等重み). m1 の図はファイル名に _m1 を付与.
+    mark_low_n: low_n (粒子数 < min_particles) の点を破線リング + N 注記で強調."""
     if method not in ('m1', 'm2'):
         raise ValueError(f"method must be 'm1' or 'm2', got {method!r}")
     suffix = '' if method == 'm2' else f'_{method}'
@@ -288,7 +309,13 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0, 
     c_A   = '#1B9E77'     # Footprint geometric averaging
     c_tot = '#7570B3'     # Overall ratio eta * A
 
-    df_sorted = df_res.sort_values('rc_over_xi').reset_index(drop=True)
+    df_sorted = df_res[np.isfinite(df_res['rc_over_xi']) & (df_res['rc_over_xi'] > 0)]
+    if len(df_sorted) < len(df_res):
+        print(f"[warn] {len(df_res) - len(df_sorted)} bead(s) with invalid rc_over_xi dropped from plot")
+    if df_sorted.empty:
+        print('[warn] no valid rc_over_xi; decomposition figures skipped')
+        return
+    df_sorted = df_sorted.sort_values('rc_over_xi').reset_index(drop=True)
     std_mask = (df_sorted['diameter_um'] < large_d_um).values
     sp_mask = ~std_mask
 
@@ -350,7 +377,13 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0, 
     ax.set_title(r'Exact Velocity Decomposition: $\frac{\langle v_\parallel\rangle}{\langle|\mathbf{u}|\rangle_{R_c}} = \eta \times A$',
                  fontsize=15, pad=12, fontweight='bold')
 
+    has_low = mark_low_n and _mark_low_n(ax, df_sorted, keys_all)
     handles, labels = ax.get_legend_handles_labels()
+    if has_low:
+        low_lbl = 'Dashed ring: low N (CI unreliable)'
+        handles.append(Line2D([0], [0], marker='o', color='w', markerfacecolor='none',
+                              markeredgecolor='#555555', linestyle='none', markersize=12, label=low_lbl))
+        labels.append(low_lbl)
     if sp_mask.any():
         open_lbl = rf'Open: $\geq{large_d_um:g}\,\mu\mathrm{{m}}$ Cargo ($R_c > \xi$)'
         handles.append(Line2D([0], [0], marker='o', color='w', markeredgecolor='black',
@@ -386,6 +419,8 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0, 
     ax1.set_xlabel(r'Normalized Cargo Size $R_c / \xi$', fontsize=13)
     ax1.set_ylabel('Velocity Ratio [-]', fontsize=13)
     ax1.set_title('(a) Exact Identity Decomposition (Linear Scale)', fontsize=14, fontweight='bold')
+    if mark_low_n:
+        _mark_low_n(ax1, df_sorted, keys_all)
     ax1.legend(loc='upper right', frameon=True, framealpha=0.9, fontsize=9.5)
     ax1.grid(True, which='both', linestyle='--', alpha=0.4)
 
@@ -397,6 +432,8 @@ def plot_identity_decomposition(df_res: pd.DataFrame, large_d_um: float = 15.0, 
             (f'{method}_tot', 'd--', c_tot, r'Total Ratio $\eta \times A$', 3, small_tot)):
         pos = (df_sorted[key] > 0).values
         _errorbar_pair(ax2, df_sorted, std_mask & pos, sp_mask & pos, key, fmt, c, lbl, z, **kw)
+    if mark_low_n:
+        _mark_low_n(ax2, df_sorted, keys_all, log=True)
     ax2.set_xscale('log')
     ax2.set_yscale('log')
     ax2.set_xlim(x_lo, x_hi)
@@ -556,6 +593,8 @@ def main():
                     help='<|u|> に粒子局所スカラー速さではなく velocities_mean.csv の全体平均を使う')
     ap.add_argument('--method', choices=['m1', 'm2'], default='m2',
                     help='図に用いる平均法: m2=フレームプール(既定), m1=粒子等重み (出力名に _m1)')
+    ap.add_argument('--no-mark-low-n', action='store_true',
+                    help='low_n ビーズの破線リング・N 注記を描かない')
     ap.add_argument('--compare-only', action='store_true',
                     help='サイズ比較図のみ出力 (全サイズの分解統計を省略)')
     args = ap.parse_args()
@@ -593,7 +632,8 @@ def main():
     print(df_res[cols_show].to_string(index=False, float_format=lambda x: f"{x:.4f}"))
 
     print("\nGenerating figures...")
-    plot_identity_decomposition(df_res, large_d_um=args.large_d, method=args.method)
+    plot_identity_decomposition(df_res, large_d_um=args.large_d, method=args.method,
+                                mark_low_n=not args.no_mark_low_n)
     plot_size_comparison(df_merged, tuple(args.compare), n_boot=args.n_boot)
     print("All tasks completed successfully!")
 
