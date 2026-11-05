@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
+from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
@@ -260,6 +261,27 @@ def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_u
         'norm_profiles_by_dt': norm_profiles_by_dt,
         'u_inf_by_dt': u_inf_by_dt
     }
+
+def fit_relaxation_time(dt_vals, depth_vals, depth_sems):
+    """
+    \Delta t >= 0 の低下深さを D(\Delta t) = D_0 exp(-\Delta t / \tau) でフィットし (D_0, \tau, \tau_err) を返す。
+    集積仮説 (a) では \tau ~ 流れ場の寿命 (有限・大), 撹乱仮説 (b) では \tau -> 0 (到着時のみ低下)。
+    点数不足・D_0 <= 0・収束失敗時は NaN。
+    """
+    dt = np.asarray(dt_vals, float); d = np.asarray(depth_vals, float); e = np.asarray(depth_sems, float)
+    m = (dt >= 0) & np.isfinite(d)
+    dt, d, e = dt[m], d[m], e[m]
+    if len(dt) < 3 or d[dt == 0].size == 0 or d[dt == 0][0] <= 0:
+        return np.nan, np.nan, np.nan
+    sigma = np.where(e > 0, e, np.nan)
+    sigma = np.where(np.isfinite(sigma), sigma, np.nanmean(sigma) if np.any(np.isfinite(sigma)) else 1.0)
+    try:
+        popt, pcov = curve_fit(lambda x, d0, tau: d0 * np.exp(-x / tau), dt, d,
+                               p0=[d[dt == 0][0], 60.0], sigma=sigma, absolute_sigma=True,
+                               bounds=([0.0, 1.0], [1.0, 1e4]), maxfev=5000)
+        return float(popt[0]), float(popt[1]), float(np.sqrt(np.diag(pcov))[1])
+    except (RuntimeError, ValueError):
+        return np.nan, np.nan, np.nan
 
 def main():
     global DELTA_T_SEC_LIST
@@ -543,6 +565,57 @@ def main():
     df_sum = pd.DataFrame(summary_records)
     for out_dir in OUT_DIRS:
         df_sum.to_csv(out_dir / f"cargo_timelagged_slowdown_summary{suffix}.csv", index=False)
+
+    # =========================================================================
+    # 定量判定指標:
+    #  (i)  緩和時間 \tau: D(\Delta t>=0) = D_0 exp(-\Delta t/\tau)
+    #  (ii) 前後非対称性 A(|\Delta t|) = [D(-|\Delta t|) - D(+|\Delta t|)] / D(0)
+    #       A > 0: 通過後の方が遅い (撹乱の航跡 → (b)), A ~ 0: 時間対称 (既存の遅い領域 → (a))
+    # =========================================================================
+    metric_records = []
+    asym_by_bead = {}
+    for b_name, g in df_sum.groupby('bead_name', sort=False):
+        d_map = dict(zip(g['delta_t_sec'], g['slowdown_depth']))
+        e_map = dict(zip(g['delta_t_sec'], g['edge_sem']))
+        d0_fit, tau, tau_err = fit_relaxation_time(g['delta_t_sec'], g['slowdown_depth'], g['edge_sem'])
+        rec = {'bead_name': b_name, 'diameter_um': g['diameter_um'].iloc[0],
+               'D0_fit': d0_fit, 'tau_relax_s': tau, 'tau_relax_err_s': tau_err}
+        d0 = d_map.get(0, np.nan)
+        pairs = sorted(dt for dt in d_map if dt > 0 and -dt in d_map)
+        if pairs and np.isfinite(d0) and d0 > 0:
+            a_vals = [(d_map[-dt] - d_map[dt]) / d0 for dt in pairs]
+            a_errs = [np.hypot(e_map[-dt], e_map[dt]) / d0 for dt in pairs]
+            asym_by_bead[b_name] = (pairs, a_vals, a_errs)
+            for dt, a, ae in zip(pairs, a_vals, a_errs):
+                rec[f'asym_{dt}s'] = a
+                rec[f'asym_{dt}s_err'] = ae
+        metric_records.append(rec)
+    df_metric = pd.DataFrame(metric_records)
+    for out_dir in OUT_DIRS:
+        df_metric.to_csv(out_dir / f"cargo_timelagged_criterion_metrics{suffix}.csv", index=False)
+    print("\n=== Criterion metrics (tau: relaxation time, asym: after-before asymmetry / D(0)) ===")
+    print(df_metric.round(3).to_string(index=False))
+
+    if asym_by_bead:
+        fig, ax = plt.subplots(figsize=(7.0, 5.0))
+        for b in BEADS_INFO:
+            if b['name'] not in asym_by_bead:
+                continue
+            pairs, a_vals, a_errs = asym_by_bead[b['name']]
+            ax.errorbar(pairs, a_vals, yerr=a_errs, fmt='-', color=b['color'], marker=b['marker'],
+                        markersize=7.0, lw=2.0, capsize=3.5, label=b['label'])
+        ax.axhline(0.0, color='gray', linestyle='--', lw=1.2)
+        ax.set_xlabel(r'Lag magnitude $|\Delta t|$ [$\mathrm{s}$]')
+        ax.set_ylabel(r'Asymmetry $[D(-|\Delta t|) - D(+|\Delta t|)] \,/\, D(0)$ [-]')
+        ax.set_title('After-passage vs pre-arrival slowdown asymmetry')
+        ax.text(0.02, 0.97, r'$A>0$: wake after passage $\rightarrow$ (b) Disturbance' '\n'
+                r'$A\approx 0$: time-symmetric $\rightarrow$ (a) Accumulation',
+                transform=ax.transAxes, va='top', fontsize=9.2,
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='azure', alpha=0.9, edgecolor='steelblue'))
+        ax.legend(loc='lower right', fontsize=9.5)
+        ax.grid(True)
+        save_fig(fig, f"cargo_slowdown_asymmetry_vs_abs_delta_t{suffix}")
+        plt.close(fig)
         
     print("\n=== Analysis Summary: Slowdown Depth vs Delta t ===")
     piv = df_sum.pivot(index='bead_name', columns='delta_t_sec', values='slowdown_depth')
