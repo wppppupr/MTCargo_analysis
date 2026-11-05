@@ -1,0 +1,31 @@
+eta(x) model comparison; weighted LS (sigma = 68% CI half width)
+bead_name  Rc_um  xi_um  rc_over_xi   eta  sigma
+beads06um    0.3  5.045       0.059 0.522  0.057
+ beads1um    0.5  3.791       0.132 0.341  0.056
+ beads3um    1.5  5.293       0.283 0.396  0.057
+ beads5um    2.5  2.900       0.862 0.206  0.035
+ beads7um    3.5  8.667       0.404 0.231  0.022
+beads20um   10.0  3.196       3.129 0.024  0.014
+
+[x=rc_over_xi, all] n=6
+  domain  chi2/dof=  2.84  AICc=  19.35 (Δ= 0.00)  params=[0.481±0.051, 0.246±0.046]
+  exp     chi2/dof=  3.16  AICc=  20.64 (Δ= 1.29)  params=[0.44±0.043, 0.858±0.17]
+  hill    chi2/dof=  3.30  AICc=  27.91 (Δ= 8.56)  params=[0.528±0.085, 0.373±0.12, 1.23±0.24]
+  power   chi2/dof=  5.80  AICc=  31.20 (Δ=11.85)  params=[0.124±0.012, 0.55±0.049]
+[x=rc_over_xi, no20um] n=5
+  power   chi2/dof=  1.77  AICc=  15.32 (Δ= 0.00)  params=[0.179±0.02, 0.371±0.063]
+  domain  chi2/dof=  3.43  AICc=  20.28 (Δ= 4.97)  params=[0.471±0.05, 0.262±0.051]
+  exp     chi2/dof=  3.81  AICc=  21.42 (Δ= 6.10)  params=[0.469±0.05, 0.725±0.15]
+  hill    chi2/dof=  2.66  AICc=  35.32 (Δ=20.00)  params=[196±1e+05, 6.73e-09±1.4e-05, 0.372±0.52]
+[x=Rc_um, all] n=6
+  exp     chi2/dof=  2.58  AICc=  18.32 (Δ= 0.00)  params=[0.502±0.042, 3.79±0.46]
+  domain  chi2/dof=  5.44  AICc=  29.74 (Δ=11.42)  params=[0.469±0.044, 1.45±0.23]
+  hill    chi2/dof=  3.96  AICc=  29.87 (Δ=11.55)  params=[0.429±0.04, 3.28±0.41, 2.21±0.42]
+  power   chi2/dof= 10.92  AICc=  51.68 (Δ=33.36)  params=[0.289±0.017, 0.546±0.048]
+[x=Rc_um, no20um] n=5
+  power   chi2/dof=  2.34  AICc=  17.01 (Δ= 0.00)  params=[0.332±0.019, 0.315±0.055]
+  exp     chi2/dof=  2.98  AICc=  18.94 (Δ= 1.93)  params=[0.475±0.047, 4.38±0.83]
+  domain  chi2/dof=  3.09  AICc=  19.28 (Δ= 2.27)  params=[0.445±0.042, 1.88±0.34]
+  hill    chi2/dof=  3.50  AICc=  37.01 (Δ=20.00)  params=[118±6.9e+04, 8.54e-09±2.4e-05, 0.316±0.73]
+Spearman eta vs rc_over_xi: rho=-0.943, p=0.005
+Spearman eta vs Rc_um: rho=-0.886, p=0.019
