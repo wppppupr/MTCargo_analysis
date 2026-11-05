@@ -148,7 +148,12 @@ _QTY_COLS = ['v_parallel', 'u_fp', 'u_px']
 
 
 def _ratio_stats(num_boot: np.ndarray, den_boot: np.ndarray, point: float, prefix: str) -> Dict:
-    r = num_boot / den_boot
+    # 分母ゼロのリサンプル (極少粒子数で起こり得る) は NaN として除外
+    with np.errstate(divide='ignore', invalid='ignore'):
+        r = num_boot / den_boot
+    r = r[np.isfinite(r)]
+    if r.size == 0:
+        return {prefix: point, f'{prefix}_sem': np.nan, f'{prefix}_ci95': (np.nan, np.nan)}
     return {
         prefix: point,
         f'{prefix}_sem': float(np.std(r)),
@@ -156,7 +161,8 @@ def _ratio_stats(num_boot: np.ndarray, den_boot: np.ndarray, point: float, prefi
     }
 
 
-def compute_decomposition_statistics(df_merged: pd.DataFrame, n_boot: int = N_BOOT):
+def compute_decomposition_statistics(df_merged: pd.DataFrame, n_boot: int = N_BOOT,
+                                     min_particles: int = 5):
     """各ビーズについて A, eta, eta*A を粒子ブートストラップで評価 (ベクトル化版).
 
     Method 1: 粒子ごとの時間平均 -> 粒子を等重みでリサンプル
@@ -198,7 +204,11 @@ def compute_decomposition_statistics(df_merged: pd.DataFrame, n_boot: int = N_BO
             'rc_over_xi': float(sub['rc_over_xi'].mean()),
             'n_particles': n_p,
             'n_frames': len(sub),
+            'low_n': bool(n_p < min_particles),
         }
+        if n_p < min_particles:
+            print(f"[warn] {bname}: n_particles={n_p} < {min_particles}; "
+                  f"bootstrap CI is unreliable (low_n=True)")
         for tag, pt, bt in (('m1', m1, b1), ('m2', m2, b2)):
             v, f, u = pt
             rec.update({f'{tag}_v_par': v, f'{tag}_u_fp': f, f'{tag}_u_px': u})
@@ -475,12 +485,16 @@ def main():
     ap.add_argument('--n-boot', type=int, default=N_BOOT, help=f'ブートストラップ回数 (既定: {N_BOOT})')
     ap.add_argument('--large-d', type=float, default=15.0,
                     help='白抜き記号で示す大径ビーズの直径閾値 [um] (既定: 15)')
+    ap.add_argument('--min-particles', type=int, default=5,
+                    help='粒子数がこれ未満のビーズを low_n として警告・表に記録 (既定: 5)')
+    ap.add_argument('--no-local-scalar', action='store_true',
+                    help='<|u|> に粒子局所スカラー速さではなく velocities_mean.csv の全体平均を使う')
     ap.add_argument('--compare-only', action='store_true',
                     help='サイズ比較図のみ出力 (全サイズの分解統計を省略)')
     args = ap.parse_args()
 
     print("Loading data...")
-    df_merged = load_and_preprocess_data()
+    df_merged = load_and_preprocess_data(use_local_scalar=not args.no_local_scalar)
 
     if args.compare_only:
         plot_size_comparison(df_merged, tuple(args.compare))
@@ -490,19 +504,21 @@ def main():
           f"{df_merged['exp_dir'].nunique()} experiments.")
 
     print(f"Computing decomposition statistics & particle bootstrap (N={args.n_boot})...")
-    df_res = compute_decomposition_statistics(df_merged, n_boot=args.n_boot)
+    df_res = compute_decomposition_statistics(df_merged, n_boot=args.n_boot,
+                                              min_particles=args.min_particles)
 
     # Save summary tables
     for d in OUT_DIRS:
         d.mkdir(parents=True, exist_ok=True)
         df_res.to_csv(d / "velocity_decomposition_identity_summary.csv", index=False)
         df_res.to_pickle(d / "velocity_decomposition_identity_summary.pkl")
+    (CURRENT_DIR / "scratch").mkdir(exist_ok=True)
     (CURRENT_DIR / "scratch" / "velocity_decomposition_identity_summary.pkl").write_bytes(
         (OUT_DIRS[0] / "velocity_decomposition_identity_summary.pkl").read_bytes()
     )
 
     print("\n=== Velocity Decomposition Summary (Method 2: Cluster Bootstrap) ===")
-    cols_show = ['diameter_um', 'rc_over_xi', 'n_particles', 'm2_A', 'm2_eta', 'm2_tot']
+    cols_show = ['diameter_um', 'rc_over_xi', 'n_particles', 'low_n', 'm2_A', 'm2_eta', 'm2_tot']
     print(df_res[cols_show].to_string(index=False, float_format=lambda x: f"{x:.4f}"))
 
     print("\nGenerating figures...")
