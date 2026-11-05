@@ -28,7 +28,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import h5py
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
@@ -147,6 +146,7 @@ def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_u
     """
     メモリキャッシングを活用した高速タイムラグ解析
     """
+    import h5py  # 遅延 import: キャッシュから作図するだけなら h5py 不要
     exp_dir = Path(exp_dir_str)
     h5_path = exp_dir / "GFP_flows.h5"
     csv_path = exp_dir / "beads_tracks.csv"
@@ -258,6 +258,11 @@ def main():
     parser = argparse.ArgumentParser(description="Time-lagged cargo flow profile analysis: accumulation vs disturbance.")
     parser.add_argument('--force_recompute', action='store_true', help="Force recomputation ignoring cache")
     parser.add_argument('--n_samples', type=int, default=12, help="Number of bead time frames sampled (default 12)")
+    parser.add_argument('--rep_bead', type=str, default='beads3um', choices=[b['name'] for b in BEADS_INFO],
+                        help="Bead used for the single-panel Figure 1 (default beads3um)")
+    parser.add_argument('--edge_rxi', type=float, default=0.0,
+                        help="Average edge speed over r/xi <= edge_rxi for slowdown depth (0 = first grid point only, legacy)")
+    parser.add_argument('--max_scaled_r', type=float, default=2.5, help="Upper limit of r/xi axis (default 2.5)")
     args = parser.parse_args()
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -294,7 +299,7 @@ def main():
     xi_map = load_xi_dict()
     setup_matplotlib()
 
-    max_scaled_r = 2.5
+    max_scaled_r = args.max_scaled_r
     scaled_r_grid = np.linspace(0.04, max_scaled_r, 50)
     ensemble_by_bead = {}
     
@@ -324,14 +329,26 @@ def main():
                 mean_c = np.mean(mat, axis=0)
                 std_c = np.std(mat, axis=0)
                 sem_c = std_c / np.sqrt(len(curves)) if len(curves) > 1 else np.zeros_like(std_c)
+                # 端の速度: edge_rxi 以下の r/xi で各実験ごとに平均 → 実験間で mean/SEM
+                edge_mask = scaled_r_grid <= args.edge_rxi
+                if not np.any(edge_mask):
+                    edge_mask = np.zeros_like(scaled_r_grid, dtype=bool)
+                    edge_mask[0] = True
+                edge_per_exp = mat[:, edge_mask].mean(axis=1)
+                edge_val = float(np.mean(edge_per_exp))
+                edge_sem = float(np.std(edge_per_exp) / np.sqrt(len(curves))) if len(curves) > 1 else 0.0
                 ensemble_by_bead[b_name]['profiles'][dt_sec] = {
                     'mean': mean_c,
                     'sem': sem_c,
-                    'edge_val': mean_c[0],
-                    'edge_sem': sem_c[0],
-                    'depth': 1.0 - mean_c[0],
+                    'edge_val': edge_val,
+                    'edge_sem': edge_sem,
+                    'depth': 1.0 - edge_val,
                     'n_exps': len(curves)
                 }
+
+    if not ensemble_by_bead:
+        print("Error: no experiment had a valid xi value; check bg_angular_correlation_length_per_experiment.csv")
+        sys.exit(1)
 
     # =========================================================================
     # Figure 1: 代表的なビーズ径 (3.37 um) における \Delta t 依存性プロファイル
@@ -339,7 +356,7 @@ def main():
     fig, ax = plt.subplots(figsize=(8.0, 5.5))
     dt_colors = plt.cm.viridis(np.linspace(0.05, 0.90, len(DELTA_T_SEC_LIST)))
     
-    rep_bead = 'beads3um'
+    rep_bead = args.rep_bead
     if rep_bead in ensemble_by_bead:
         p_data = ensemble_by_bead[rep_bead]['profiles']
         for idx, dt_sec in enumerate(DELTA_T_SEC_LIST):
@@ -355,13 +372,15 @@ def main():
         ax.axvline(1.0, color='black', linestyle='--', alpha=0.5, lw=1.2, label=r'$r = \xi$')
         ax.set_xlabel(r'Scaled distance from edge $r \,/\, \xi \equiv (\mathrm{dist} - R_c) \,/\, \xi$ [-]')
         ax.set_ylabel(r'Normalized flow speed $|\mathbf{u}|(r/\xi) \,/\, u_{\infty}$ [-]')
-        ax.set_title(r'Time-Lagged Flow Profile Around Cargo: Beads $3.37\,\mu\mathrm{m}$')
+        ax.set_title('Time-Lagged Flow Profile Around Cargo: Beads ' + ensemble_by_bead[rep_bead]['info']['label'])
         ax.set_xlim(0, max_scaled_r)
         ax.set_ylim(0.55, 1.05)
         ax.legend(loc='lower right', frameon=True, framealpha=0.9, fontsize=9.5)
         ax.grid(True)
-        save_fig(fig, "cargo_timelagged_flow_profile_beads3um")
-        plt.close(fig)
+        save_fig(fig, f"cargo_timelagged_flow_profile_{rep_bead}")
+    else:
+        print(f"Warning: {rep_bead} has no valid profiles; Figure 1 skipped.")
+    plt.close(fig)
 
     # =========================================================================
     # Figure 2: 全ビーズ径における 6 パネル \Delta t 依存性プロファイル
@@ -388,8 +407,8 @@ def main():
             
         ax.axhline(1.0, color='gray', linestyle=':', lw=1.2)
         ax.axvline(1.0, color='black', linestyle='--', alpha=0.4, lw=1.0)
-        n_curves = len(p_data[0]['mean']) if 0 in p_data else 0
-        ax.set_title(f"{b['label']} (N={len(sub)})", fontsize=13, fontweight='bold')
+        n_exps = max((p['n_exps'] for p in p_data.values()), default=0)
+        ax.set_title(f"{b['label']} (N={n_exps})", fontsize=13, fontweight='bold')
         ax.grid(True)
         if idx in [0, 3]:
             ax.set_ylabel(r'$|\mathbf{u}|(r/\xi) \,/\, u_{\infty}$ [-]')
@@ -437,10 +456,12 @@ def main():
                 'edge_norm_speed': p['edge_val'],
                 'edge_sem': p['edge_sem'],
                 'slowdown_depth': p['depth'],
-                'slowdown_pct': p['depth'] * 100
+                'slowdown_pct': p['depth'] * 100,
+                'edge_rxi_window': args.edge_rxi,
+                'n_exps': p['n_exps'],
             })
             
-        ax.errorbar(dt_vals, depth_vals, yerr=depth_sems, fmt='o-', color=b['color'],
+        ax.errorbar(dt_vals, depth_vals, yerr=depth_sems, fmt='-', color=b['color'],
                     marker=b['marker'], markersize=7.0, lw=2.2, capsize=3.5, label=b['label'])
         
     ax.axhline(0.0, color='gray', linestyle='--', lw=1.2, label=r'No slowdown ($|\mathbf{u}| = u_{\infty}$)')
@@ -453,7 +474,7 @@ def main():
     ax.grid(True)
     
     # 判定の物理的ガイドボックス
-    ax.text(0.04, 0.82, "Criterion for Hypothesis (a) Accumulation:\nSlowdown persists before arrival ($\Delta t > 0$)\nand gradually relaxes with flow lifetime.\n\nCriterion for Hypothesis (b) Disturbance:\nSlowdown appears only upon arrival ($\Delta t = 0$).",
+    ax.text(0.04, 0.82, r"Criterion for Hypothesis (a) Accumulation:" "\n" r"Slowdown persists before arrival ($\Delta t > 0$)" "\n" r"and gradually relaxes with flow lifetime." "\n\n" r"Criterion for Hypothesis (b) Disturbance:" "\n" r"Slowdown appears only upon arrival ($\Delta t = 0$).",
             transform=ax.transAxes, fontsize=9.2, bbox=dict(boxstyle='round,pad=0.4', facecolor='azure', alpha=0.9, edgecolor='steelblue'))
     
     save_fig(fig, "cargo_slowdown_depth_vs_delta_t")
