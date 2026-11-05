@@ -1,0 +1,20 @@
+A(c) = median |v|/|u| over frames with cos psi > c; B = sum(v_par |u|)/sum(|u|^2) (all frames, no selection)
+snr = median |u|/sigma, sigma^2 = <v_perp^2> per bead (upper bound of isotropic noise)
+A_at_ktrue0 = MC value of A(0.8) when true kappa = 0 (noise floor); A_corr = MC-inverted A(0.8)
+
+bead_name     Rc   snr   cos  A-1.00  A+0.00  A+0.80  A+0.95  A_at_ktrue0  A_corr     B  B_lo  B_hi  roll_50nm
+beads06um  0.315 1.047 0.351   0.653   0.743   0.808   0.854        1.027     NaN 0.585 0.514 0.649      0.408
+ beads1um  0.590 1.228 0.298   0.800   0.882   0.954   1.009        0.894   0.646 0.204 0.150 0.350      0.423
+ beads3um  1.685 1.152 0.282   0.778   0.838   0.898   0.908        0.987     NaN 0.441 0.369 0.526      0.440
+ beads5um  2.500 0.895 0.124   0.584   0.645   0.725   0.808        1.200     NaN 0.197 0.164 0.245      0.445
+ beads7um  3.620 1.619 0.183   0.411   0.459   0.523   0.549        0.692     NaN 0.232 0.196 0.274      0.449
+beads20um 10.000 1.891 0.036   0.367   0.367   0.348   0.402        0.632     NaN 0.013 0.001 0.019      0.457
+
+fraction of frames passing cos>c:
+bead_name  frac-1.00  frac+0.00  frac+0.50  frac+0.80  frac+0.90  frac+0.95
+beads06um        1.0      0.701      0.564      0.421      0.341      0.270
+ beads1um        1.0      0.669      0.535      0.397      0.315      0.248
+ beads3um        1.0      0.667      0.512      0.347      0.261      0.190
+ beads5um        1.0      0.577      0.414      0.275      0.196      0.139
+ beads7um        1.0      0.615      0.447      0.295      0.211      0.153
+beads20um        1.0      0.524      0.365      0.235      0.163      0.118

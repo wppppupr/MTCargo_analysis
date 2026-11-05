@@ -1373,3 +1373,30 @@ error: authentication failed or timed out
 - 結果: 縁 (r<0.5 µm) での像による見かけの低下は 0.21–0.48 で、0.6–7 µm の実験の縁の低下 0.16–0.40 とほぼ同じ大きさだった（仮想トレーサーは ≈0）。r/ξ<0.5 の平均でも、像による低下が実験の低下の 6–10 割を説明する。像の影響は r/ξ≈0.5–1 で消えるが、実験の低下は r/ξ≈1.5 まで続く。像の比で割り戻すと、3・7 µm で r/ξ≈0.3–0.6 に 10–18% の浅い低下が残る。20 µm は実験が増加（+0.68）しているので、像では説明できない。
 - 注意: 貼り付けた像の変位は局所の流れと相関していない（実際の貨物は流れに部分的に乗る）ので、像による低下は過大評価の可能性がある。上限の見積もりとして扱う。
 - 出力: `figure/cargo_image_injection/cargo_image_injection.{png,svg}`, `image_injection_{per_video,per_size}.csv`, `image_injection_stats.txt`、ログ: `scratch/log_cargo_image_injection.txt`
+### 🔹 Iteration 2 (01:55:18) - 状態: `success`
+* **リクエスト**: 貨物の像による見かけの流れの低下
+* **変更ファイル**: `なし`
+* **📊 生成されたプロット**:
+  - ![figure/cargo_image_injection/cargo_image_injection.png](figure/cargo_image_injection/cargo_image_injection.png)
+  - ![figure/cargo_image_injection/cargo_image_injection.svg](figure/cargo_image_injection/cargo_image_injection.svg)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels.png](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels.png)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels.svg](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels.svg)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.png](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.png)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.svg](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_6panels_uinf_frame.svg)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay.png](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay.png)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay.svg](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay.svg)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.png](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.png)
+  - ![figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.svg](figure/polar_vs_normalized_velocity/polar_order_vs_vpar_norm_overlay_uinf_frame.svg)
+* **Claudeの作業報告**:
+> は再現します。
+- **出力**: `figure/cargo_image_injection/cargo_image_injection.{png,svg}`、`image_injection_{per_video,per_size}.csv`、`image_injection_stats.txt`、ログは `scratch/log_cargo_image_injection.txt` です。`MORNING_REPORT.md` にも追記しました。コミットはしていません。以上で終了します。
+* **Geminiの物理的コメント**:
+> ⚠️ Gemini認証待ちのためスキップ（ターミナルで agy -p 'hi' で事前認証すると有効化されます）
+
+
+
+### κ の選び方の偏り (`kappa_selection_bias.py`)
+- 狙い: κ = median(|v|/|u|)（cos ψ>0.8 のフレームだけ）は、|v| に雑音が足されることと、方向が揃ったフレームだけを選ぶことで、上向きに偏る恐れがある。そこで、しきい値 c を変えた A(c) と、選別なしの射影 B = Σv∥|u|/Σ|u|² を比べた。さらにモンテカルロ（雑音 σ²=⟨v⊥²⟩、上限の見積もり）で偏りの大きさを測った。
+- 結果: A(c) はどのサイズでも c とともに単調に増える（0.63 µm: 0.65→0.85、7 µm: 0.41→0.55）。モンテカルロでは、真の κ=0 でも A(0.8) が 0.63–1.2 になる（雑音の床）。観測値はすべて、この床と同じかそれより低い。したがって A(0.8) は雑音の床を測っているだけで、逆算による補正は全サイズで不可能（NaN）だった。選別なしの B は 0.59 / 0.20 / 0.44 / 0.20 / 0.23 / 0.01（0.63→20 µm）で、A(0.8) より 1.4–25 倍小さい。
+- 結論: 「κ が転がりの上限 0.43–0.57 を超える」という前回の結論は、選び方の偏りでほぼ説明できる。B で見ると、1.18・5・7・20 µm は転がりの予測より下、0.63・3.37 µm は予測の付近にある。注意点が 2 つある。σ を v⊥ から取ったので雑音の床は過大評価気味。また B は u の測定雑音の影響で下がる方向に偏りうる。
+- 出力: `figure/kappa_selection_bias/kappa_selection_bias.{png,svg}`, `kappa_selection_bias_per_size.csv`, `kappa_selection_bias_stats.txt`、ログ: `scratch/log_kappa_selection_bias.txt`
