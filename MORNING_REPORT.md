@@ -1190,3 +1190,59 @@ error: authentication failed or timed out
 > ⚠️ Gemini認証待ちのためスキップ（ターミナルで agy -p 'hi' で事前認証すると有効化されます）
 
 
+### 🔹 Iteration 2 (23:45:15) - 状態: `success`
+* **リクエスト**: 横軸を R_c/ξ（動画ごとの ξ）にして cos ψ と η を描き、本文の主図にする。
+* **変更ファイル**: `なし`
+* **📊 生成されたプロット**:
+  - ![figure/flow_profile_around_cargo/cargo_edge_speed_ratio_vs_diameter.png](figure/flow_profile_around_cargo/cargo_edge_speed_ratio_vs_diameter.png)
+  - ![figure/flow_profile_around_cargo/cargo_edge_speed_ratio_vs_diameter.svg](figure/flow_profile_around_cargo/cargo_edge_speed_ratio_vs_diameter.svg)
+  - ![figure/flow_profile_around_cargo/cargo_edge_speed_ratio_vs_diameter_uinf_frame.png](figure/flow_profile_around_cargo/cargo_edge_speed_ratio_vs_diameter_uinf_frame.png)
+  - ![figure/flow_profile_around_cargo/cargo_edge_speed_ratio_vs_diameter_uinf_frame.svg](figure/flow_profile_around_cargo/cargo_edge_speed_ratio_vs_diameter_uinf_frame.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_6panels.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_6panels.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_6panels.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_6panels.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_6panels_uinf_frame.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_6panels_uinf_frame.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_6panels_uinf_frame.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_6panels_uinf_frame.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_all_beads.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_all_beads.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_all_beads.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_all_beads.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_all_beads_uinf_frame.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_all_beads_uinf_frame.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_all_beads_uinf_frame.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_all_beads_uinf_frame.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_6panels.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_6panels.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_6panels.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_6panels.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_6panels_uinf_frame.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_6panels_uinf_frame.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_6panels_uinf_frame.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_6panels_uinf_frame.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_all_beads.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_all_beads.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_all_beads.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_all_beads.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_all_beads_uinf_frame.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_all_beads_uinf_frame.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_all_beads_uinf_frame.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_dist_center_all_beads_uinf_frame.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_6panels.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_6panels.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_6panels.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_6panels.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_6panels_uinf_frame.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_6panels_uinf_frame.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_6panels_uinf_frame.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_6panels_uinf_frame.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_all_beads.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_all_beads.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_all_beads.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_all_beads.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_all_beads_uinf_frame.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_all_beads_uinf_frame.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_all_beads_uinf_frame.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_all_beads_uinf_frame.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_6panels.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_6panels.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_6panels.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_6panels.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_6panels_uinf_frame.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_6panels_uinf_frame.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_6panels_uinf_frame.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_6panels_uinf_frame.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_all_beads.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_all_beads.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_all_beads.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_all_beads.svg)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_all_beads_uinf_frame.png](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_all_beads_uinf_frame.png)
+  - ![figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_all_beads_uinf_frame.svg](figure/flow_profile_around_cargo/cargo_flow_speed_profile_scaled_xi_dist_center_all_beads_uinf_frame.svg)
+  - ![figure/main_cos_eta_vs_rcxi/main_cos_eta_vs_rcxi.png](figure/main_cos_eta_vs_rcxi/main_cos_eta_vs_rcxi.png)
+  - ![figure/main_cos_eta_vs_rcxi/main_cos_eta_vs_rcxi.svg](figure/main_cos_eta_vs_rcxi/main_cos_eta_vs_rcxi.svg)
+* **Claudeの作業報告**:
+> せん。
+- **生成ファイル**（すべて `figure/main_cos_eta_vs_rcxi/` 内）：
+  - `main_cos_eta_vs_rcxi.png`
+  - `main_cos_eta_vs_rcxi.svg`
+  - `main_cos_eta_vs_rcxi_per_video.csv`
+  - `main_cos_eta_vs_rcxi_per_size.csv`
+  - `main_cos_eta_vs_rcxi_stats.txt`
+
+今夜のタスクは完了です。
+* **Geminiの物理的コメント**:
+> ⚠️ Gemini認証待ちのためスキップ（ターミナルで agy -p 'hi' で事前認証すると有効化されます）
+
+

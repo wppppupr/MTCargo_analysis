@@ -92,6 +92,11 @@ def process_single_experiment(exp_dir_str):
     
     bin_sums = np.zeros(n_bins, dtype=np.float64)
     bin_counts = np.zeros(n_bins, dtype=np.int64)
+    # 実験側 (calc_and_plot_cargo_flow_profile.py) と同じくフレームごとの u_inf(t) で規格化
+    norm_sums_frame = np.zeros(n_bins, dtype=np.float64)
+    norm_counts_frame = np.zeros(n_bins, dtype=np.int64)
+    u_inf_frames = []
+    far_mask_frame = (0.5 * (bins_px[:-1] + bins_px[1:]) * SCALE_UM_PER_PX) >= 20.0
     
     with h5py.File(str(h5_path), 'r') as hf:
         dataset_key = list(hf.keys())[0]
@@ -154,6 +159,8 @@ def process_single_experiment(exp_dir_str):
                     idx_subset = np.random.choice(idx_valid, N_PROFILE_SUBSET, replace=False)
                 else:
                     idx_subset = idx_valid
+                fr_sums = np.zeros(n_bins, dtype=np.float64)
+                fr_counts = np.zeros(n_bins, dtype=np.int64)
                     
                 for tid in idx_subset:
                     bx, by = tr_x[tid], tr_y[tid]
@@ -176,8 +183,16 @@ def process_single_experiment(exp_dir_str):
                         continue
                         
                     b_idx = np.digitize(r_edge[valid_pixels], bins_px) - 1
-                    bin_counts += np.bincount(b_idx, minlength=n_bins)
-                    bin_sums += np.bincount(b_idx, weights=sub_spd[valid_pixels], minlength=n_bins)
+                    fr_counts += np.bincount(b_idx, minlength=n_bins)
+                    fr_sums += np.bincount(b_idx, weights=sub_spd[valid_pixels], minlength=n_bins)
+                bin_counts += fr_counts
+                bin_sums += fr_sums
+                if fr_counts[far_mask_frame].sum() > 100:
+                    u_t = fr_sums[far_mask_frame].sum() / fr_counts[far_mask_frame].sum() * V_UNIT
+                    if u_t > 0 and np.isfinite(u_t):
+                        u_inf_frames.append(u_t)
+                        norm_sums_frame += fr_sums * V_UNIT / u_t
+                        norm_counts_frame += fr_counts
             
             # トレーサーの移流 (Euler forward with bilinear interpolation)
             if fr < max_frame_needed:
@@ -205,8 +220,9 @@ def process_single_experiment(exp_dir_str):
         
     norm_speed = mean_speed_um_s / u_inf if (u_inf > 0 and np.isfinite(u_inf)) else np.zeros_like(mean_speed_um_s)
     
+    norm_speed_frame = np.where(norm_counts_frame > 0, norm_sums_frame / np.maximum(norm_counts_frame, 1), np.nan)
     elapsed = time.time() - t0
-    print(f"[{b_name}] Done {Path(exp_dir_str).name} in {elapsed:.1f}s | u_inf={u_inf:.4f} um/s, edge_norm={norm_speed[0]:.4f}")
+    print(f"[{b_name}] Done {Path(exp_dir_str).name} in {elapsed:.1f}s | u_inf={u_inf:.4f} um/s, edge_norm={norm_speed[0]:.4f}, edge_norm_frame={norm_speed_frame[0]:.4f}")
     
     return {
         'exp_dir': exp_dir_str,
@@ -218,6 +234,8 @@ def process_single_experiment(exp_dir_str):
         'speed_um_s': mean_speed_um_s,
         'u_inf': u_inf,
         'norm_speed': norm_speed,
+        'norm_speed_frame': norm_speed_frame,
+        'u_inf_frames': np.array(u_inf_frames),
         'bin_counts': bin_counts
     }
 
@@ -232,7 +250,7 @@ def main():
     valid_results = [r for r in results if r is not None]
     df_results = pd.DataFrame(valid_results)
     
-    out_cache = Path("scratch/virtual_tracer_flow_profile_cache.pkl")
+    out_cache = Path("scratch/virtual_tracer_flow_profile_cache_uinf_frame.pkl")
     with open(out_cache, "wb") as f:
         pickle.dump(df_results, f)
     print(f"Successfully saved virtual tracer flow profile results to {out_cache}")
