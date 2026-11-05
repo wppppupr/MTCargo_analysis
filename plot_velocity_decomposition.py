@@ -98,7 +98,10 @@ def calc_disk_polar_order(rc_over_xi):
 
 
 def load_and_preprocess_data(use_local_scalar=True):
-    df_inst = pd.read_pickle(CURRENT_DIR / "scratch" / "contrast_inst_cache.pkl")
+    inst_file = CURRENT_DIR / "scratch" / "contrast_inst_cache.pkl"
+    if not inst_file.exists():
+        raise FileNotFoundError(f"{inst_file} がありません。先に contrast_analysis.py を実行してキャッシュを生成してください。")
+    df_inst = pd.read_pickle(inst_file)
     df_inst['unique_pid'] = df_inst['exp_dir'] + '_' + df_inst['particle'].astype(str)
 
     local_spd_file = CURRENT_DIR / "scratch" / "particle_local_scalar_speed_summary.pkl"
@@ -106,7 +109,11 @@ def load_and_preprocess_data(use_local_scalar=True):
     if use_local_scalar and local_spd_file.exists():
         df_p_speeds = pd.read_pickle(local_spd_file)
         df_p_speeds['local_scalar_spd_um'] = df_p_speeds['local_scalar_spd_px'] * V_UNIT
+        n_pid_before = df_inst['unique_pid'].nunique()
         df_inst = pd.merge(df_inst, df_p_speeds[['unique_pid', 'local_scalar_spd_um']], on='unique_pid', how='inner')
+        n_drop = n_pid_before - df_inst['unique_pid'].nunique()
+        if n_drop > 0:
+            print(f"[warn] {n_drop}/{n_pid_before} particles lack local scalar speed and were dropped")
         has_local = True
         print(f"Loaded particle-level local scalar speeds from {local_spd_file.name} (N={len(df_p_speeds)})")
 
@@ -141,6 +148,14 @@ def load_and_preprocess_data(use_local_scalar=True):
         df_merged['u_px'] = df_merged['local_scalar_spd_um']
     else:
         df_merged['u_px'] = df_merged['mean_velocity']
+
+    # NaN/inf はブートストラップの粒子和を NaN 汚染するため除外し、件数を報告
+    finite = np.isfinite(df_merged[['v_parallel', 'u_fp', 'u_px']].to_numpy(dtype=float)).all(axis=1)
+    if not finite.all():
+        print(f"[warn] dropped {int((~finite).sum())} rows with non-finite v_parallel/u_fp/u_px")
+        df_merged = df_merged[finite].copy()
+    if df_merged.empty:
+        raise ValueError("前処理後に有効な測定が残りませんでした (入力キャッシュ/velocities_mean.csv を確認)")
 
     return df_merged
 
