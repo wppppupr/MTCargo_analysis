@@ -620,7 +620,45 @@ def plot_fig3_displacement_pdf(disp_data: dict, lag: int = 1, bw: float = 0.2):
     plt.close(fig)
 
 
-def plot_fig4_velocity_transfer(df_inst: pd.DataFrame):
+def _transfer_stats(sub: pd.DataFrame, n_boot: int = 0, ci: float = 95.0, seed: int = 42) -> dict:
+    """kappa = sum(vc . uf) / sum(|uf|^2) と速度比 <|vc|>/<|uf|> を算出し、
+    軌跡 (exp_dir, particle) 単位のブートストラップで CI を付ける。
+    フレーム間相関を保つため行ではなく軌跡を再標本化する。非有限値の行は分子・分母とも一貫して除外。"""
+    cols = ['cargo_dx', 'cargo_dy', 'cargo_spd', 'flow_u', 'flow_v', 'flow_spd']
+    sub = sub[np.isfinite(sub[cols].to_numpy(dtype=float)).all(axis=1)]
+    out = dict(rc_xi=np.nan, kappa=np.nan, speed_ratio=np.nan, kappa_lo=np.nan, kappa_hi=np.nan,
+               ratio_lo=np.nan, ratio_hi=np.nan, n_traj=0)
+    if sub.empty:
+        return out
+    # 軌跡ごとの十分統計量: [sum(vc.uf), sum|uf|^2, sum|vc|, sum|uf|]
+    g = sub.assign(dot=sub['cargo_dx'] * sub['flow_u'] + sub['cargo_dy'] * sub['flow_v'],
+                   fsq=sub['flow_spd'] ** 2).groupby(['exp_dir', 'particle'])[
+        ['dot', 'fsq', 'cargo_spd', 'flow_spd']].sum().to_numpy()
+
+    def _est(a):
+        return (a[..., 0] / np.where(a[..., 1] > 0, a[..., 1], np.nan),
+                a[..., 2] / np.where(a[..., 3] > 0, a[..., 3], np.nan))
+
+    out['kappa'], out['speed_ratio'] = (float(v) for v in _est(g.sum(axis=0)))
+    out['rc_xi'] = float(sub['rc_over_xi'].mean())
+    out['n_traj'] = len(g)
+    if n_boot > 0 and len(g) > 1:
+        rng = np.random.default_rng(seed)
+        w = rng.multinomial(len(g), np.full(len(g), 1.0 / len(g)), size=n_boot)  # (n_boot, n_traj)
+        k_b, r_b = _est(w @ g)
+        q = [(100 - ci) / 2, 100 - (100 - ci) / 2]
+        out['kappa_lo'], out['kappa_hi'] = np.nanpercentile(k_b, q)
+        out['ratio_lo'], out['ratio_hi'] = np.nanpercentile(r_b, q)
+    return out
+
+
+def _yerr(val, lo, hi) -> np.ndarray:
+    """CI から非対称エラーバー配列 (2, n) を作る。NaN (CI 無し) は 0 扱い。"""
+    val, lo, hi = (np.asarray(x, dtype=float) for x in (val, lo, hi))
+    return np.nan_to_num(np.vstack([val - lo, hi - val])).clip(min=0)
+
+
+def plot_fig4_velocity_transfer(df_inst: pd.DataFrame, n_boot: int = 500, ci: float = 95.0, seed: int = 42):
     """
     Figure 4: 速度伝達係数 kappa = vc / <u_fp> と速度比
     - (a) 伝達係数 kappa vs Rc/xi
@@ -635,31 +673,16 @@ def plot_fig4_velocity_transfer(df_inst: pd.DataFrame):
     ax_c1 = fig.add_subplot(gs[1, 0])
     ax_c2 = fig.add_subplot(gs[1, 1])
 
-    rc_xi_list = []
-    kappa_list = []
-    ratio_list = []
-    labels = []
-    colors = []
-    markers = []
-
-    for b_item in BEADS_INFO:
-        bname = b_item['name']
-        sub = df_inst[df_inst['bead_name'] == bname]
-        rc_xi = sub['rc_over_xi'].mean()
-        
-        # 伝達係数 kappa = sum(vc . uf) / sum(|uf|^2)
-        dot_sum = np.sum(sub['cargo_dx'] * sub['flow_u'] + sub['cargo_dy'] * sub['flow_v'])
-        flow_sq_sum = np.sum(sub['flow_spd']**2)
-        kappa = dot_sum / flow_sq_sum if flow_sq_sum > 0 else np.nan
-        
-        spd_ratio = np.mean(sub['cargo_spd']) / np.mean(sub['flow_spd'])
-        
-        rc_xi_list.append(rc_xi)
-        kappa_list.append(kappa)
-        ratio_list.append(spd_ratio)
-        labels.append(b_item['label'])
-        colors.append(b_item['color'])
-        markers.append(b_item['marker'])
+    st = pd.DataFrame([_transfer_stats(df_inst[df_inst['bead_name'] == b['name']], n_boot, ci, seed)
+                       for b in BEADS_INFO])
+    rc_xi_list = st['rc_xi'].tolist()
+    kappa_list = st['kappa'].tolist()
+    ratio_list = st['speed_ratio'].tolist()
+    labels = [b['label'] for b in BEADS_INFO]
+    colors = [b['color'] for b in BEADS_INFO]
+    markers = [b['marker'] for b in BEADS_INFO]
+    kappa_err = _yerr(st['kappa'], st['kappa_lo'], st['kappa_hi'])
+    ratio_err = _yerr(st['speed_ratio'], st['ratio_lo'], st['ratio_hi'])
 
     sort_idx = np.argsort(rc_xi_list)
     rc_xi_arr = np.array(rc_xi_list)[sort_idx]
@@ -669,14 +692,15 @@ def plot_fig4_velocity_transfer(df_inst: pd.DataFrame):
     # Panel (a): kappa vs Rc/xi
     ax_a.axhline(1.0, color='#2b83ba', linestyle='--', linewidth=1.8, label='Perfect Transfer ($\\kappa = 1.0$)')
     for i in sort_idx:
-        ax_a.scatter(rc_xi_list[i], kappa_list[i], color=colors[i], marker=markers[i], s=120, zorder=5, label=labels[i])
+        ax_a.errorbar(rc_xi_list[i], kappa_list[i], yerr=kappa_err[:, [i]], color=colors[i], marker=markers[i],
+                      ms=11, capsize=4, linestyle='none', zorder=5, label=labels[i])
     ax_a.plot(rc_xi_arr, kappa_arr, color='#882255', linewidth=2.0, linestyle='-', alpha=0.7, zorder=4)
     ax_a.axvline(1.0, color='gray', linestyle='--', linewidth=1.2, alpha=0.7)
     ax_a.set_xscale('log')
     ax_a.set_xlim(0.04, 4.0)
     ax_a.set_ylim(-0.05, 1.1)
     ax_a.set_xlabel(r'Dimensionless cargo size $R_c / \xi$')
-    ax_a.set_ylabel(r'Velocity transfer coefficient $\kappa$')
+    ax_a.set_ylabel(r'Velocity transfer coefficient $\kappa$' + (f' ({ci:g}% CI)' if n_boot else ''))
     ax_a.set_title(r'(a) Velocity Transfer Coefficient $\mathbf{v}_c = \kappa \langle\mathbf{u}\rangle_{R_c} + \boldsymbol{\eta}$', fontweight='bold')
     ax_a.legend(loc='upper right', fontsize=10, framealpha=0.9)
     ax_a.grid(True)
@@ -684,12 +708,13 @@ def plot_fig4_velocity_transfer(df_inst: pd.DataFrame):
     # Panel (b): Speed ratio vs Rc/xi
     ax_b.axhline(1.0, color='#2b83ba', linestyle='--', linewidth=1.8, label='Equal Speed Ratio')
     for i in sort_idx:
-        ax_b.scatter(rc_xi_list[i], ratio_list[i], color=colors[i], marker=markers[i], s=120, zorder=5, label=labels[i])
+        ax_b.errorbar(rc_xi_list[i], ratio_list[i], yerr=ratio_err[:, [i]], color=colors[i], marker=markers[i],
+                      ms=11, capsize=4, linestyle='none', zorder=5, label=labels[i])
     ax_b.plot(rc_xi_arr, ratio_arr, color='#44AA99', linewidth=2.0, linestyle='-', alpha=0.7, zorder=4)
     ax_b.axvline(1.0, color='gray', linestyle='--', linewidth=1.2, alpha=0.7)
     ax_b.set_xscale('log')
     ax_b.set_xlim(0.04, 4.0)
-    ax_b.set_ylim(0.2, 1.2)
+    ax_b.set_ylim(0.0, 1.2)
     ax_b.set_xlabel(r'Dimensionless cargo size $R_c / \xi$')
     ax_b.set_ylabel(r'Speed ratio $\langle |\mathbf{v}_c| \rangle / \langle |\langle\mathbf{u}\rangle_{R_c}| \rangle$')
     ax_b.set_title(r'(b) Cargo-to-Flow Speed Ratio vs $R_c/\xi$', fontweight='bold')
@@ -719,8 +744,7 @@ def plot_fig4_velocity_transfer(df_inst: pd.DataFrame):
     save_figure(fig, "contrast_fig4_velocity_transfer")
     plt.close(fig)
 
-    return pd.DataFrame({'bead_name': [b['name'] for b in BEADS_INFO], 'kappa': kappa_list,
-                         'speed_ratio': ratio_list})
+    return st.drop(columns='rc_xi').assign(bead_name=[b['name'] for b in BEADS_INFO])
 
 
 def parse_args(argv=None):
@@ -731,9 +755,16 @@ def parse_args(argv=None):
     p.add_argument('--pdf-lag', type=int, nargs='+', default=[1],
                    help='Fig3 の変位ラグ [frame] (キャッシュ内の値, 例: 1 4 16; default: 1)')
     p.add_argument('--pdf-bw', type=float, default=0.2, help='Fig3 KDE バンド幅 (default: 0.2)')
+    p.add_argument('--kappa-boot', type=int, default=500,
+                   help='Fig4 kappa/速度比の軌跡ブートストラップ回数 (0 で CI 無効; default: 500)')
+    p.add_argument('--kappa-ci', type=float, default=95.0, help='Fig4 信頼区間 [%%] (default: 95)')
     args = p.parse_args(argv)
     if args.pdf_bw <= 0:
         p.error('--pdf-bw must be > 0')
+    if args.kappa_boot < 0:
+        p.error('--kappa-boot must be >= 0')
+    if not 0 < args.kappa_ci < 100:
+        p.error('--kappa-ci must be in (0, 100)')
     if args.n_iter < 1:
         p.error('--n-iter must be >= 1')
     return args
@@ -764,7 +795,8 @@ def main(argv=None):
         plot_fig3_displacement_pdf(disp_data, lag=lag, bw=args.pdf_bw)
 
     print("\nGenerating Figure 4: Velocity Transfer & Speed Ratio...")
-    summary = summary.merge(plot_fig4_velocity_transfer(df_inst), on='bead_name', how='left')
+    summary = summary.merge(plot_fig4_velocity_transfer(
+        df_inst, n_boot=args.kappa_boot, ci=args.kappa_ci, seed=args.seed), on='bead_name', how='left')
     for out_dir in OUT_DIRS:
         out_dir.mkdir(parents=True, exist_ok=True)
         summary.to_csv(out_dir / "contrast_summary.csv", index=False)
