@@ -404,25 +404,32 @@ def plot_fig1_coupling_spectrum(df_inst: pd.DataFrame, null_results: dict):
     ax_d.axvline(1.0, color='gray', linestyle='--', linewidth=1.2, alpha=0.7)
 
     # アノテーション: 各点の Z と両側 p 値をデータから算出 (旧版のハードコード値を廃止)
+    # 隣接点 (Rc/xi 昇順) でラベルを上下交互に配置し、隣のマーカーとの重なりを防ぐ
     p_arr = 2.0 * stats.norm.sf(np.abs(z_arr))
+    k_lab = 0
     for x, z, pv in zip(rc_xi_arr, z_arr, p_arr):
         if not np.isfinite(z):
             continue
+        above = (k_lab % 2 == 0)
+        k_lab += 1
         if pv < 1e-3:
             mant, expo = f"{pv:.1e}".split('e')
             p_txt = rf"$p={mant}\times10^{{{int(expo)}}}$"
         else:
             p_txt = f"$p={pv:.2f}$"
         ax_d.annotate(f"$Z={z:.1f}$\n{p_txt}",
-                      (x, z), textcoords='offset points', xytext=(8, 6), fontsize=8.5,
+                      (x, z), textcoords='offset points',
+                      xytext=(-4, 14) if above else (-4, -16),
+                      ha='center', va='bottom' if above else 'top', fontsize=8.5, zorder=6,
+                      arrowprops=dict(arrowstyle='-', color='gray', linewidth=0.6, shrinkA=0, shrinkB=6),
                       bbox=dict(boxstyle='round,pad=0.2', facecolor='#e6f5d0' if z > 3 else '#fde0dd',
-                                edgecolor='none', alpha=0.8))
+                                edgecolor='none', alpha=0.85))
 
     ax_d.set_xscale('log')
     ax_d.set_xlim(0.04, 4.0)
     z_fin = z_arr[np.isfinite(z_arr)]
     z_top = float(z_fin.max()) if z_fin.size else 5.0
-    ax_d.set_ylim(min(-2.0, float(z_fin.min()) - 1.0) if z_fin.size else -2.0, max(5.0, z_top * 1.25))
+    ax_d.set_ylim(min(-2.0, float(z_fin.min()) - 0.12 * z_top - 1.0) if z_fin.size else -2.0, max(5.0, z_top * 1.25))  # 下向きラベル用の余白
     ax_d.set_xlabel(r'Dimensionless cargo size $R_c / \xi$')
     ax_d.set_ylabel(r'Signal Significance $Z = (\langle\cos\psi\rangle - \mu_{\mathrm{null}}) / \mathrm{SEM}$')
     ax_d.set_title(r'(d) Statistical Decoupling Test ($Z$-score vs Null)', fontweight='bold')
