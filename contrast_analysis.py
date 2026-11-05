@@ -403,23 +403,45 @@ def plot_fig1_coupling_spectrum(df_inst: pd.DataFrame, null_results: dict):
     ax_d.axhline(0.0, color='gray', linestyle='-', linewidth=0.8)
     ax_d.axvline(1.0, color='gray', linestyle='--', linewidth=1.2, alpha=0.7)
 
-    # アノテーション
-    ax_d.text(0.06, 25.0, 'Strong Genuine Coupling\n($Z > 20, p \\ll 10^{-10}$)', fontsize=11,
-              bbox=dict(boxstyle='round,pad=0.3', facecolor='#e6f5d0', edgecolor='#276419', alpha=0.8))
-    ax_d.text(1.2, 5.0, 'Complete Decoupling\n($Z = 0.96, p = 0.34$)\nConsistent with Null', fontsize=11,
-              bbox=dict(boxstyle='round,pad=0.3', facecolor='#fde0dd', edgecolor='#c51b7d', alpha=0.8))
+    # アノテーション: 各点の Z と両側 p 値をデータから算出 (旧版のハードコード値を廃止)
+    p_arr = 2.0 * stats.norm.sf(np.abs(z_arr))
+    for x, z, pv in zip(rc_xi_arr, z_arr, p_arr):
+        if not np.isfinite(z):
+            continue
+        if pv < 1e-3:
+            mant, expo = f"{pv:.1e}".split('e')
+            p_txt = rf"$p={mant}\times10^{{{int(expo)}}}$"
+        else:
+            p_txt = f"$p={pv:.2f}$"
+        ax_d.annotate(f"$Z={z:.1f}$\n{p_txt}",
+                      (x, z), textcoords='offset points', xytext=(8, 6), fontsize=8.5,
+                      bbox=dict(boxstyle='round,pad=0.2', facecolor='#e6f5d0' if z > 3 else '#fde0dd',
+                                edgecolor='none', alpha=0.8))
 
     ax_d.set_xscale('log')
     ax_d.set_xlim(0.04, 4.0)
-    ax_d.set_ylim(-2, 35)
+    z_fin = z_arr[np.isfinite(z_arr)]
+    z_top = float(z_fin.max()) if z_fin.size else 5.0
+    ax_d.set_ylim(min(-2.0, float(z_fin.min()) - 1.0) if z_fin.size else -2.0, max(5.0, z_top * 1.25))
     ax_d.set_xlabel(r'Dimensionless cargo size $R_c / \xi$')
     ax_d.set_ylabel(r'Signal Significance $Z = (\langle\cos\psi\rangle - \mu_{\mathrm{null}}) / \mathrm{SEM}$')
     ax_d.set_title(r'(d) Statistical Decoupling Test ($Z$-score vs Null)', fontweight='bold')
-    ax_d.legend(loc='upper right', fontsize=10, framealpha=0.9)
+    ax_d.legend(loc='lower left', fontsize=9, framealpha=0.9)
     ax_d.grid(True)
 
     save_figure(fig, "contrast_fig1_coupling_spectrum")
     plt.close(fig)
+
+    order = list(sort_idx)
+    return pd.DataFrame({
+        'bead_name': [BEADS_INFO[i]['name'] for i in order],
+        'rc_over_xi': rc_xi_arr,
+        'cos_psi_mean': cos_psi_arr, 'cos_psi_sem': cos_psi_sem_arr,
+        'cos_i_mean': cos_i_arr, 'cos_i_sem': cos_i_sem_arr,
+        'null_time_shuf_mean': null_t_arr, 'null_time_shuf_std': null_t_std_arr,
+        'null_swap_mean': null_s_arr,
+        'z_score': z_arr, 'p_two_sided': p_arr,
+    })
 
 
 def plot_fig2_msd_real_vs_virtual(df_imsd: pd.DataFrame):
@@ -654,38 +676,31 @@ def plot_fig4_velocity_transfer(df_inst: pd.DataFrame):
     ax_b.legend(loc='lower left', fontsize=10, framealpha=0.9)
     ax_b.grid(True)
 
-    # Panel (c1): Scatter 0.63 um
-    sub06 = df_inst[df_inst['bead_name'] == 'beads06um']
-    ax_c1.hexbin(sub06['flow_spd'] * SCALE_UM_PER_PX / DT_SEC, 
-                 sub06['cargo_spd'] * SCALE_UM_PER_PX / DT_SEC, 
-                 gridsize=35, cmap='Blues', mincnt=1, bins='log')
+    # Panel (c1)/(c2): 最小・最大粒径の散布 (Rc/xi・kappa はデータから算出)
+    rc_by_name = {BEADS_INFO[i]['name']: (rc_xi_list[i], kappa_list[i]) for i in range(len(BEADS_INFO))}
     max_v = 0.35
-    ax_c1.plot([0, max_v], [0, max_v], color='#cc2222', linestyle='--', linewidth=1.8, label='1:1 Line')
-    ax_c1.set_xlim(0, max_v)
-    ax_c1.set_ylim(0, max_v)
-    ax_c1.set_xlabel(r'Footprint flow speed $|\langle\mathbf{u}\rangle_{R_c}|$ [$\mu\mathrm{m/s}$]')
-    ax_c1.set_ylabel(r'Cargo speed $|\mathbf{v}_c|$ [$\mu\mathrm{m/s}$]')
-    ax_c1.set_title(r'(c1) $0.63\ \mu\mathrm{m}$ ($R_c/\xi=0.07$, Strong Linear Coupling)', fontweight='bold')
-    ax_c1.legend(loc='upper left', fontsize=10)
-    ax_c1.grid(True)
-
-    # Panel (c2): Scatter 20.0 um
-    sub20 = df_inst[df_inst['bead_name'] == 'beads20um']
-    ax_c2.hexbin(sub20['flow_spd'] * SCALE_UM_PER_PX / DT_SEC, 
-                 sub20['cargo_spd'] * SCALE_UM_PER_PX / DT_SEC, 
-                 gridsize=35, cmap='Greens', mincnt=1, bins='log')
-    max_v2 = 0.35
-    ax_c2.plot([0, max_v2], [0, max_v2], color='#cc2222', linestyle='--', linewidth=1.8, label='1:1 Line')
-    ax_c2.set_xlim(0, max_v2)
-    ax_c2.set_ylim(0, max_v2)
-    ax_c2.set_xlabel(r'Footprint flow speed $|\langle\mathbf{u}\rangle_{R_c}|$ [$\mu\mathrm{m/s}$]')
-    ax_c2.set_ylabel(r'Cargo speed $|\mathbf{v}_c|$ [$\mu\mathrm{m/s}$]')
-    ax_c2.set_title(r'(c2) $20.0\ \mu\mathrm{m}$ ($R_c/\xi=2.56$, Decoupled / Stagnant)', fontweight='bold')
-    ax_c2.legend(loc='upper left', fontsize=10)
-    ax_c2.grid(True)
+    for ax_c, b_item, cmap, tag in ((ax_c1, BEADS_INFO[0], 'Blues', 'c1'),
+                                    (ax_c2, BEADS_INFO[-1], 'Greens', 'c2')):
+        sub_c = df_inst[df_inst['bead_name'] == b_item['name']]
+        if len(sub_c):
+            ax_c.hexbin(sub_c['flow_spd'] * SCALE_UM_PER_PX / DT_SEC,
+                        sub_c['cargo_spd'] * SCALE_UM_PER_PX / DT_SEC,
+                        gridsize=35, cmap=cmap, mincnt=1, bins='log', extent=(0, max_v, 0, max_v))
+        ax_c.plot([0, max_v], [0, max_v], color='#cc2222', linestyle='--', linewidth=1.8, label='1:1 Line')
+        ax_c.set_xlim(0, max_v)
+        ax_c.set_ylim(0, max_v)
+        ax_c.set_xlabel(r'Footprint flow speed $|\langle\mathbf{u}\rangle_{R_c}|$ [$\mu\mathrm{m/s}$]')
+        ax_c.set_ylabel(r'Cargo speed $|\mathbf{v}_c|$ [$\mu\mathrm{m/s}$]')
+        rc, kp = rc_by_name[b_item['name']]
+        ax_c.set_title(f"({tag}) {b_item['label']} ($R_c/\\xi={rc:.2f}$, $\\kappa={kp:.2f}$)", fontweight='bold')
+        ax_c.legend(loc='upper left', fontsize=10)
+        ax_c.grid(True)
 
     save_figure(fig, "contrast_fig4_velocity_transfer")
     plt.close(fig)
+
+    return pd.DataFrame({'bead_name': [b['name'] for b in BEADS_INFO], 'kappa': kappa_list,
+                         'speed_ratio': ratio_list})
 
 
 def parse_args(argv=None):
@@ -715,7 +730,7 @@ def main(argv=None):
     null_results = compute_null_models(df_inst, n_iter=args.n_iter, seed=args.seed)
 
     print("\nGenerating Figure 1: Coupling Spectrum & Null Models...")
-    plot_fig1_coupling_spectrum(df_inst, null_results)
+    summary = plot_fig1_coupling_spectrum(df_inst, null_results)
 
     print("\nGenerating Figure 2: MSD Real vs Virtual Cargo (6 panels)...")
     plot_fig2_msd_real_vs_virtual(df_imsd)
@@ -729,7 +744,11 @@ def main(argv=None):
         plot_fig3_displacement_pdf(disp_data, lag=lag, bw=args.pdf_bw)
 
     print("\nGenerating Figure 4: Velocity Transfer & Speed Ratio...")
-    plot_fig4_velocity_transfer(df_inst)
+    summary = summary.merge(plot_fig4_velocity_transfer(df_inst), on='bead_name', how='left')
+    for out_dir in OUT_DIRS:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        summary.to_csv(out_dir / "contrast_summary.csv", index=False)
+    print(f"Saved summary table: contrast_summary.csv\n{summary.to_string(index=False, float_format='%.4g')}")
 
     print("\nAll contrast analysis figures generated successfully!")
 
