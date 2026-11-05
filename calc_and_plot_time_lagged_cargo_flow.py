@@ -18,6 +18,8 @@ calc_and_plot_time_lagged_cargo_flow.py
 - \Delta t = 32 s (8 frames)
 - \Delta t = 64 s (16 frames) ~ \xi / |v_c|
 - \Delta t = 128 s (32 frames) ~ 流れ場の寿命 \tau_life
+- --delta_t で任意指定可。負の \Delta t は貨物通過「後」の流れ場 (t_flow = t + |\Delta t|)
+  を表し、撹乱の緩和 (回復) を見る対照として使える。例: --delta_t -64 -32 0 32 64 128
 """
 
 import os
@@ -142,10 +144,14 @@ def load_xi_dict():
                 print(f"Warning: Failed to load {p}: {e}")
     return xi_map
 
-def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_um: float = 20.0, bin_width_um: float = 0.50, n_samples: int = 12):
+def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_um: float = 20.0, bin_width_um: float = 0.50, n_samples: int = 12,
+                                    delta_t_sec_list=None):
     """
     メモリキャッシングを活用した高速タイムラグ解析
+    delta_t_sec_list: 秒単位の時間差リスト。負値は貨物通過後の流れ場 (t_flow = t - \\Delta t > t)。
     """
+    if delta_t_sec_list is None:
+        delta_t_sec_list = DELTA_T_SEC_LIST
     import h5py  # 遅延 import: キャッシュから作図するだけなら h5py 不要
     exp_dir = Path(exp_dir_str)
     h5_path = exp_dir / "GFP_flows.h5"
@@ -165,8 +171,9 @@ def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_u
     n_bins = len(bins_px) - 1
     bin_centers_um = 0.5 * (bins_px[:-1] + bins_px[1:]) * SCALE_UM_PER_PX
 
-    delta_frames = [int(round(s / DT_SEC)) for s in DELTA_T_SEC_LIST]
-    max_dt_fr = max(delta_frames)
+    delta_frames = [int(round(s / DT_SEC)) for s in delta_t_sec_list]
+    max_dt_fr = max(max(delta_frames), 0)
+    min_dt_fr = min(min(delta_frames), 0)
 
     with h5py.File(str(h5_path), 'r') as hf:
         dataset_key = list(hf.keys())[0]
@@ -174,7 +181,7 @@ def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_u
         num_frames = flows.shape[0]
         H, W = flows.shape[2], flows.shape[3]
         
-        valid_frames = [f for f in sorted(df_tracks['frame'].unique()) if f >= max_dt_fr and f < num_frames]
+        valid_frames = [f for f in sorted(df_tracks['frame'].unique()) if f - max_dt_fr >= 0 and f - min_dt_fr < num_frames]
         if len(valid_frames) == 0:
             return None
             
@@ -194,7 +201,7 @@ def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_u
             speed_cache[f_idx] = np.sqrt(fl[0].astype(np.float32)**2 + fl[1].astype(np.float32)**2).astype(np.float16)
 
         profiles_by_dt = {dt_sec: {'sums': np.zeros(n_bins, dtype=np.float64), 'counts': np.zeros(n_bins, dtype=np.int64)}
-                          for dt_sec in DELTA_T_SEC_LIST}
+                          for dt_sec in delta_t_sec_list}
                           
         for t_bead in sampled_t_beads:
             sub_tracks = df_tracks[df_tracks['frame'] == t_bead]
@@ -221,7 +228,7 @@ def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_u
                     bead_geoms.append((x_min, x_max, y_min, y_max, valid, b_idx, b_c))
                     
             # 各時間差 \Delta t の速度場を積算
-            for dt_sec, dt_fr in zip(DELTA_T_SEC_LIST, delta_frames):
+            for dt_sec, dt_fr in zip(delta_t_sec_list, delta_frames):
                 spd = speed_cache[t_bead - dt_fr]
                 for (x_min, x_max, y_min, y_max, valid, b_idx, b_c) in bead_geoms:
                     sub_spd = spd[y_min:y_max, x_min:x_max][valid].astype(np.float32)
@@ -233,7 +240,7 @@ def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_u
     norm_profiles_by_dt = {}
     u_inf_by_dt = {}
     
-    for dt_sec in DELTA_T_SEC_LIST:
+    for dt_sec in delta_t_sec_list:
         sums = profiles_by_dt[dt_sec]['sums']
         counts = profiles_by_dt[dt_sec]['counts']
         spd = (sums / np.maximum(counts, 1)) * V_UNIT
@@ -255,6 +262,7 @@ def process_experiment_timelag_fast(exp_dir_str: str, b_info: dict, max_r_edge_u
     }
 
 def main():
+    global DELTA_T_SEC_LIST
     parser = argparse.ArgumentParser(description="Time-lagged cargo flow profile analysis: accumulation vs disturbance.")
     parser.add_argument('--force_recompute', action='store_true', help="Force recomputation ignoring cache")
     parser.add_argument('--n_samples', type=int, default=12, help="Number of bead time frames sampled (default 12)")
@@ -263,15 +271,37 @@ def main():
     parser.add_argument('--edge_rxi', type=float, default=0.0,
                         help="Average edge speed over r/xi <= edge_rxi for slowdown depth (0 = first grid point only, legacy)")
     parser.add_argument('--max_scaled_r', type=float, default=2.5, help="Upper limit of r/xi axis (default 2.5)")
+    parser.add_argument('--delta_t', type=int, nargs='+', default=None,
+                        help="Lag times in seconds (multiples of 4 s). Negative = flow AFTER cargo passage. "
+                             f"Default: {DELTA_T_SEC_LIST}")
     args = parser.parse_args()
 
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_file = CACHE_DIR / "time_lagged_flow_fast_cache.pkl"
+    if args.delta_t is not None:
+        bad = [d for d in args.delta_t if d % int(DT_SEC) != 0]
+        if bad:
+            parser.error(f"--delta_t values must be multiples of {DT_SEC:g} s: {bad}")
+        DELTA_T_SEC_LIST = sorted(set(args.delta_t))
+    is_default_dt = DELTA_T_SEC_LIST == [0, 12, 32, 64, 128]
 
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    # パラメータごとにキャッシュを分離 (デフォルト設定は従来のファイル名を維持)
+    if is_default_dt and args.n_samples == 12:
+        cache_file = CACHE_DIR / "time_lagged_flow_fast_cache.pkl"
+    else:
+        dt_tag = "_".join(f"m{-d}" if d < 0 else str(d) for d in DELTA_T_SEC_LIST)
+        cache_file = CACHE_DIR / f"time_lagged_flow_fast_cache_n{args.n_samples}_dt{dt_tag}.pkl"
+    suffix = "" if is_default_dt else "_custom_dt"
+
+    df_all = None
     if cache_file.exists() and not args.force_recompute:
         print(f"Loading cached time-lagged profiles from {cache_file}...")
         df_all = pd.read_pickle(cache_file)
-    else:
+        # キャッシュに必要な \Delta t が揃っているか検証 (不足なら再計算)
+        if len(df_all) == 0 or not all(
+                set(DELTA_T_SEC_LIST) <= set(d.keys()) for d in df_all['norm_profiles_by_dt']):
+            print("  Cache lacks some requested Delta t values -> recomputing.")
+            df_all = None
+    if df_all is None:
         print(f"Computing time-lagged flow profiles across {len(TARGET_DIRS)} experiments (fast cached)...")
         t0 = time.time()
         results = []
@@ -287,7 +317,8 @@ def main():
                 
             print(f"[{exp_idx+1}/{len(TARGET_DIRS)}] Processing {b_name}: {Path(exp_dir).name}...")
             t_exp = time.time()
-            res = process_experiment_timelag_fast(exp_dir, b_info, max_r_edge_um=20.0, bin_width_um=0.50, n_samples=args.n_samples)
+            res = process_experiment_timelag_fast(exp_dir, b_info, max_r_edge_um=20.0, bin_width_um=0.50, n_samples=args.n_samples,
+                                                  delta_t_sec_list=DELTA_T_SEC_LIST)
             if res is not None:
                 results.append(res)
                 print(f"    Done in {time.time() - t_exp:.1f} s.")
@@ -363,7 +394,8 @@ def main():
             if dt_sec not in p_data:
                 continue
             p = p_data[dt_sec]
-            lbl = f"$\\Delta t = {dt_sec}\\,\\mathrm{{s}}$" + (" (Arrival / Present)" if dt_sec == 0 else f" (Before arrival)")
+            phase = " (Arrival / Present)" if dt_sec == 0 else (" (Before arrival)" if dt_sec > 0 else " (After passage)")
+            lbl = f"$\\Delta t = {dt_sec}\\,\\mathrm{{s}}$" + phase
             ax.plot(scaled_r_grid, p['mean'], color=dt_colors[idx], lw=2.2, label=lbl)
             ax.fill_between(scaled_r_grid, p['mean'] - p['sem'], p['mean'] + p['sem'],
                             color=dt_colors[idx], alpha=0.15)
@@ -377,7 +409,7 @@ def main():
         ax.set_ylim(0.55, 1.05)
         ax.legend(loc='lower right', frameon=True, framealpha=0.9, fontsize=9.5)
         ax.grid(True)
-        save_fig(fig, f"cargo_timelagged_flow_profile_{rep_bead}")
+        save_fig(fig, f"cargo_timelagged_flow_profile_{rep_bead}{suffix}")
     else:
         print(f"Warning: {rep_bead} has no valid profiles; Figure 1 skipped.")
     plt.close(fig)
@@ -422,7 +454,7 @@ def main():
     plt.suptitle(r'Evolution of Flow Deficit with Pre-Arrival Lag Time $\Delta t$ ($t_{\mathrm{flow}} = t - \Delta t$)',
                  fontsize=15, y=0.98)
     plt.tight_layout()
-    save_fig(fig, "cargo_timelagged_flow_profile_6panels")
+    save_fig(fig, f"cargo_timelagged_flow_profile_6panels{suffix}")
     plt.close(fig)
 
     # =========================================================================
@@ -469,7 +501,11 @@ def main():
     ax.set_ylabel(r'Flow slowdown depth at edge $1 - |\mathbf{u}|(r\to 0) \,/\, u_{\infty}$ [-]')
     ax.set_title(r'Slowdown Depth vs $\Delta t$: Accumulation (a) vs Disturbance (b)')
     ax.set_ylim(-0.10, 0.55)
-    ax.set_xlim(-5, max(DELTA_T_SEC_LIST) + 10)
+    ax.set_xlim(min(min(DELTA_T_SEC_LIST), 0) - 5, max(DELTA_T_SEC_LIST) + 10)
+    if min(DELTA_T_SEC_LIST) < 0:
+        # 貨物通過後 (\Delta t < 0) の領域を網掛けして区別
+        ax.axvspan(ax.get_xlim()[0], 0, color='lightgray', alpha=0.35, zorder=0, lw=0)
+        ax.text(0.01, 0.02, 'After passage', transform=ax.transAxes, fontsize=9, color='dimgray')
     ax.legend(loc='upper right', frameon=True, framealpha=0.9, fontsize=10.0)
     ax.grid(True)
     
@@ -477,12 +513,12 @@ def main():
     ax.text(0.04, 0.82, r"Criterion for Hypothesis (a) Accumulation:" "\n" r"Slowdown persists before arrival ($\Delta t > 0$)" "\n" r"and gradually relaxes with flow lifetime." "\n\n" r"Criterion for Hypothesis (b) Disturbance:" "\n" r"Slowdown appears only upon arrival ($\Delta t = 0$).",
             transform=ax.transAxes, fontsize=9.2, bbox=dict(boxstyle='round,pad=0.4', facecolor='azure', alpha=0.9, edgecolor='steelblue'))
     
-    save_fig(fig, "cargo_slowdown_depth_vs_delta_t")
+    save_fig(fig, f"cargo_slowdown_depth_vs_delta_t{suffix}")
     plt.close(fig)
 
     df_sum = pd.DataFrame(summary_records)
     for out_dir in OUT_DIRS:
-        df_sum.to_csv(out_dir / "cargo_timelagged_slowdown_summary.csv", index=False)
+        df_sum.to_csv(out_dir / f"cargo_timelagged_slowdown_summary{suffix}.csv", index=False)
         
     print("\n=== Analysis Summary: Slowdown Depth vs Delta t ===")
     piv = df_sum.pivot(index='bead_name', columns='delta_t_sec', values='slowdown_depth')
