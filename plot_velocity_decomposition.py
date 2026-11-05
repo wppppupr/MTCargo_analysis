@@ -75,12 +75,14 @@ def calc_disk_polar_order(rc_over_xi):
     """
     円盤領域 (半径 Rc) 内で相関関数 C(r) = exp(-r/xi) を持つ
     2次元等方性ベクトル場を平均したときの局所ポーラーオーダー比 Phi(Rc/xi).
-    Phi^2(y) = (2/pi) * int_0^2 x * [2*arccos(x/2) - x*sqrt(4 - x^2)] * exp(-y*x) dx
+    Phi^2(y) = (2/pi) * int_0^2 x * [2*arccos(x/2) - (x/2)*sqrt(4 - x^2)] * exp(-y*x) dx
+    (括弧内は単位円 2 枚の重なり面積。Phi(0) = 1 に正規化される。
+     verify_cos_decomposition.calc_disk_polar_order と同一の式)
     """
     def integrand(x, y):
         if x >= 2.0:
             return 0.0
-        k = 2.0 * np.arccos(x / 2.0) - x * np.sqrt(4.0 - x**2)
+        k = 2.0 * np.arccos(x / 2.0) - 0.5 * x * np.sqrt(4.0 - x**2)
         return (2.0 / np.pi) * x * k * np.exp(-y * x)
 
     if np.isscalar(rc_over_xi):
