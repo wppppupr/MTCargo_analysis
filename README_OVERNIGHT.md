@@ -63,3 +63,24 @@ cd ~/MTCargo_analysis
    git log -n 5 --oneline
    ```
    * イテレーションごとに個別に自動コミットされているため、気に入らない変更は `git revert` や `git reset` でいつでも戻せます。
+
+---
+
+## 📌 宿題（2026-11-06 追加）
+
+result3.md の 4.4 節「$v_\parallel/u_\infty\approx\eta_0(R_c)\,\Phi_\mathrm{fp}(R_c/\xi)$」を固めるための解析です。実際のタスクは [`OVERNIGHT_INSTRUCTION.md`](OVERNIGHT_INSTRUCTION.md) に【4.4】としてチェックボックスで書いてあります（夜間ループはそちらを読みます）。
+
+背景：
+- 速度の指標を $\eta$ から $v_\parallel/u_\infty(t)$ に移す。$\eta$ は分母が足印の流れなので雑音が大きく、貨物の像の写り込みも入る。
+- $\Phi_\mathrm{fp}$ は、円環上で $C(r)=e^{-r/\xi}$ を平均した式からフィットなしで予測でき、0.63–7.24 µm で実測と 0.1 程度以内で合う（下書き：`scratch/phi_ring_model_draft.py`）。
+- 伝達率 $\eta_0=v_\parallel/u_\infty\div\Phi_\mathrm{fp}$ は 0.63–3.37 µm で約 0.3、5.00–7.24 µm で 0.16–0.20 と段差的に下がり、$k_\mathrm{SR}$ の段差と同じ位置にある。
+
+宿題：
+1. 円環平均の予測曲線を `vpar_and_phi_vs_rc_over_xi.png` に重ね、動画ごとの実測と予測を表にする。
+2. $\eta_0$ の階層ブートストラップ。2 群（≤3.37 µm と ≥5.00 µm）の差、$R_c$ と $R_c/\xi$ のどちらに回帰した方がよいか。
+3. $u_\infty(t)$ 版で $v_\parallel/u_\infty$ と $\eta$ の雑音を比べる。
+4. 時間窓ごとの $\xi(t)$ で予測した $\Phi_\mathrm{fp}(t)$ と実測の比較（同じ動画の中でも式が成り立つか）。
+5. 足印の円環の内径と幅を変えても、予測と実測の一致が保たれるか。
+
+注意：result3.md 本体は書き換えない。数値は MORNING_REPORT.md に表で書く。図と CSV は `figure/<タスク名>/` に置く。
+

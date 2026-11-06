@@ -15,16 +15,26 @@ import numpy as np, pandas as pd
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+import os
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "figure" / "phi_binned_size_overlay"; OUT.mkdir(parents=True, exist_ok=True)
+OUT_DIRS = [ROOT / "figure" / "phi_binned_size_overlay"]
+NAS_BASE = Path("/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/figure/phi_binned_size_overlay")
+if Path("/mnt/NAS-Ebanaru/Sasaki/MTsingleBeads/figure").exists():
+    OUT_DIRS.append(NAS_BASE)
+
+if os.environ.get("EXCL20"):
+    OUT_DIRS = [d / "excl20um" for d in OUT_DIRS]
+
+for out_dir in OUT_DIRS:
+    out_dir.mkdir(parents=True, exist_ok=True)
+
 EDGES = np.array([0, 0.3, 0.5, 0.7, 0.85, 0.95, 1.0 + 1e-9])
 NB, MIN_N, MIN_MOV = 2000, 30, 2
 rng = np.random.default_rng(0)
 
 d = pd.read_pickle(ROOT / "scratch" / "footprint_heterogeneity_cache.pkl")
-import os
 d = d[np.isfinite(d[["phi_t", "v_parallel", "u_fp", "v_cargo"]]).all(axis=1)].copy()
-if os.environ.get("EXCL20"): d = d[d.diameter_um < 20]; OUT = OUT / "excl20um"; OUT.mkdir(exist_ok=True)
+if os.environ.get("EXCL20"): d = d[d.diameter_um < 20]
 d["bin"] = np.digitize(d["phi_t"], EDGES) - 1
 d["movie"] = d["unique_pid"].str.rsplit("_", n=1).str[0] if "exp_dir" not in d else d["exp_dir"].astype(str)
 d["cpos"] = (d["v_cargo"] > 0).astype(float)
@@ -67,7 +77,9 @@ for sz in sizes:
                         eta_hi=np.nanpercentile(etab[:, b], 97.5) if ok[b] else np.nan,
                         cos=cos0[b] if ok[b] else np.nan, cos_lo=np.nanpercentile(cosb[:, b], 2.5) if ok[b] else np.nan,
                         cos_hi=np.nanpercentile(cosb[:, b], 97.5) if ok[b] else np.nan))
-per = pd.DataFrame(per); per.to_csv(OUT / "per_size.csv", index=False)
+per = pd.DataFrame(per)
+for out_dir in OUT_DIRS:
+    per.to_csv(out_dir / "per_size.csv", index=False)
 
 # ビンごとのサイズ差判定
 tests = []
@@ -93,12 +105,15 @@ for b in range(nbin):
             lo, hi = np.nanpercentile(diff_b, [2.5, 97.5])
             row.update({f"{q}_LmS": diff0, f"{q}_LmS_lo": lo, f"{q}_LmS_hi": hi, f"{q}_LmS_sig": bool(lo > 0 or hi < 0)})
     tests.append(row)
-tests = pd.DataFrame(tests); tests.to_csv(OUT / "size_test.csv", index=False)
-with open(OUT / "size_test.txt", "w") as f:
-    f.write(per[["d_um", "bin", "n", "n_movies", "n_cargo", "eta", "eta_lo", "eta_hi", "cos", "cos_lo", "cos_hi"]]
-            .to_string(index=False, float_format="%.3f") + "\n\n")
-    f.write(tests.to_string(index=False, float_format="%.3f") + "\n")
-print(open(OUT / "size_test.txt").read())
+tests = pd.DataFrame(tests)
+test_str = (per[["d_um", "bin", "n", "n_movies", "n_cargo", "eta", "eta_lo", "eta_hi", "cos", "cos_lo", "cos_hi"]]
+            .to_string(index=False, float_format="%.3f") + "\n\n" +
+            tests.to_string(index=False, float_format="%.3f") + "\n")
+for out_dir in OUT_DIRS:
+    tests.to_csv(out_dir / "size_test.csv", index=False)
+    with open(out_dir / "size_test.txt", "w") as f:
+        f.write(test_str)
+print(test_str)
 
 # 図
 cmap = plt.get_cmap("viridis"); col = {s: cmap(i / (len(sizes) - 1)) for i, s in enumerate(sizes)}
@@ -117,5 +132,8 @@ for ax, q, lab in [(axes[0], "cos", r"$\cos\psi$"), (axes[1], "eta", r"$\eta$")]
     ax.set_xlabel(r"$\Phi_{fp}$ (bin centre)"); ax.set_ylabel(lab); ax.set_xlim(0, 1)
 axes[0].legend(title="diameter", fontsize=8, frameon=False)
 fig.suptitle("Φ_fp-binned cos ψ and η by cargo size (95% hierarchical bootstrap: movie→cargo; * slope vs log d ≠ 0)", fontsize=9)
-fig.tight_layout(); fig.savefig(OUT / "overlay.png", dpi=200)
-print("saved", OUT / "overlay.png")
+fig.tight_layout()
+for out_dir in OUT_DIRS:
+    fig.savefig(out_dir / "overlay.png", dpi=200)
+    fig.savefig(out_dir / "overlay.svg")
+    print("saved", out_dir / "overlay.png", "and .svg")
