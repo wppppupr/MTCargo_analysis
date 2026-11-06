@@ -47,18 +47,33 @@ def main():
         frames = np.asarray(ds.coords["frame"].values, dtype=np.int64)
         samp, _, _, dist_px, npts, _ = pbg.virtual_point_samples(ds)
         ds.close()
-        u2 = float(r.u_bar_sq_mean)
-        samp = (samp - u2) / max(1 - u2, 1e-4)
         r_um = dist_px * SCALE
-        xi_all, _, _ = fit(samp, r_um)
+
+        # 動画全体の検証（per_experiment.csv との一致確認）
+        u2_movie = float(r.u_bar_sq_mean)
+        samp_movie_corr = (samp - u2_movie) / max(1 - u2_movie, 1e-4)
+        xi_all, _, _ = fit(samp_movie_corr, r_um)
         check.append(dict(exp_dir=r.exp_dir, xi_ref=r.xi_um, xi_recomp=xi_all))
+
+        # 遠距離（15-25 um）のプラトー判定用インデックス
+        sub_plat = (r_um >= 15.0) & (r_um <= 25.0)
+
         for w0 in range(0, int(frames.max()) + 1, WIN):
             sel = (frames >= w0) & (frames < w0 + WIN)
             if sel.sum() < WIN / 2: continue
-            xi, err, r2 = fit(samp[:, sel, :], r_um)
+            sw = samp[:, sel, :]
+            
+            # 時間窓ローカルのベースライン補正:
+            # 活性の非定常時間変化による長距離の残留相関プラトーを窓ごとに推定
+            m_raw = np.nanmean(sw, axis=(1, 2))
+            u2_local = float(np.mean(m_raw[sub_plat]))
+            sw_corr = (sw - u2_local) / max(1 - u2_local, 1e-4)
+
+            xi, err, r2 = fit(sw_corr, r_um)
             rows.append(dict(bead_name=r.bead_name, diameter_um=r.diameter_um, exp_dir=r.exp_dir,
                              win_start=w0, win_end=w0 + WIN, n_frames=int(sel.sum()),
-                             xi_um=xi, xi_err_um=err, r2_log=r2, xi_movie_um=r.xi_um))
+                             xi_um=xi, xi_err_um=err, r2_log=r2, u2_local=u2_local,
+                             xi_movie_um=r.xi_um, u2_movie=u2_movie))
         print(f"[{r.exp_dir}] xi_ref={r.xi_um:.2f} recomp={xi_all:.2f} n_win={sum(1 for q in rows if q['exp_dir']==r.exp_dir)}", flush=True)
     win = pd.DataFrame(rows); chk = pd.DataFrame(check)
     pd.to_pickle(dict(win=win, check=chk), CACHE)

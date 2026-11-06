@@ -804,16 +804,61 @@ def load_experiment_correlation(
                   f"(--frame_stride {stride})。全フレームで再計算するには "
                   f"--force_recompute を指定してください")
 
-    # 大域配向ゆらぎの二乗時間平均 <|u_bar(t)|^2>_t によるベースライン補正:
-    # C_corrected(r) = (C_raw(r) - <|u_bar|^2>) / (1 - <|u_bar|^2>)
-    u_bar_sq = compute_mean_u_bar_sq(exp_dir, frame_stride=args.frame_stride,
-                                     max_frames=args.max_frames, min_flow_mag=args.min_flow_mag,
-                                     cached_val=cached_u_sq)
-    denom = max(1.0 - u_bar_sq, 1e-4)
-    samples_raw = np.copy(samples) if samples is not None else None
-    samples_corr = (samples - u_bar_sq) / denom if samples is not None else None
-    par_corr = (par - u_bar_sq) / denom if par is not None else None
-    perp_corr = (perp - u_bar_sq) / denom if perp is not None else None
+    # 大域配向ゆらぎ・非定常オフセットによるベースライン補正:
+    # C_corrected(r) = (C_raw(r) - baseline) / (1 - baseline)
+    r_um = np.asarray(dist_px, dtype=float) * float(args.scale)
+    baseline_mode = getattr(args, 'baseline_mode', 'plateau')
+
+    if baseline_mode == 'plateau':
+        # 遠距離（既定 15 - 25 um）における生相関 C_raw(r) のプラトー値からベースラインを推定
+        p_min, p_max = getattr(args, 'plateau_range', [15.0, 25.0])
+        sub_plat = (r_um >= float(p_min)) & (r_um <= float(p_max))
+        if not np.any(sub_plat):
+            sub_plat = r_um >= (r_um.max() * 0.6)
+        m_raw = np.nanmean(samples, axis=(1, 2)) if samples is not None else np.array([])
+        u_bar_sq = float(np.mean(m_raw[sub_plat])) if np.any(sub_plat) and m_raw.size > 0 else 0.0
+    elif baseline_mode == 'window_local':
+        # 時間窓（200フレーム）ごとに局所プラトーを推定
+        p_min, p_max = getattr(args, 'plateau_range', [15.0, 25.0])
+        sub_plat = (r_um >= float(p_min)) & (r_um <= float(p_max))
+        if not np.any(sub_plat):
+            sub_plat = r_um >= (r_um.max() * 0.6)
+        n_frames = samples.shape[1] if samples is not None else 0
+        w_len = 200
+        samples_corr_list = []
+        par_corr_list = []
+        perp_corr_list = []
+        u_local_list = []
+        for w0 in range(0, n_frames, w_len):
+            w1 = min(w0 + w_len, n_frames)
+            sw = samples[:, w0:w1, :]
+            m_win = np.nanmean(sw, axis=(1, 2))
+            u_win = float(np.mean(m_win[sub_plat])) if np.any(sub_plat) else 0.0
+            u_local_list.append(u_win)
+            den = max(1.0 - u_win, 1e-4)
+            samples_corr_list.append((sw - u_win) / den)
+            if par is not None:
+                par_corr_list.append((par[:, w0:w1, :] - u_win) / den)
+            if perp is not None:
+                perp_corr_list.append((perp[:, w0:w1, :] - u_win) / den)
+        u_bar_sq = float(np.mean(u_local_list)) if u_local_list else 0.0
+        samples_raw = np.copy(samples) if samples is not None else None
+        samples_corr = np.concatenate(samples_corr_list, axis=1) if samples_corr_list else None
+        par_corr = np.concatenate(par_corr_list, axis=1) if par_corr_list else None
+        perp_corr = np.concatenate(perp_corr_list, axis=1) if perp_corr_list else None
+        denom = max(1.0 - u_bar_sq, 1e-4)
+    else:
+        # 従来方式: GFP_flows.h5 から求めた空間平均ベクトル自乗平均 <|u_bar(t)|^2>_t
+        u_bar_sq = compute_mean_u_bar_sq(exp_dir, frame_stride=args.frame_stride,
+                                         max_frames=args.max_frames, min_flow_mag=args.min_flow_mag,
+                                         cached_val=cached_u_sq)
+
+    if baseline_mode != 'window_local':
+        denom = max(1.0 - u_bar_sq, 1e-4)
+        samples_raw = np.copy(samples) if samples is not None else None
+        samples_corr = (samples - u_bar_sq) / denom if samples is not None else None
+        par_corr = (par - u_bar_sq) / denom if par is not None else None
+        perp_corr = (perp - u_bar_sq) / denom if perp is not None else None
 
     return {
         'bead_name': binfo['name'],
@@ -2005,6 +2050,14 @@ def build_parser() -> argparse.ArgumentParser:
                              "全フレーム（--frame_stride 1）で計算する際に有効（例: 4）.")
 
     # --- 解析・作図 ---
+    parser.add_argument('--baseline_mode', type=str, default='plateau',
+                        choices=['plateau', 'flow', 'window_local'],
+                        help="大域相関オフセットのベースライン補正方式（既定 plateau）: "
+                             "'plateau': 遠距離相関（15-25 um）の漸近プラトー値をオフセットとして補正（高精度・推奨） / "
+                             "'window_local': 時間窓（200F）ごとに遠距離プラトーを推定して局所補正 / "
+                             "'flow': 従来の大域配向自乗平均 <|u_bar(t)|^2>_t を使用.")
+    parser.add_argument('--plateau_range', type=float, nargs=2, default=[15.0, 25.0], metavar=('MIN', 'MAX'),
+                        help="--baseline_mode plateau で参照する遠距離プラトーの距離範囲 [um]（既定 15.0 25.0）.")
     parser.add_argument('--error_mode', type=str, default='frame', choices=['frame', 'sample'],
                         help="xi_bg フィットの重みに使う誤差（既定 frame）. "
                              "'frame': フレーム平均間の SEM（実効独立サンプル数 ≈ フレーム数, 保守的）/ "

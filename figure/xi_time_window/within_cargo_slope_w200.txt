@@ -1,32 +1,32 @@
 window 200 frames, >= 20 frames per (cargo, window), cargo with >= 2 windows; slope = within-cargo (fixed effect) OLS, 95% CI = hierarchical bootstrap movie->cargo (n=2000)
 
-beads06um  movies=3 cargo=8 cargo-win=21 SD(δξ)=0.68 µm
-    dcos_psi/dxi_um (per µm) = -0.029 [-0.353, +0.347]
-    deta/dxi_um (per µm) = -0.029 [-0.387, +2.159]
-    dcos_psi/dlnxi (per ln ξ) = -0.205 [-1.857, +1.318]
-    deta/dlnxi (per ln ξ) = -0.197 [-2.052, +9.202]
-beads1um   movies=3 cargo=10 cargo-win=25 SD(δξ)=0.47 µm
-    dcos_psi/dxi_um (per µm) = -0.095 [-0.220, +0.330]
-    deta/dxi_um (per µm) = -0.111 [-0.150, +1.466]
-    dcos_psi/dlnxi (per ln ξ) = -0.430 [-0.947, +1.107]
-    deta/dlnxi (per ln ξ) = -0.486 [-0.699, +5.998]
-beads3um   movies=4 cargo=12 cargo-win=34 SD(δξ)=2.57 µm
-    dcos_psi/dxi_um (per µm) = +0.013 [-0.001, +0.031]
-    deta/dxi_um (per µm) = +0.013 [-0.117, +0.056]
-    dcos_psi/dlnxi (per ln ξ) = +0.102 [-0.011, +0.178]
-    deta/dlnxi (per ln ξ) = +0.104 [-0.476, +0.298]
-beads5um   movies=2 cargo=5 cargo-win=35 SD(δξ)=4.86 µm
-    dcos_psi/dxi_um (per µm) = -0.002 [-0.018, -0.000]
-    deta/dxi_um (per µm) = -0.008 [-0.105, -0.004]
-    dcos_psi/dlnxi (per ln ξ) = -0.014 [-0.069, +0.008]
-    deta/dlnxi (per ln ξ) = -0.077 [-0.332, +0.005]
-beads7um   movies=2 cargo=5 cargo-win=16 SD(δξ)=5.48 µm
-    dcos_psi/dxi_um (per µm) = -0.008 [-0.015, +0.001]
-    deta/dxi_um (per µm) = -0.014 [-0.029, -0.006]
-    dcos_psi/dlnxi (per ln ξ) = -0.084 [-0.156, +0.007]
-    deta/dlnxi (per ln ξ) = -0.142 [-0.317, -0.059]
-beads20um  movies=2 cargo=2 cargo-win=15 SD(δξ)=4.03 µm
-    dcos_psi/dxi_um (per µm) = +0.011 [+0.007, +0.015]
-    deta/dxi_um (per µm) = -0.005 [-0.015, +0.003]
-    dcos_psi/dlnxi (per ln ξ) = +0.067 [+0.042, +0.126]
-    deta/dlnxi (per ln ξ) = -0.045 [-0.076, +0.028]
+beads06um  movies=3 cargo=8 cargo-win=21 SD(δξ)=0.18 µm
+    dcos_psi/dxi_um (per µm) = -0.201 [-0.480, +1.474]
+    deta/dxi_um (per µm) = -0.279 [-0.535, +1.274]
+    dcos_psi/dlnxi (per ln ξ) = -0.874 [-2.206, +6.831]
+    deta/dlnxi (per ln ξ) = -1.247 [-2.475, +5.949]
+beads1um   movies=3 cargo=10 cargo-win=25 SD(δξ)=0.28 µm
+    dcos_psi/dxi_um (per µm) = -0.161 [-0.239, +0.322]
+    deta/dxi_um (per µm) = -0.192 [-0.281, +1.293]
+    dcos_psi/dlnxi (per ln ξ) = -0.667 [-0.914, +1.055]
+    deta/dlnxi (per ln ξ) = -0.782 [-1.162, +4.903]
+beads3um   movies=4 cargo=12 cargo-win=34 SD(δξ)=0.28 µm
+    dcos_psi/dxi_um (per µm) = +0.041 [-0.062, +0.226]
+    deta/dxi_um (per µm) = +0.071 [-0.163, +0.408]
+    dcos_psi/dlnxi (per ln ξ) = +0.212 [-0.305, +1.148]
+    deta/dlnxi (per ln ξ) = +0.358 [-0.789, +1.760]
+beads5um   movies=2 cargo=5 cargo-win=35 SD(δξ)=0.78 µm
+    dcos_psi/dxi_um (per µm) = +0.010 [-0.055, +0.040]
+    deta/dxi_um (per µm) = -0.002 [-0.095, +0.063]
+    dcos_psi/dlnxi (per ln ξ) = +0.020 [-0.218, +0.130]
+    deta/dlnxi (per ln ξ) = -0.052 [-0.393, +0.197]
+beads7um   movies=2 cargo=5 cargo-win=16 SD(δξ)=0.45 µm
+    dcos_psi/dxi_um (per µm) = +0.022 [-0.047, +0.082]
+    deta/dxi_um (per µm) = +0.104 [-0.001, +0.209]
+    dcos_psi/dlnxi (per ln ξ) = +0.138 [-0.333, +0.527]
+    deta/dlnxi (per ln ξ) = +0.660 [-0.021, +1.342]
+beads20um  movies=2 cargo=2 cargo-win=15 SD(δξ)=0.58 µm
+    dcos_psi/dxi_um (per µm) = -0.052 [-0.219, +0.036]
+    deta/dxi_um (per µm) = -0.014 [-0.044, +0.003]
+    dcos_psi/dlnxi (per ln ξ) = -0.070 [-1.102, +0.113]
+    deta/dlnxi (per ln ξ) = -0.009 [-0.223, +0.029]
