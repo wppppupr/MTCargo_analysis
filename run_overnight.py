@@ -68,7 +68,50 @@ def run_cmd(cmd: list[str] | str, cwd: Path = None, timeout: int = 600) -> tuple
         return -2, str(e)
 
 
-def call_claude_code(prompt: str, timeout: int = 400) -> tuple[int, str]:
+def estimate_task_timeout(instruction: str) -> tuple[int, str]:
+    """
+    指示文の内容から計算負荷を推定し、最適なタイムアウト時間（秒）を動的に決定。
+    通常タスクは 360秒（6分）で素早くハングアップ・対話待ちを遮断し、
+    重い計算（RAFT、ブートストラップ、全動画再計算等）は 3600〜7200秒（60〜120分）まで自動延長する。
+    """
+    if not instruction:
+        return 400, "自律改善モード（標準: 400s）"
+
+    text = instruction.lower()
+
+    # レベル3: 超高負荷（全フレームRAFT、画像注入、オプティカルフロー、大規模時系列） -> 7200秒 (120分)
+    super_heavy_keywords = [
+        "raft", "画像注入", "image injection", "オプティカルフロー", "flow profile",
+        "全フレーム", "全動画", "22本", "時間窓", "timelagged", "time_lagged",
+        "モンテカルロ", "monte carlo"
+    ]
+    for kw in super_heavy_keywords:
+        if kw in text:
+            return 7200, f"超高負荷タスク検出 ('{kw}'): 7200s (120分)"
+
+    # レベル2: 高負荷（ブートストラップ、全サイズ再計算、滞在時間、統計サンプリング） -> 3600秒 (20分)
+    heavy_keywords = [
+        "ブートストラップ", "bootstrap", "再計算", "全サイズ", "滞在時間",
+        "switching", "切り替わる", "二山", "fitting", "フィッティング",
+        "接触領域", "模型", "model", "vacf"
+    ]
+    for kw in heavy_keywords:
+        if kw in text:
+            return 3600, f"高負荷タスク検出 ('{kw}'): 3600s (60分)"
+
+    # レベル1: 中負荷（通常のプロット出力・特定サイズの比較・分析） -> 600秒 (10分)
+    medium_keywords = [
+        "プロット", "描画", "図", "plot", "比較", "相関", "cos ψ", "η", "u∞", "ヒストグラム"
+    ]
+    for kw in medium_keywords:
+        if kw in text:
+            return 600, f"中負荷タスク検出 ('{kw}'): 600s (10分)"
+
+    # レベル0: 軽量タスク（コード確認、テキストドラフト、議論、微修正） -> 360秒 (6分)
+    return 360, "軽量/通常タスク: 360s (6分・フリーズ保護)"
+
+
+def call_claude_code(prompt: str, timeout: int = 600) -> tuple[int, str]:
     """
     Claude Code CLI を最小限のトークンで非対話実行
     --dangerously-skip-permissions で夜間の承認待ち停止を防止
@@ -78,7 +121,7 @@ def call_claude_code(prompt: str, timeout: int = 400) -> tuple[int, str]:
         "-p", prompt,
         "--dangerously-skip-permissions"
     ]
-    log(f"🤖 Claude Code 呼び出し中... (Prompt長: {len(prompt)}文字)")
+    log(f"🤖 Claude Code 呼び出し中... (Prompt長: {len(prompt)}文字, タイムアウト: {timeout}s)")
     return run_cmd(cmd, timeout=timeout)
 
 
@@ -149,12 +192,21 @@ def mark_instruction_completed(task_text: str):
         f.write(new_content)
 
 
-def find_recent_figures(minutes_ago: int = 30) -> list[str]:
-    """直近生成・更新された画像ファイル（figure/*.png等）を検出"""
+def find_recent_figures(since_timestamp: float = None, minutes_ago: int = None) -> list[str]:
+    """
+    指定時刻（または直近N分以内）に生成・更新された画像ファイル（figure/*.png等）を検出。
+    レポートの視認性向上のため、Markdown埋め込みには .png/.jpg のみを採用。
+    """
     workdir = CONFIG["WORKDIR"]
-    fig_extensions = {".png", ".jpg", ".jpeg", ".svg", ".pdf"}
+    fig_extensions = {".png", ".jpg", ".jpeg"}
     recent_figs = []
-    cutoff = time.time() - (minutes_ago * 60)
+    
+    if since_timestamp is not None:
+        cutoff = since_timestamp
+    elif minutes_ago is not None:
+        cutoff = time.time() - (minutes_ago * 60)
+    else:
+        cutoff = time.time() - (15 * 60)
 
     for p in workdir.rglob("*"):
         if p.is_file() and p.suffix.lower() in fig_extensions:
@@ -216,15 +268,21 @@ def execute_cycle(iteration: int, custom_instruction: str = None, cooldown_files
     """
     if cooldown_files is None:
         cooldown_files = []
+    cycle_start_time = time.time()
     log(f"==========================================")
     log(f"🚀 Iteration {iteration} / {CONFIG['MAX_ITERATIONS']} 開始")
     log(f"==========================================")
+
+    # タスク指示文から計算負荷・タイムアウトを動的に推定
+    timeout_sec, timeout_reason = estimate_task_timeout(custom_instruction)
+    log(f"⏱️ 動的タイムアウト: {timeout_reason}")
 
     record = {
         "iteration": iteration,
         "time": datetime.datetime.now().strftime("%H:%M:%S"),
         "status": "in_progress",
         "instruction": custom_instruction or "自律改善モード（直近差分から推論）",
+        "timeout_sec": timeout_sec,
         "claude_notes": "",
         "gemini_notes": "",
         "generated_figures": [],
@@ -239,6 +297,7 @@ def execute_cycle(iteration: int, custom_instruction: str = None, cooldown_files
 【最優先：ユーザー（研究者）からの今夜のリクエスト】
 「{custom_instruction}」
 ※この指示に直接従って、必要なコード修正または解析スクリプトの実行を行ってください。
+※計算負荷に応じた安全タイムアウト: {timeout_sec} 秒（約 {timeout_sec // 60} 分）を確保しています。重い計算スクリプトも安心して直接実行してください。
 """
     else:
         cooldown_msg = f"※直近作業済みのため【再編集・微調整を禁止】するファイル: {', '.join(cooldown_files)}" if cooldown_files else ""
@@ -266,15 +325,19 @@ def execute_cycle(iteration: int, custom_instruction: str = None, cooldown_files
 
 【厳守事項】
 1. トークン節約のため、不要な全体探索は行わず、対象スクリプトを直接ピンポイントで実行・編集してください。
-2. もし指示されたタスクが完了したら、その結果（生成された図や数値結果）を簡潔にまとめてください。
-3. 報告には以下の3点を簡潔（3〜4行）に含めてください：
-   - 行った変更または解析内容（物理的狙い）
-   - 実行したコマンドとその結果
-   - 生成された図やログファイル名（または終了宣言）
+2. 解析スクリプトを実行し、グラフ（.png）を出力してください。
+3. 【最重要：翌朝の研究者が読むための報告フォーマット】
+   作業完了後、単なるファイル名報告で終わらせず、必ず以下の形式で「グラフの解釈と結論」を日本語で記述してください：
+
+   ### 🔬 グラフの解釈と物理的結論 (Key Findings)
+   - **グラフから読み取れる傾向**: （縦軸・横軸の変化、粒径依存性、具体的な数値など）
+   - **物理的結論・メカニズムの示唆**: （当初の疑問・仮説に対して何が分かったか）
+   - **代表的な主図**: （今回出力した図の中で人間が一番見るべき図のファイル名 1〜2 点）
 """
 
-    code, claude_output = call_claude_code(claude_prompt)
-    record["claude_notes"] = claude_output[-500:] if len(claude_output) > 500 else claude_output
+    code, claude_output = call_claude_code(claude_prompt, timeout=timeout_sec)
+    # 報告を切り捨てず、最大2000文字程度まで保持
+    record["claude_notes"] = claude_output[-2000:] if len(claude_output) > 2000 else claude_output
 
     # 自律完了・終了宣言の検出（無駄な解析防止）
     stop_phrases = ["【完了宣言】", "自律終了", "NO_FURTHER_ANALYSIS", "十分検証されたため終了"]
@@ -313,21 +376,21 @@ def execute_cycle(iteration: int, custom_instruction: str = None, cooldown_files
                 record["needs_human_decision"].append(f"{py_file} の構文エラー修正が1回で完了しなかったためスキップしました。")
                 break
 
-    # 直近生成された図（.png）を収集
-    record["generated_figures"] = find_recent_figures(minutes_ago=15)
+    # 今回のイテレーション開始以降に生成された図（.png/.jpg）を収集
+    record["generated_figures"] = find_recent_figures(since_timestamp=cycle_start_time)
 
-    # Gemini による物理的考察（コンパクト）
-    fig_mention = f"生成された図: {', '.join(record['generated_figures'])}" if record["generated_figures"] else "コード修正/解析"
+    # Gemini による物理的考察（Claudeの考察全文をインプットにしてセカンドオピニオンを得る）
+    fig_mention = f"生成された代表図: {', '.join(record['generated_figures'][:3])}" if record["generated_figures"] else "コード修正/解析"
     gemini_prompt = f"""
-MTCargo_analysis 研究プロジェクトの進捗評価です。
-実施内容:
-{record['claude_notes'][-300:]}
+MTCargo_analysis 研究プロジェクト（アクティブマター微小管流動場中のカーゴ輸送）の進捗評価です。
+実施内容とClaudeの考察:
+{record['claude_notes']}
 状況: {fig_mention}
 
-この結果がアクティブマター・微小管流動場やカーゴ輸送ダイナミクスにおいて持つ物理的意味、または翌朝人間が確認すべき注目点を2〜3文で簡潔にコメントしてください。
+このグラフ結果や考察を踏まえ、微小管流動場・カーゴダイナミクスの観点から物理的妥当性、見落としがちなポイント、または論文執筆に向けた示唆を3〜4文で論理的にコメントしてください。
 """
     g_code, gemini_output = call_gemini(gemini_prompt)
-    record["gemini_notes"] = gemini_output[-400:] if len(gemini_output) > 400 else gemini_output
+    record["gemini_notes"] = gemini_output[-1000:] if len(gemini_output) > 1000 else gemini_output
 
     # コミット & レポート追記
     if syntax_ok and (py_files or record["generated_figures"]):
@@ -342,20 +405,33 @@ MTCargo_analysis 研究プロジェクトの進捗評価です。
     # レポート用Markdown作成
     report_entry = f"""### 🔹 Iteration {iteration} ({record['time']}) - 状態: `{record['status']}`
 * **リクエスト**: {record['instruction']}
-* **変更ファイル**: `{', '.join(py_files) if py_files else 'なし'}`
+* **変更スクリプト**: `{', '.join(py_files) if py_files else 'なし'}`
 """
+    # プロット画像の掲載（上位3枚をメイン表示、大量にある場合は折りたたみ）
     if record["generated_figures"]:
         report_entry += "* **📊 生成されたプロット**:\n"
-        for fig in record["generated_figures"]:
+        main_figs = record["generated_figures"][:3]
+        extra_figs = record["generated_figures"][3:]
+        for fig in main_figs:
             report_entry += f"  - ![{fig}]({fig})\n"
+        if extra_figs:
+            report_entry += f"  <details>\n  <summary>その他の生成プロット (全 {len(extra_figs)} 枚を展開)</summary>\n\n"
+            for fig in extra_figs:
+                report_entry += f"  - ![{fig}]({fig})\n"
+            report_entry += "  </details>\n"
 
-    report_entry += f"""* **Claudeの作業報告**:
-> {record['claude_notes'][-250:].strip()}
-* **Geminiの物理的コメント**:
-> {record['gemini_notes'][-250:].strip()}
+    # 作業報告と物理的解釈（切り捨てずにしっかり掲載）
+    clean_claude_notes = record['claude_notes'].strip()
+    clean_gemini_notes = record['gemini_notes'].strip()
+    report_entry += f"""
+#### 📝 解析結果と物理的考察
+{clean_claude_notes}
+
+#### 💡 Antigravity (Gemini) の物理的セカンドオピニオン
+> {clean_gemini_notes}
 """
     if record["needs_human_decision"]:
-        report_entry += "* **⚠️ あなた（人間）に判断してほしいこと**:\n"
+        report_entry += "\n* **⚠️ あなた（人間）に判断してほしいこと**:\n"
         for decision in record["needs_human_decision"]:
             report_entry += f"  - [ ] {decision}\n"
 
@@ -400,7 +476,7 @@ def main():
         log(f"Git Diff 取得テスト: OK ({len(diff)} chars)")
         candidates = get_candidate_scripts([])
         log(f"解析スクリプト候補テスト: {len(candidates)} 件検出 (例: {', '.join(candidates[:5])})")
-        figs = find_recent_figures(60)
+        figs = find_recent_figures(minutes_ago=60)
         log(f"最近の図の検出テスト: {len(figs)} 件検出")
         log("Dry run 完了。正常に動作可能です。")
         return
