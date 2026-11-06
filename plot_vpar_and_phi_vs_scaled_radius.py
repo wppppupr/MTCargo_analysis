@@ -226,6 +226,10 @@ def main():
         '--seed', type=int, default=42,
         help="Random seed for bootstrap reproducibility (default: 42)."
     )
+    parser.add_argument(
+        '--no_phi_model', action='store_true',
+        help="Do not overlay the footprint-ring model prediction of Phi (phi_ring_model.py)."
+    )
     args = parser.parse_args()
 
     print("Loading footprint heterogeneity data with frame-wise u_inf(t) normalization...")
@@ -378,6 +382,46 @@ def main():
         label=r"Polar Order Parameter $\Phi$", zorder=5
     )
 
+    # 3. 足印円環モデルの予測 Φ_fp (phi_ring_model.py)
+    #    Φ_fp² = (1/π)∫_0^π exp(-2(R/ξ)sinφ)dφ, R = 足印円環の中央半径, ξ = 動画ごとの背景配向相関長
+    #    横位置は実測の大マーカーと同じ (サイズ別 R_c/ξ 平均) に置き、縦方向で直接比べる。
+    #    縦棒 = 動画間の予測値の範囲 (min–max)。20 µm は参考扱いで灰色。
+    line3 = None
+    if not args.no_phi_model:
+        import phi_ring_model as PRM
+        mt = PRM.movie_table(df)
+        st = PRM.size_table(mt)
+        PRM.write_outputs(mt, st)
+        mod = df_size[['bead_name', 'rc_xi_mean']].merge(st, on='bead_name').sort_values('rc_xi_mean')
+        main_m = mod[~mod['reference']]
+        ref_m = mod[mod['reference']]
+        c_model = '#7a0010'
+        line3 = ax2.errorbar(
+            main_m['rc_xi_mean'], main_m['phi_pred'],
+            yerr=[(main_m['phi_pred'] - main_m['phi_pred_min']).values,
+                  (main_m['phi_pred_max'] - main_m['phi_pred']).values],
+            color=c_model, linestyle=':', linewidth=2.0, marker='D', markersize=6.5,
+            markerfacecolor=c_model, markeredgecolor='white', markeredgewidth=0.8,
+            capsize=2.5, elinewidth=1.0, zorder=6,
+            label=r"Ring model $\Phi_{fp}=[\frac{1}{\pi}\int_0^\pi e^{-2(R/\xi)\sin\varphi}d\varphi]^{1/2}$"
+        )
+        if not ref_m.empty:
+            last = main_m.iloc[[-1]] if len(main_m) else ref_m.iloc[[0]]
+            ax2.plot([last['rc_xi_mean'].iloc[0], ref_m['rc_xi_mean'].iloc[0]],
+                     [last['phi_pred'].iloc[0], ref_m['phi_pred'].iloc[0]],
+                     color='#9a9a9a', linestyle=':', linewidth=1.6, zorder=5)
+            ax2.errorbar(
+                ref_m['rc_xi_mean'], ref_m['phi_pred'],
+                yerr=[(ref_m['phi_pred'] - ref_m['phi_pred_min']).values,
+                      (ref_m['phi_pred_max'] - ref_m['phi_pred']).values],
+                color='#9a9a9a', linestyle='none', marker='D', markersize=6.5,
+                markerfacecolor='#9a9a9a', markeredgecolor='white', markeredgewidth=0.8,
+                capsize=2.5, elinewidth=1.0, zorder=6
+            )
+            ax2.annotate("20 µm: reference", xy=(ref_m['rc_xi_mean'].iloc[0], ref_m['phi_pred'].iloc[0]),
+                         xytext=(-6, -14), textcoords='offset points', ha='right',
+                         fontsize=8.5, color='#777777')
+
     # 各サイズのビーズ径注記
     for _, r in df_size.iterrows():
         # 重なり防止のためサイズごとにオフセット位置を微調整
@@ -412,7 +456,7 @@ def main():
     ax1.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
 
     ax1.set_ylim(-0.06, 0.58)
-    ax2.set_ylim(0.38, 1.05)
+    ax2.set_ylim(0.20 if not args.no_phi_model else 0.38, 1.05)
 
     ax1.set_xlabel(r"Scaled Cargo Radius $R_c / \xi$  ($\xi$: Correlation Length)", fontsize=13.5)
     ax1.set_ylabel(r"Normalized Cargo Velocity $v_\parallel / u_\infty(t)$", fontsize=13.5, color=c_vpar)
@@ -422,9 +466,9 @@ def main():
     ax2.tick_params(axis='y', labelcolor=c_phi)
 
     # 凡例の統合
-    lines = [line1, line2]
+    lines = [line1, line2] + ([line3] if line3 is not None else [])
     labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc='lower left', bbox_to_anchor=(0.03, 0.04), fontsize=10.5, framealpha=0.92)
+    ax1.legend(lines, labels, loc='lower left', bbox_to_anchor=(0.03, 0.04), fontsize=9.5 if line3 is not None else 10.5, framealpha=0.92)
 
     ax1.set_title(
         r"Cargo Velocity $v_\parallel/u_\infty$ and Polar Order $\Phi$ vs Scaled Radius $R_c/\xi$"
