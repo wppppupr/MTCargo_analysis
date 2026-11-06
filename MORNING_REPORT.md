@@ -1595,3 +1595,55 @@ error: authentication failed or timed out
 > ⚠️ Gemini認証待ちのためスキップ（ターミナルで agy -p 'hi' で事前認証すると有効化されます）
 
 
+### 🔹 Iteration 2 (16:12:53) - 状態: `success`
+* **リクエスト**: 【4.4】scratch/phi_ring_model_draft.py（下書き）を清書し、円環平均の予測 Φ_fp² = (1/π)∫_0^π exp(−2(R/ξ)sinφ)dφ（R は足印の円環の中央の半径、ξ は figure/bg_angular_correlation/bg_angular_correlation_length_per_experiment.csv）を、figure/polar_vs_normalized_velocity/vpar_and_phi_vs_rc_over_xi.png（plot_vpar_and_phi_vs_scaled_radius.py）の Φ 側にモデル曲線として重ねる。20 µm は灰色の参考扱い。動画ごとの実測と予測の表を figure/phi_ring_model/ に出す
+* **変更スクリプト**: `plot_vpar_and_phi_vs_scaled_radius.py`
+* **📊 生成されたプロット**:
+  - ![figure/phi_ring_model/phi_ring_model_parity.png](figure/phi_ring_model/phi_ring_model_parity.png)
+  - ![figure/polar_vs_normalized_velocity/vpar_and_phi_vs_rc_over_xi.png](figure/polar_vs_normalized_velocity/vpar_and_phi_vs_rc_over_xi.png)
+
+#### 📝 解析結果と物理的考察
+i_vs_scaled_radius.py`**
+  - Φ 側に、サイズごとの予測（濃い赤の ◆、点線）を重ねました。縦棒は動画間での予測の幅です。
+  - 予測の点は実測の大マーカーと同じ横位置に置き、縦方向で直接比べられるようにしました。
+  - 20 µm は灰色で "reference" と注記しています。
+  - 重ねない図に戻すときは `--no_phi_model` を付けて実行してください。
+- **`figure/phi_ring_model/`**
+  - `phi_ring_model_per_movie.csv` / `.md`：動画ごとの実測と予測の表
+  - `phi_ring_model_per_size.csv`：サイズごとのまとめ
+  - `phi_ring_model_parity.png`：実測と予測の比較図
+
+### 🔬 グラフの解釈と物理的結論 (Key Findings)
+- **グラフから読み取れる傾向**:
+  - このモデルが予測するのは ⟨Φ²⟩ です。そこで実測側は、各フレームの Φ_t の二乗平均の平方根 √⟨Φ_t²⟩ で比べました。サイズごとの値（フレーム数で重み付け）は次のとおりです。
+
+    | サイズ | 実測 √⟨Φ_t²⟩ | 予測 | R/ξ |
+    |---|---|---|---|
+    | 0.63 µm | 0.954 | 0.938 | 0.10 |
+    | 1.18 µm | 0.895 | 0.878 | 0.21 |
+    | 3.37 µm | 0.784 | 0.789 | 0.40 |
+    | 7.24 µm | 0.695 | 0.701 | 0.62 |
+    | 5.00 µm | 0.662 | 0.573 | 1.05 |
+
+  - 20 µm を除く 19 本の動画では、Pearson r=0.90、Spearman ρ=0.94、平均残差 +0.006、RMS 残差 0.058 でした。
+  - 主図の Φ は ⟨Φ_t⟩ なので、予測より平均で約 0.03 低くなります。√⟨Φ_t²⟩ ≥ ⟨Φ_t⟩ が必ず成り立つためです。
+  - 予測から大きく外れた動画は 3 本です。
+    - beads7um（7 µm）：実測 0.54 / 予測 0.70。足印の Φ だけが低く、ξ からは説明できません。
+    - beads5um002 と beads5um003：+0.11。ξ が 2.8 µm と短い動画で、Φ が予測より高めです。
+  - 20 µm（R/ξ≈1.7–3.7）は、予測 0.30–0.46 に対して実測は 0.62–0.94 で、まったく合いません。
+- **物理的結論・メカニズムの示唆**:
+  1. R_c ≲ ξ の範囲では、足印の極性のそろい方は「背景の向きの相関 exp(−r/ξ) を円環の上で平均したもの」でほぼ決まります。貨物そのものが向きをそろえたり乱したりする効果は、ほとんど必要ありません。
+  2. つまり、Φ が貨物の大きさとともに下がるのは、主に円環が相関長に比べて大きくなるという幾何の効果です。v∥/u∞ が下がることと Φ が下がることは、R/ξ という同じ変数を通じてつながっていると考えられます。
+  3. 20 µm では、実測 Φ が予測より大きく上回っています。指数関数で相関が減るという仮定が R≫ξ では成り立たない（長距離で相関が残る、あるいは大きな貨物が周りの流れの向きをそろえる）可能性があります。また、円環の範囲での ξ の測り方自体の問題も考えられます。いずれにせよ、このモデルを当てはめてよいのは R/ξ ≲ 1 の範囲です。
+- **代表的な主図**:
+  - `figure/polar_vs_normalized_velocity/vpar_and_phi_vs_rc_over_xi.png`
+  - `figure/phi_ring_model/phi_ring_model_parity.png`：(a) 動画ごとの予測と実測の比較、(b) R/ξ に対するモデル曲線と実測の重ね図
+
+**注意点**
+- 主図の横軸 R_c/ξ はキャッシュの `rc_over_xi` で、使っている ξ が今回の CSV とは別のものです。そのため、例えば 5 µm ではキャッシュでは 0.59–0.86、CSV では 0.66–0.90 と少しずれます。予測は CSV の ξ で計算し、点は実測と同じ横位置に置いています。2 つの ξ をそろえるかどうかは判断をお願いします。
+- 主図では 20 µm の注記ラベルが少し重なっています。
+
+#### 💡 Antigravity (Gemini) の物理的セカンドオピニオン
+> ⚠️ Gemini認証待ちのためスキップ（ターミナルで agy -p 'hi' で事前認証すると有効化されます）
+
+

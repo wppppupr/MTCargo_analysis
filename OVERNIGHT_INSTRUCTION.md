@@ -15,7 +15,7 @@
 - [x] η_i のヒストグラムが、速度を求める時間間隔 4, 8, 16 s で二山のまま残るか確認する *(完了: 03:53)*
 - [x] 余裕があれば：接触領域の微小管の本数 ∝ R_c とした、止まる割合の簡単な模型を作って実測と比べ、/mnt/NAS-A/sasaki/MTC/result3.md の D3 への追記案を別ファイルに書く *(完了: 03:57)*
 
-- [ ] 【4.4】scratch/phi_ring_model_draft.py（下書き）を清書し、円環平均の予測 Φ_fp² = (1/π)∫_0^π exp(−2(R/ξ)sinφ)dφ（R は足印の円環の中央の半径、ξ は figure/bg_angular_correlation/bg_angular_correlation_length_per_experiment.csv）を、figure/polar_vs_normalized_velocity/vpar_and_phi_vs_rc_over_xi.png（plot_vpar_and_phi_vs_scaled_radius.py）の Φ 側にモデル曲線として重ねる。20 µm は灰色の参考扱い。動画ごとの実測と予測の表を figure/phi_ring_model/ に出す
+- [x] 【4.4】scratch/phi_ring_model_draft.py（下書き）を清書し、円環平均の予測 Φ_fp² = (1/π)∫_0^π exp(−2(R/ξ)sinφ)dφ（R は足印の円環の中央の半径、ξ は figure/bg_angular_correlation/bg_angular_correlation_length_per_experiment.csv）を、figure/polar_vs_normalized_velocity/vpar_and_phi_vs_rc_over_xi.png（plot_vpar_and_phi_vs_scaled_radius.py）の Φ 側にモデル曲線として重ねる。20 µm は灰色の参考扱い。動画ごとの実測と予測の表を figure/phi_ring_model/ に出す *(完了: 16:16)*
 - [ ] 【4.4】η_0 = Σv_∥/Σu_∞(t) ÷ ⟨Φ_fp⟩ をサイズごとに階層ブートストラップ（動画→貨物、比はリサンプルごとに計算）で出す。さらに「0.63–3.37 µm」と「5.00–7.24 µm」の 2 群の差の CI と、η_0 を log R_c と log(R_c/ξ) のどちらに回帰した方がよいか（動画ごと）を表にする
 - [ ] 【4.4】u_∞(t) 版で、v_∥/u_∞ と η（Σv_∥/Σ|⟨u⟩_fp|）の雑音を比べる。全フレームと Φ_fp>0.95 のそれぞれで、サイズごとの階層 95% CI の相対幅と動画間 CV を表にする
 - [ ] 【4.4】時間窓（200 フレーム）ごとに、ξ(t)（figure/xi_time_window/xi_t_windows_w200.csv）から予測した Φ_fp(t) と、同じ窓の実測 Φ_fp の平均を比べる（同じ動画の中でも式が成り立つか）。散布図と、サイズごとの残差の平均を出す
