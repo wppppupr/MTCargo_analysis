@@ -1,0 +1,23 @@
+consistency k=1 vs footprint cache: n=27969, max|Δη|=8.53e-13
+valley/min(peak) ratio of smoothed hist (bin 0.05, 3-bin boxcar); <1 = dip between stop and run peaks. CI = hier. boot movie→cargo
+beads06um  τ=   4s n= 3450  peaks η=+0.03 / 0.78  valley η=0.58 ratio=0.76 [0.41,1.00]  frac|η|<0.1=0.205  median=0.23
+beads06um  τ=   8s n= 3390  peaks η=-0.02 / 0.88  valley η=0.63 ratio=0.58 [0.34,1.00]  frac|η|<0.1=0.206  median=0.29
+beads06um  τ=  16s n= 3293  peaks η=+0.03 / 0.88  valley η=0.58 ratio=0.55 [0.26,1.00]  frac|η|<0.1=0.211  median=0.30
+beads1um   τ=   4s n= 4439  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [0.58,1.00]  frac|η|<0.1=0.166  median=0.25
+beads1um   τ=   8s n= 4356  peaks η=+0.03 / 1.08  valley η=0.93 ratio=0.82 [0.52,1.00]  frac|η|<0.1=0.162  median=0.27
+beads1um   τ=  16s n= 4211  peaks η=-0.02 / 0.58  valley η=0.53 ratio=0.99 [0.44,1.00]  frac|η|<0.1=0.185  median=0.25
+beads3um   τ=   4s n= 5558  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [0.85,1.00]  frac|η|<0.1=0.152  median=0.24
+beads3um   τ=   8s n= 5455  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [0.85,1.00]  frac|η|<0.1=0.170  median=0.25
+beads3um   τ=  16s n= 5311  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [1.00,1.00]  frac|η|<0.1=0.183  median=0.23
+beads5um   τ=   4s n= 7587  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [0.84,1.00]  frac|η|<0.1=0.228  median=0.06
+beads5um   τ=   8s n= 7563  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [0.92,1.00]  frac|η|<0.1=0.280  median=0.06
+beads5um   τ=  16s n= 7520  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [0.84,1.00]  frac|η|<0.1=0.339  median=0.04
+beads7um   τ=   4s n= 3929  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [0.84,1.00]  frac|η|<0.1=0.297  median=0.07
+beads7um   τ=   8s n= 3917  peaks η=+0.03 / 0.58  valley η=0.53 ratio=0.94 [0.47,1.00]  frac|η|<0.1=0.322  median=0.06
+beads7um   τ=  16s n= 3893  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [0.58,1.00]  frac|η|<0.1=0.358  median=0.04
+beads20um  τ=   4s n= 3006  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [0.96,1.00]  frac|η|<0.1=0.354  median=0.01
+beads20um  τ=   8s n= 3003  peaks η=-0.02 / 0.73  valley η=0.63 ratio=0.69 [0.69,1.00]  frac|η|<0.1=0.443  median=0.01
+beads20um  τ=  16s n= 2997  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [1.00,1.00]  frac|η|<0.1=0.477  median=0.01
+all        τ=   4s n=27969  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [0.91,1.00]  frac|η|<0.1=0.223  median=0.11
+all        τ=   8s n=27684  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [0.77,1.00]  frac|η|<0.1=0.254  median=0.11
+all        τ=  16s n=27225  peaks η=+0.03 / 0.53  valley η=0.53 ratio=1.00 [0.71,1.00]  frac|η|<0.1=0.287  median=0.09
