@@ -24,6 +24,7 @@ if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
 from libs import displacement as dpm
+from libs.experiment_cutoff import get_cutoff_frame, DEFAULT_EXPERIMENT_CUTOFFS, load_strict_active_particles
 
 # スタイルの適用
 style_path = current_dir / 'libs' / 'my_style.mplstyle'
@@ -150,6 +151,7 @@ def collect_displacements(exp_dirs, tau, scale=0.11, component='norm', signed=Fa
     """
     all_disps = []
     exp_disps = []
+    strict_set = load_strict_active_particles()
 
     for d in exp_dirs:
         d_str = str(d)
@@ -159,6 +161,14 @@ def collect_displacements(exp_dirs, tau, scale=0.11, component='norm', signed=Fa
             tracks_path = d / "beads_tracks.csv"
             try:
                 df_tracks = pd.read_csv(tracks_path)
+                # 実験動画のカットオフ上限を適用
+                cut = get_cutoff_frame(d.name)
+                if cut is not None and 'frame' in df_tracks.columns:
+                    df_tracks = df_tracks[df_tracks['frame'] <= cut].copy()
+                # 厳格な活性粒子 (N=70) のみを採用
+                if strict_set and 'particle' in df_tracks.columns:
+                    valid_pids = [pid for pid in df_tracks['particle'].unique() if (d.name, int(pid)) in strict_set]
+                    df_tracks = df_tracks[df_tracks['particle'].isin(valid_pids)].copy()
                 _TRACKS_CACHE[d_str] = df_tracks
             except Exception as e:
                 print(f"[WARNING] Failed to read {tracks_path}: {e}", flush=True)

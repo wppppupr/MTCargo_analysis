@@ -25,6 +25,7 @@ from scipy.optimize import curve_fit
 from libs import fit_model as fm
 from libs import displacement as dpm
 from libs import cal_vel as cv
+from libs.experiment_cutoff import get_cutoff_frame, DEFAULT_EXPERIMENT_CUTOFFS, load_strict_active_particles
 
 # スタイルの適用
 style_path = Path(__file__).parent / 'libs' / 'my_style.mplstyle'
@@ -85,24 +86,40 @@ def calc_particle_alpha(sub_df: pd.DataFrame, min_t: float = 4.0, max_t: float =
     return float(slope)
 
 
-def concat_pooled_particles_MSD(folder, interval_list, scale = 0.11, alpha_threshold = 0.5):
+def concat_pooled_particles_MSD(folder, interval_list, scale = 0.11, alpha_threshold = 0.5, apply_cutoff = True, strict_particles = None):
     """
     全動画から追跡された全粒子の個別MSD (iMSD) を1つのプールに統合する。
-    各粒子について異常拡散指数 alpha を算出し、alpha > alpha_threshold (デフォルト: 0.5) の粒子のみを抽出する。
-    （異常値・スタック粒子 alpha <= 0.5 をフィルタリング除外）
+    strict_particles (set of (exp_name, particle_id)) が指定された場合、
+    全解析共通の厳格な活性貨物粒子 (N=70) のみを採用する。
     """
     all_imsds = []
     file_list = sorted(glob.glob(str(Path(folder) / "*" / "*" / "beads_tracks.csv")))
     for vid_idx, file_path in enumerate(file_list):
+        exp_dir_name = Path(file_path).parent.name
         interval = interval_list[vid_idx] if vid_idx < len(interval_list) else interval_list[-1]
-        track = cv.cal(pd.read_csv(file_path), scale=scale, frame_interval=interval)
+        raw_df = pd.read_csv(file_path)
+        if apply_cutoff:
+            cut = get_cutoff_frame(exp_dir_name)
+            if cut is not None and 'frame' in raw_df.columns:
+                raw_df = raw_df[raw_df['frame'] <= cut].copy()
+                if len(raw_df) == 0:
+                    continue
+
+        if strict_particles is not None and 'particle' in raw_df.columns:
+            valid_pids = [pid for pid in raw_df['particle'].unique() if (exp_dir_name, int(pid)) in strict_particles]
+            raw_df = raw_df[raw_df['particle'].isin(valid_pids)].copy()
+            if len(raw_df) == 0:
+                continue
+
+        track = cv.cal(raw_df, scale=scale, frame_interval=interval)
         imsd_df = dpm.imsd(track, scale=scale, time_scale=interval, display=False)
         imsd_df['video_idx'] = vid_idx
-        imsd_df['unique_particle_id'] = f"vid{vid_idx}_" + imsd_df['particle'].astype(str)
+        imsd_df['exp_name'] = exp_dir_name
+        imsd_df['unique_particle_id'] = f"{exp_dir_name}_" + imsd_df['particle'].astype(str)
         all_imsds.append(imsd_df)
         
     if len(all_imsds) == 0:
-        empty_df = pd.DataFrame(columns=['unique_particle_id', 'video_idx', 'particle', 'lag time', 'MSD', 'alpha'])
+        empty_df = pd.DataFrame(columns=['unique_particle_id', 'video_idx', 'exp_name', 'particle', 'lag time', 'MSD', 'alpha'])
         return empty_df, empty_df, 0, 0
         
     df_pool = pd.concat(all_imsds, ignore_index=True)
@@ -118,7 +135,10 @@ def concat_pooled_particles_MSD(folder, interval_list, scale = 0.11, alpha_thres
     df_pool['alpha'] = df_pool['unique_particle_id'].map(p_alphas)
     
     n_total = df_pool['unique_particle_id'].nunique()
-    df_filtered = df_pool[df_pool['alpha'] > alpha_threshold].copy()
+    if strict_particles is not None:
+        df_filtered = df_pool.copy()
+    else:
+        df_filtered = df_pool[df_pool['alpha'] > alpha_threshold].copy()
     n_filtered = df_filtered['unique_particle_id'].nunique()
     
     return df_filtered, df_pool, n_total, n_filtered
@@ -381,14 +401,15 @@ def main():
 
     clean_redundant_files(out_dirs)
 
-    print("\n--- 1. Loading & Filtering MSD datasets (alpha > 0.5 only) ---")
+    print("\n--- 1. Loading & Filtering MSD datasets (Strict Active Particles N=70) ---")
+    strict_set = load_strict_active_particles()
     alpha_thresh = 0.5
-    pool_06um, raw_06um, n_tot_06um, n_filt_06um = concat_pooled_particles_MSD(root_dir / "beads06um", [4, 4, 4, 4], alpha_threshold=alpha_thresh)
-    pool_1um,  raw_1um,  n_tot_1um,  n_filt_1um  = concat_pooled_particles_MSD(root_dir / "beads1um",  [4, 4, 4, 4], alpha_threshold=alpha_thresh)
-    pool_3um,  raw_3um,  n_tot_3um,  n_filt_3um  = concat_pooled_particles_MSD(root_dir / "beads3um",  [4, 4, 4, 4], alpha_threshold=alpha_thresh)
-    pool_5um,  raw_5um,  n_tot_5um,  n_filt_5um  = concat_pooled_particles_MSD(root_dir / "beads5um",  [4, 4, 4, 4], alpha_threshold=alpha_thresh)
-    pool_7um,  raw_7um,  n_tot_7um,  n_filt_7um  = concat_pooled_particles_MSD(root_dir / "beads7um",  [4, 4, 4],    alpha_threshold=alpha_thresh)
-    pool_20um, raw_20um, n_tot_20um, n_filt_20um = concat_pooled_particles_MSD(root_dir / "beads20um", [4, 4, 4],    alpha_threshold=alpha_thresh)
+    pool_06um, raw_06um, n_tot_06um, n_filt_06um = concat_pooled_particles_MSD(root_dir / "beads06um", [4, 4, 4, 4], alpha_threshold=alpha_thresh, strict_particles=strict_set)
+    pool_1um,  raw_1um,  n_tot_1um,  n_filt_1um  = concat_pooled_particles_MSD(root_dir / "beads1um",  [4, 4, 4, 4], alpha_threshold=alpha_thresh, strict_particles=strict_set)
+    pool_3um,  raw_3um,  n_tot_3um,  n_filt_3um  = concat_pooled_particles_MSD(root_dir / "beads3um",  [4, 4, 4, 4], alpha_threshold=alpha_thresh, strict_particles=strict_set)
+    pool_5um,  raw_5um,  n_tot_5um,  n_filt_5um  = concat_pooled_particles_MSD(root_dir / "beads5um",  [4, 4, 4, 4], alpha_threshold=alpha_thresh, strict_particles=strict_set)
+    pool_7um,  raw_7um,  n_tot_7um,  n_filt_7um  = concat_pooled_particles_MSD(root_dir / "beads7um",  [4, 4, 4],    alpha_threshold=alpha_thresh, strict_particles=strict_set)
+    pool_20um, raw_20um, n_tot_20um, n_filt_20um = concat_pooled_particles_MSD(root_dir / "beads20um", [4, 4, 4],    alpha_threshold=alpha_thresh, strict_particles=strict_set)
 
     stats_06um = calc_pooled_MSD_stats(pool_06um)
     stats_1um = calc_pooled_MSD_stats(pool_1um)

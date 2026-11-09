@@ -29,6 +29,11 @@ ROOT_DIR_CANDIDATES = [
 ]
 ROOT_DIR = next((p for p in ROOT_DIR_CANDIDATES if p.exists()), CURRENT_DIR)
 
+try:
+    from libs.experiment_cutoff import get_cutoff_frame, filter_by_cutoff
+except ImportError:
+    from experiment_cutoff import get_cutoff_frame, filter_by_cutoff
+
 OUT_DIRS = [
     CURRENT_DIR / "figure" / "cos_decomposition",
     ROOT_DIR / "figure" / "cos_decomposition"
@@ -207,6 +212,12 @@ def load_all_data(root_dir: Path, active_set: set):
             except Exception as e:
                 print(f"  Error loading {exp_name}: {e}")
                 continue
+
+            # カットオフ適用 (退色・フロー暴走領域の除外)
+            cutoff = get_cutoff_frame(exp_name)
+            if cutoff is not None:
+                df_flow = df_flow[df_flow['frame'] <= cutoff]
+                tdf = tdf[tdf['frame'] <= cutoff]
 
             # 貨物速度マップ:
             # 1. beads_flow_interaction.csv 自身から真の貨物速度ベクトル (bdx, bdy) を復元

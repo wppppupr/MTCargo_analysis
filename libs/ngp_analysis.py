@@ -25,6 +25,7 @@ if str(parent_dir) not in sys.path:
     sys.path.insert(0, str(parent_dir))
 
 from libs import ngp
+from libs.experiment_cutoff import get_cutoff_frame, DEFAULT_EXPERIMENT_CUTOFFS, load_strict_active_particles
 
 # スタイルの適用
 style_path = parent_dir / 'libs' / 'my_style.mplstyle'
@@ -135,11 +136,24 @@ def analyze_single_bead_condition(target_dir, max_tau=50, scale=0.11, frame_inte
     per_exp_ngp = []
     pooled_disps = {tau: [] for tau in range(1, max_tau + 1)}
     total_particles = 0
+    strict_set = load_strict_active_particles()
 
     for i, exp_dir in enumerate(exp_dirs):
         tracks_path = exp_dir / "beads_tracks.csv"
         try:
             df_tracks = pd.read_csv(tracks_path)
+            # カットオフ上限の適用
+            cut = get_cutoff_frame(exp_dir.name)
+            if cut is not None and 'frame' in df_tracks.columns:
+                df_tracks = df_tracks[df_tracks['frame'] <= cut].copy()
+                if len(df_tracks) == 0:
+                    continue
+            # 厳格な活性粒子 (N=70) のみを採用
+            if strict_set and 'particle' in df_tracks.columns:
+                valid_pids = [pid for pid in df_tracks['particle'].unique() if (exp_dir.name, int(pid)) in strict_set]
+                df_tracks = df_tracks[df_tracks['particle'].isin(valid_pids)].copy()
+                if len(df_tracks) == 0:
+                    continue
         except Exception as e:
             print(f"    [WARNING] 読み込み失敗 ({tracks_path}): {e}")
             continue

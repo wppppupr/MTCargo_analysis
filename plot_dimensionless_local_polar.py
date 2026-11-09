@@ -48,6 +48,11 @@ try:
 except ImportError:
     from fft_convolution import FFTConvolver
 
+try:
+    from libs.experiment_cutoff import get_cutoff_frame
+except ImportError:
+    from experiment_cutoff import get_cutoff_frame
+
 # ==============================================================================
 # 設定・定数
 # ==============================================================================
@@ -288,13 +293,17 @@ def load_local_polar_for_experiment(
     p_df = pd.DataFrame()
     bg_df = pd.DataFrame()
     bead_radius_um = diameter_um / 2.0
+    cutoff = get_cutoff_frame(exp_dir.name)
 
     # 1. w/ Cargo (local_polar_w.zarr)
     w_path = exp_dir / "local_polar_w.zarr"
     if w_path.exists():
         try:
             ds_w = xr.open_zarr(w_path, consolidated=False)
-            p_mean = ds_w.polar_order.mean(dim=['frame', 'particle']).compute().values
+            da_w = ds_w.polar_order
+            if cutoff is not None and 'frame' in da_w.dims:
+                da_w = da_w.sel(frame=da_w.frame <= cutoff)
+            p_mean = da_w.mean(dim=['frame', 'particle']).compute().values
             win_size_px = ds_w.coords['window size'].values
             r_um = win_size_px * SCALE
             r_norm = r_um / xi_exp
@@ -329,7 +338,10 @@ def load_local_polar_for_experiment(
     if bg_path.exists():
         try:
             ds_bg = xr.open_zarr(bg_path, consolidated=False)
-            bg_mean = ds_bg.polar_order.mean(dim=['frame']).compute().values
+            da_bg = ds_bg.polar_order
+            if cutoff is not None and 'frame' in da_bg.dims:
+                da_bg = da_bg.sel(frame=da_bg.frame <= cutoff)
+            bg_mean = da_bg.mean(dim=['frame']).compute().values
             win_size_px = ds_bg.coords['window size'].values
             r_um = win_size_px * SCALE
             r_norm = r_um / xi_exp

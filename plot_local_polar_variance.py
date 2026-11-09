@@ -36,6 +36,7 @@ except Exception:
 
 # スタイルの適用
 CURRENT_DIR = Path(__file__).parent.resolve()
+from libs.experiment_cutoff import get_cutoff_frame, DEFAULT_EXPERIMENT_CUTOFFS
 style_path = CURRENT_DIR / 'libs' / 'my_style.mplstyle'
 if style_path.exists():
     plt.style.use(str(style_path))
@@ -242,7 +243,10 @@ def process_experiment(
         if calculator is None or calculator.H != H or calculator.W != W:
             calculator = DiskPolarVarianceCalculator(shape=(H, W), radii_px=radii_px)
 
-        frame_indices = np.linspace(0, num_frames - 1, min(n_frames, num_frames), dtype=int)
+        exp_name = Path(flow_path).parent.name
+        cut = get_cutoff_frame(exp_name)
+        eff_frames = min(num_frames, cut + 1) if cut is not None else num_frames
+        frame_indices = np.linspace(0, eff_frames - 1, min(n_frames, eff_frames), dtype=int)
 
         all_means = []
         all_vars = []

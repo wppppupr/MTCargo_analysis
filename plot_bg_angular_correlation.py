@@ -89,6 +89,7 @@ if str(CURRENT_DIR) not in sys.path:
 from libs.calc_bg_angular_correlation import load_nematic_thetas, parse_distances
 from libs.fft_convolution import FFTConvolver
 from libs.hmm_flow_correlation import fit_flow_correlation_length
+from libs.experiment_cutoff import get_cutoff_frame, DEFAULT_EXPERIMENT_CUTOFFS
 
 # スタイル適用
 _style_path = CURRENT_DIR / 'libs' / 'my_style.mplstyle'
@@ -316,6 +317,7 @@ def virtual_point_samples(
     ds: xr.Dataset,
     n_points_limit: Optional[int] = None,
     frame_stride: Optional[int] = None,
+    cutoff_frame: Optional[int] = None,
 ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], np.ndarray, int, str]:
     """
     (distance, frame, virtual_point) のサンプル配列・距離座標・仮想粒子数を取り出す。
@@ -323,6 +325,7 @@ def virtual_point_samples(
     要求より密なキャッシュ（仮想粒子数・フレーム数が多い）を再利用できるように、
     n_points_limit / frame_stride を与えると点およびフレームを部分抽出する
     （点は交換可能な i.i.d. サンプルなので先頭 k 点の部分抽出で偏りは生じない）。
+    cutoff_frame が与えられた場合、frame <= cutoff_frame のフレームのみを抽出する。
     """
     dim = VIRTUAL_POINT_DIM if VIRTUAL_POINT_DIM in ds.sizes else _EXISTING_VP_DIM
     dist_px = np.asarray(ds.coords['distance'].values, dtype=float)
@@ -330,12 +333,21 @@ def virtual_point_samples(
     k = min(n_pts, int(n_points_limit)) if n_points_limit else n_pts
 
     frames_all = np.asarray(ds.coords['frame'].values, dtype=np.int64)
-    if frame_stride is not None and int(frame_stride) > 1:
-        sel_frames = np.nonzero(np.mod(frames_all, int(frame_stride)) == 0)[0]
-        if sel_frames.size == 0:
-            sel_frames = np.arange(frames_all.size)
+    if cutoff_frame is not None:
+        frame_mask = (frames_all <= int(cutoff_frame))
     else:
-        sel_frames = np.arange(frames_all.size)
+        frame_mask = np.ones(frames_all.shape, dtype=bool)
+
+    if frame_stride is not None and int(frame_stride) > 1:
+        stride_mask = (np.mod(frames_all, int(frame_stride)) == 0)
+        sel_frames = np.nonzero(frame_mask & stride_mask)[0]
+        if sel_frames.size == 0:
+            sel_frames = np.nonzero(frame_mask)[0]
+    else:
+        sel_frames = np.nonzero(frame_mask)[0]
+
+    if sel_frames.size == 0:
+        sel_frames = np.arange(min(1, frames_all.size))
 
     def _get(name: str) -> Optional[np.ndarray]:
         if name not in ds:
@@ -729,11 +741,12 @@ def load_experiment_correlation(
     mask_out = float(mask_px)
     source = ''
     cached_u_sq: Optional[float] = None
+    exp_cut = get_cutoff_frame(exp_dir.name)
 
     if args.source == 'existing':
         ds_ex = open_virtual_point_dataset(exp_dir / args.existing_zarr_name)
         if ds_ex is not None:
-            out = virtual_point_samples(ds_ex)
+            out = virtual_point_samples(ds_ex, cutoff_frame=exp_cut)
             mask_attr = ds_ex.attrs.get('particle_mask_radius', ds_ex.attrs.get('mask_radius_px', None))
             cached_u_sq = ds_ex.attrs.get('mean_u_bar_sq', None)
             ds_ex.close()
@@ -758,7 +771,8 @@ def load_experiment_correlation(
                 out = None
                 if plan is not None:
                     out = virtual_point_samples(ds_c, n_points_limit=plan['n_points'],
-                                                frame_stride=plan['frame_stride'])
+                                                frame_stride=plan['frame_stride'],
+                                                cutoff_frame=exp_cut)
                     cached_u_sq = ds_c.attrs.get('mean_u_bar_sq', None)
                 ds_c.close()
                 if plan is not None and out is not None and out[0] is not None:
@@ -788,7 +802,7 @@ def load_experiment_correlation(
         cached_u_sq = ds.attrs.get('mean_u_bar_sq', None)
         if not args.no_cache:
             save_dataset_cache(ds, exp_dir / args.cache_name)
-        out = virtual_point_samples(ds)
+        out = virtual_point_samples(ds, cutoff_frame=exp_cut)
         ds.close()
         if out is None or out[0] is None:
             return None

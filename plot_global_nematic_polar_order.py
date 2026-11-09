@@ -42,7 +42,7 @@ if style_path.exists():
     except Exception:
         pass
 
-# ビーズ基本情報 (MSD.py 準拠)
+from libs.experiment_cutoff import get_cutoff_frame, DEFAULT_EXPERIMENT_CUTOFFS
 BEADS_INFO = [
     {"name": "beads06um", "diameter_um": 0.63, "radius_um": 0.315, "marker": "^", "label": r"$0.63\,\mu\mathrm{m}$"},
     {"name": "beads1um",  "diameter_um": 1.18, "radius_um": 0.590, "marker": "o", "label": r"$1.18\,\mu\mathrm{m}$"},
@@ -78,8 +78,13 @@ def compute_nematic_order(ed: Path) -> float:
     if not nem_p.exists():
         return np.nan
     try:
-        op_zarr = zarr.open(str(nem_p), mode='r')[:]
-        op_flat = op_zarr[~np.isnan(op_zarr)]
+        op_zarr = zarr.open(str(nem_p), mode='r')
+        cut = get_cutoff_frame(ed.name)
+        if cut is not None and op_zarr.shape[0] > cut + 1:
+            arr = op_zarr[:cut + 1]
+        else:
+            arr = op_zarr[:]
+        op_flat = arr[~np.isnan(arr)]
         if len(op_flat) > 0:
             return float(np.mean(op_flat))
     except Exception as e:
@@ -101,12 +106,18 @@ def compute_polar_order_from_cache_or_flow(
     """
     # 候補1: mt_flow_cache_s8_f5.h5
     cache_s8 = ed / 'mt_flow_cache_s8_f5.h5'
+    cut = get_cutoff_frame(ed.name)
     if cache_s8.exists():
         try:
             with h5py.File(cache_s8, 'r') as f:
                 if 'mx' in f and 'my' in f:
                     u = f['mx'][:].astype(np.float32)
                     v = f['my'][:].astype(np.float32)
+                    # s8_f5 は frame_stride=5 なのでフレームインデックスを考慮
+                    if cut is not None:
+                        max_idx = (cut // 5) + 1
+                        u = u[:max_idx]
+                        v = v[:max_idx]
                     mag = np.hypot(u, v)
                     mask = mag > 1e-6
                     u_hat = np.where(mask, u / np.where(mask, mag, 1.0), 0.0)
@@ -126,6 +137,10 @@ def compute_polar_order_from_cache_or_flow(
                 if 'mx' in f and 'my' in f:
                     u = f['mx'][:, ::2, ::2].astype(np.float32)
                     v = f['my'][:, ::2, ::2].astype(np.float32)
+                    if cut is not None:
+                        max_idx = (cut // 5) + 1
+                        u = u[:max_idx]
+                        v = v[:max_idx]
                     mag = np.hypot(u, v)
                     mask = mag > 1e-6
                     u_hat = np.where(mask, u / np.where(mask, mag, 1.0), 0.0)
@@ -158,6 +173,9 @@ def compute_polar_order_from_cache_or_flow(
                     n_frames = shape[0]
                 else:
                     return np.nan, "unknown_channels"
+
+                if cut is not None:
+                    n_frames = min(n_frames, cut + 1)
 
                 frame_indices = range(0, n_frames, frame_stride)
                 p_frames = []
