@@ -18,7 +18,7 @@ from typing import Dict, List, Tuple, Optional
 import warnings
 warnings.filterwarnings('ignore')
 from scipy.special import i0, i1
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, minimize
 from scipy.stats import skew
 
 # ワークスペースおよびNASのパス設定
@@ -1581,8 +1581,86 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         boot_P = np.zeros((B_BOOT, len(bin_centers)))
         boot_Peven = np.zeros((B_BOOT, len(bin_centers)))
         boot_Podd = np.zeros((B_BOOT, len(bin_centers)))
+        boot_Ueff = np.zeros((B_BOOT, len(bin_centers)))
+
+        # ヤコビアン補正ボルツマン反転による有効ポテンシャル U_eff(c):
+        # U_eff(c) = - ln( sqrt(1 - c^2) * P(c) / P(0) )
+        # c = 0 に最も近いビンインデックス (c=0でU_eff(0)=0)
+        idx_zero = int(np.argmin(np.abs(bin_centers)))
+        denom_jacob = np.sqrt(np.clip(1.0 - bin_centers**2, 1e-6, 1.0))
+
+        # 実測代表値の U_eff(c)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            p_zero_obs = P_obs[idx_zero] if P_obs[idx_zero] > 0 else np.nan
+            arg_u_obs = denom_jacob * (P_obs / p_zero_obs)
+            U_eff_obs = np.where(arg_u_obs > 0, -np.log(arg_u_obs), np.nan)
+
+        # 偶奇分解:
+        # U_odd(c) = (U_eff(c) - U_eff(-c)) / 2 = - \kappa_1 c
+        # U_even(c) = (U_eff(c) + U_eff(-c)) / 2 = 2 \kappa_2 c^2
+        U_eff_obs_neg = U_eff_obs[::-1]
+        U_odd_obs = 0.5 * (U_eff_obs - U_eff_obs_neg)
+        U_even_obs = 0.5 * (U_eff_obs + U_eff_obs_neg)
+
+        # 直接読み取り（最小二乗・幾何学的傾き・曲率の推定）:
+        # \kappa_1: - U_odd(c) / c (c > 0 での平均または線形回帰)
+        # \kappa_2: U_even(c) / (2 c^2) (c > 0 での平均または二次項回帰)
+        # 端点付近のノイズを避けるため |c| <= 0.85 のビンを使用
+        fit_c_mask = (bin_centers > 0.05) & (bin_centers <= 0.85) & (~np.isnan(U_odd_obs)) & (~np.isnan(U_even_obs))
+        if np.sum(fit_c_mask) >= 2:
+            c_fit = bin_centers[fit_c_mask]
+            # U_odd = - \kappa_1 * c => \kappa_1 = - sum(U_odd * c) / sum(c^2)
+            k1_direct = - np.sum(U_odd_obs[fit_c_mask] * c_fit) / np.sum(c_fit**2)
+            # U_even = 2 * \kappa_2 * c^2 => \kappa_2 = sum(U_even * c^2) / (2 * sum(c^4))
+            k2_direct = np.sum(U_even_obs[fit_c_mask] * (c_fit**2)) / (2.0 * np.sum(c_fit**4))
+        else:
+            k1_direct, k2_direct = np.nan, np.nan
+        # -------------------------------------------------------------
+        # 方式2: P_odd / P_even 比率法による極性結合 \kappa_1 と ネマティック結合 \kappa_2 の安定推定
+        # 1. P_odd(c) / P_even(c) = tanh(\kappa_1 c)  (ヤコビアン・ガウス減衰・規格化定数がすべて相殺)
+        # 2. ln[ sqrt(1 - c^2) * P_even(c) / cosh(\kappa_1 c) ] = const - 2 * \kappa_2 * c^2  (\kappa_2 >= 0)
+        # -------------------------------------------------------------
+        def estimate_k1_k2(p_e, p_o):
+            mask = (bin_centers > 0.05) & (bin_centers <= 0.85) & (p_e > 1e-4)
+            if np.sum(mask) < 2:
+                return np.nan, np.nan
+            c_m = bin_centers[mask]
+            ratio_m = np.clip((p_o / p_e)[mask], -0.999, 0.999)
+
+        # \sigma_c = 1 / sqrt(4 * \kappa_2) (ただし \kappa_2 <= 0 の場合は \infty)
+            # 1. \kappa_1 の推定: arctanh(ratio) = \kappa_1 * c
+            # arctanh(P_odd / P_even) の傾きから直接推定 (最小二乗)
+            atanh_vals = np.arctanh(ratio_m)
+            k1_est = float(np.sum(atanh_vals * c_m) / np.sum(c_m**2))
+            k1_est = max(0.0, k1_est)
+
+            # 2. \kappa_2 の推定:
+            # y = ln[ denom_jacob * P_even / cosh(\kappa_1 c) ] = const - 2 * \kappa_2 * c^2
+            y_vals = np.log(np.clip(denom_jacob[mask] * p_e[mask] / np.cosh(k1_est * c_m), 1e-6, None))
+            # 重み付き/非負制約付き回帰: y = c0 - 2 * \kappa_2 * c^2
+            x_sq = c_m**2
+            # 中心化による傾き -2 * \kappa_2 の直接計算
+            x_dev = x_sq - np.mean(x_sq)
+            y_dev = y_vals - np.mean(y_vals)
+            slope = np.sum(x_dev * y_dev) / np.sum(x_dev**2) if np.sum(x_dev**2) > 0 else 0.0
+            # slope = - 2 * \kappa_2 => \kappa_2 = - slope / 2 (負の曲率は物理的に閉じ込めなし \kappa_2 = 0)
+            k2_est = max(0.0, float(-0.5 * slope))
+
+            return k1_est, k2_est
+
+        k1_direct, k2_direct = estimate_k1_k2(P_even_obs, P_odd_obs)
+
+        # \sigma_c = 1 / sqrt(4 * \kappa_2) (ただし \kappa_2 <= 1e-4 の場合は \infty)
+        if not np.isnan(k2_direct) and k2_direct > 1e-4:
+            sig_c_direct = 1.0 / np.sqrt(4.0 * k2_direct)
+        else:
+            sig_c_direct = 20.0 # 実質的に無限大
+            sig_c_direct = 20.0 # 実質的に無限大 (減衰なし)
 
         if n_cargos >= 2:
+            boot_k1_arr = np.zeros(B_BOOT)
+            boot_k2_arr = np.zeros(B_BOOT)
+
             for b_idx in range(B_BOOT):
                 sel_indices = rng_boot.choice(n_cargos, size=n_cargos, replace=True)
                 sample_pts = np.concatenate([cargos_data[i] for i in sel_indices])
@@ -1591,6 +1669,32 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
                 boot_P[b_idx] = c_boot
                 boot_Peven[b_idx] = 0.5 * (c_boot + c_boot_neg)
                 boot_Podd[b_idx] = 0.5 * (c_boot - c_boot_neg)
+                pe_b = 0.5 * (c_boot + c_boot_neg)
+                po_b = 0.5 * (c_boot - c_boot_neg)
+                boot_Peven[b_idx] = pe_b
+                boot_Podd[b_idx] = po_b
+
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    p_zero_b = c_boot[idx_zero] if c_boot[idx_zero] > 0 else np.nan
+                    arg_u_b = denom_jacob * (c_boot / p_zero_b)
+                    u_b = np.where(arg_u_b > 0, -np.log(arg_u_b), np.nan)
+                boot_Ueff[b_idx] = u_b
+
+                u_b_neg = u_b[::-1]
+                u_odd_b = 0.5 * (u_b - u_b_neg)
+                u_even_b = 0.5 * (u_b + u_b_neg)
+                k1_b, k2_b = estimate_k1_k2(pe_b, po_b)
+                boot_k1_arr[b_idx] = k1_b
+                boot_k2_arr[b_idx] = k2_b
+
+                f_mask_b = (bin_centers > 0.05) & (bin_centers <= 0.85) & (~np.isnan(u_odd_b)) & (~np.isnan(u_even_b))
+                if np.sum(f_mask_b) >= 2:
+                    c_fb = bin_centers[f_mask_b]
+                    boot_k1_arr[b_idx] = - np.sum(u_odd_b[f_mask_b] * c_fb) / np.sum(c_fb**2)
+                    boot_k2_arr[b_idx] = np.sum(u_even_b[f_mask_b] * (c_fb**2)) / (2.0 * np.sum(c_fb**4))
+                else:
+                    boot_k1_arr[b_idx] = np.nan
+                    boot_k2_arr[b_idx] = np.nan
 
             ci_low_p = np.percentile(boot_P, 2.5, axis=0)
             ci_high_p = np.percentile(boot_P, 97.5, axis=0)
@@ -1600,10 +1704,21 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
 
             ci_low_podd = np.percentile(boot_Podd, 2.5, axis=0)
             ci_high_podd = np.percentile(boot_Podd, 97.5, axis=0)
+
+            ci_low_ueff = np.nanpercentile(boot_Ueff, 2.5, axis=0)
+            ci_high_ueff = np.nanpercentile(boot_Ueff, 97.5, axis=0)
+
+            k1_ci_low = float(np.nanpercentile(boot_k1_arr, 2.5))
+            k1_ci_high = float(np.nanpercentile(boot_k1_arr, 97.5))
+            k2_ci_low = float(np.nanpercentile(boot_k2_arr, 2.5))
+            k2_ci_high = float(np.nanpercentile(boot_k2_arr, 97.5))
         else:
             ci_low_p, ci_high_p = P_obs, P_obs
             ci_low_peven, ci_high_peven = P_even_obs, P_even_obs
             ci_low_podd, ci_high_podd = P_odd_obs, P_odd_obs
+            ci_low_ueff, ci_high_ueff = U_eff_obs, U_eff_obs
+            k1_ci_low, k1_ci_high = k1_direct, k1_direct
+            k2_ci_low, k2_ci_high = k2_direct, k2_direct
 
         boot_hist_dict[bname] = {
             'P_obs': P_obs,
@@ -1615,6 +1730,18 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             'P_odd_obs': P_odd_obs,
             'ci_low_podd': ci_low_podd,
             'ci_high_podd': ci_high_podd,
+            'U_eff_obs': U_eff_obs,
+            'ci_low_ueff': ci_low_ueff,
+            'ci_high_ueff': ci_high_ueff,
+            'U_odd_obs': U_odd_obs,
+            'U_even_obs': U_even_obs,
+            'kappa_1_fit': k1_direct,
+            'kappa_2_fit': k2_direct,
+            'sigma_c_fit': sig_c_direct,
+            'k1_ci_low': k1_ci_low,
+            'k1_ci_high': k1_ci_high,
+            'k2_ci_low': k2_ci_low,
+            'k2_ci_high': k2_ci_high,
             'n_cargos': n_cargos,
             'n_points': len(cos_vals_all),
             'mean_val': float(np.mean(cos_vals_all)),
@@ -1638,7 +1765,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         phi_mean_val = float(df_rc_xi[df_rc_xi['bead_name'] == bname]['Phi_mean'].values[0]) if not df_rc_xi.empty else np.nan
         ci_mean_val = res['mean_val']
 
-        # 代表値ヒストグラム（ステップ線＋マーカー）
+        # 実測ヒストグラム（ステップ線＋マーカー）
         ax.plot(bin_centers, res['P_obs'], color=color, linewidth=2.4, marker=b_item['marker'], markersize=5,
                 label=rf"Observed ($N = {res['n_points']}$, $N_{{\mathrm{{cargo}}}} = {res['n_cargos']}$)", zorder=3)
         # クラスターブートストラップ 95% 信頼区間帯
@@ -1657,7 +1784,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         if idx % 3 == 0:
             ax.set_ylabel(r"Probability Density $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$", fontsize=14)
         ax.grid(True, linestyle=':', alpha=0.6)
-        ax.legend(loc='upper left', fontsize=9.2, framealpha=0.92)
+        ax.legend(loc='upper left', fontsize=9.5, framealpha=0.92)
 
     fig.suptitle(r'Probability Density of Directional Coupling $P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$ (Cluster Bootstrap 95% CI)',
                  fontsize=17, y=0.99)
@@ -1718,6 +1845,25 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
 
         res = boot_hist_dict[bname]
 
+        ax.axhline(0.0, color='#888888', linestyle='-', linewidth=0.9, alpha=0.7)
+        ax.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2)
+
+        # 実測 P, 偶関数成分 P_even, 奇関数成分 P_odd のヒストグラム点・線・信頼区間帯をプロット
+        # 1. 全体 P(c)
+        ax.plot(bin_centers, res['P_obs'], color='#555555', linestyle=':', linewidth=1.6,
+                marker='.', markersize=6.0, label=r"$P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$ (Observed)", zorder=4)
+        ax.fill_between(bin_centers, res['ci_low_p'], res['ci_high_p'], color='#888888', alpha=0.15, zorder=1)
+
+        # 2. 偶関数成分 P_even(c)
+        ax.plot(bin_centers, res['P_even_obs'], color='#1b7837', linestyle='-', linewidth=2.0,
+                marker='o', markersize=5.5, label=r"$P_{\mathrm{even}} = \frac{P(x) + P(-x)}{2}$", zorder=5)
+        ax.fill_between(bin_centers, res['ci_low_peven'], res['ci_high_peven'], color='#1b7837', alpha=0.20, zorder=2)
+
+        # 3. 奇関数成分 P_odd(c)
+        ax.plot(bin_centers, res['P_odd_obs'], color='#d95f02', linestyle='--', linewidth=2.0,
+                marker='s', markersize=5.0, label=r"$P_{\mathrm{odd}} = \frac{P(x) - P(-x)}{2}$", zorder=5)
+        ax.fill_between(bin_centers, res['ci_low_podd'], res['ci_high_podd'], color='#d95f02', alpha=0.20, zorder=2)
+
         for bc, px, pe, po, px_l, px_h, pe_l, pe_h, po_l, po_h in zip(
                 bin_centers, res['P_obs'], res['P_even_obs'], res['P_odd_obs'],
                 res['ci_low_p'], res['ci_high_p'],
@@ -1736,25 +1882,10 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
                 'P_odd': po,
                 'P_odd_ci_low': po_l,
                 'P_odd_ci_high': po_h,
+                'kappa_1_fit': res.get('kappa_1_fit', np.nan),
+                'sigma_c_fit': res.get('sigma_c_fit', np.nan),
+                'N_fit': res.get('N_fit', np.nan),
             })
-
-        ax.axhline(0.0, color='#888888', linestyle='-', linewidth=0.9, alpha=0.7)
-        ax.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2)
-
-        # 実測 P, 偶関数成分 P_even, 奇関数成分 P_odd をプロット（信頼区間帯付き）
-        ax.plot(bin_centers, res['P_obs'], color='#444444', linestyle=':', linewidth=2.0,
-                label=r"$P(\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})$ (Observed)", zorder=4)
-        ax.fill_between(bin_centers, res['ci_low_p'], res['ci_high_p'], color='#888888', alpha=0.15, zorder=1)
-
-        ax.plot(bin_centers, res['P_even_obs'], color='#1b7837', linestyle='-', linewidth=2.4,
-                marker='o', markersize=4.5,
-                label=r"$P_{\mathrm{even}} = \frac{P(x) + P(-x)}{2}$", zorder=5)
-        ax.fill_between(bin_centers, res['ci_low_peven'], res['ci_high_peven'], color='#1b7837', alpha=0.20, zorder=2)
-
-        ax.plot(bin_centers, res['P_odd_obs'], color='#d95f02', linestyle='--', linewidth=2.4,
-                marker='s', markersize=4.5,
-                label=r"$P_{\mathrm{odd}} = \frac{P(x) - P(-x)}{2}$", zorder=5)
-        ax.fill_between(bin_centers, res['ci_low_podd'], res['ci_high_podd'], color='#d95f02', alpha=0.20, zorder=2)
 
         ax.set_xlim(-1.05, 1.05)
         ax.set_ylim(-2.0, 3.0)
@@ -1820,6 +1951,279 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     save_figure(fig, "cos_i_peven_podd_comparison_1panel", OUT_DIRS)
     plt.close(fig)
+
+    # -------------------------------------------------------------
+    # 8c. フィッティングパラメータ \kappa_1 vs R_c / \xi および \sigma_c vs R_c / \xi の個別グラフ
+    # -------------------------------------------------------------
+    fit_param_records = []
+    for b_item in BEADS_INFO:
+        bname = b_item['name']
+        if bname not in boot_hist_dict:
+            continue
+        res = boot_hist_dict[bname]
+        row_rc = df_rc_xi[df_rc_xi['bead_name'] == bname]
+        rc_xi_m = float(row_rc['rc_over_xi_mean'].values[0]) if not row_rc.empty else np.nan
+        rc_xi_s = float(row_rc['rc_over_xi_sem'].values[0]) if not row_rc.empty else 0.0
+
+        fit_param_records.append({
+            'bead_name': bname,
+            'label': b_item['label'],
+            'color': b_item['color'],
+            'marker': b_item['marker'],
+            'rc_over_xi_mean': rc_xi_m,
+            'rc_over_xi_sem': rc_xi_s,
+            'kappa_1': res.get('kappa_1_fit', np.nan),
+            'kappa_2': res.get('kappa_2_fit', np.nan),
+            'sigma_c': res.get('sigma_c_fit', np.nan),
+            'k1_ci_low': res.get('k1_ci_low', np.nan),
+            'k1_ci_high': res.get('k1_ci_high', np.nan),
+            'k2_ci_low': res.get('k2_ci_low', np.nan),
+            'k2_ci_high': res.get('k2_ci_high', np.nan),
+        })
+
+    df_fit_params = pd.DataFrame(fit_param_records)
+    if not df_fit_params.empty:
+        df_fit_params = df_fit_params.sort_values('rc_over_xi_mean').reset_index(drop=True)
+
+        # ---------------------------------------------------------
+        # グラフ 1: \kappa_1 vs R_c / \xi
+        # ---------------------------------------------------------
+        fig, ax = plt.subplots(figsize=(8.0, 6.0))
+        ax.axvline(1.0, color='#666666', linestyle='--', linewidth=1.5, zorder=1,
+                   label=r'Crossover $R_c / \xi = 1$')
+
+        # トレンド線
+        ax.plot(df_fit_params['rc_over_xi_mean'], df_fit_params['kappa_1'],
+                color='#333333', linestyle='-', linewidth=2.0, alpha=0.7, zorder=2)
+
+        # 個別ビーズマーカー
+        for _, r_p in df_fit_params.iterrows():
+            ax.scatter(r_p['rc_over_xi_mean'], r_p['kappa_1'],
+                       color=r_p['color'], marker=r_p['marker'], s=100, edgecolors='black',
+                       linewidths=1.2, zorder=5, label=r_p['label'])
+
+        ax.set_xscale('log')
+        ax.set_xlim(0.04, 3.5)
+        ax.set_ylim(-0.05, 1.65)
+        ax.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]", fontsize=14, labelpad=8)
+        ax.set_ylabel(r"Polar Coupling Parameter $\kappa_1$ [-]", fontsize=14, labelpad=8)
+        ax.tick_params(axis='both', labelsize=12)
+        ax.grid(True, which='both', linestyle=':', color='#dddddd', alpha=0.8)
+        ax.legend(loc='upper right', fontsize=11.0, framealpha=0.92)
+        #ax.set_title(r"Polar Coupling Parameter $\kappa_1$ vs $R_c / \xi$",
+        #             fontsize=15, fontweight='bold', pad=12)
+
+        fig.tight_layout()
+        save_figure(fig, "cos_i_fitted_param_kappa1_vs_rc_over_xi", OUT_DIRS)
+        plt.close(fig)
+
+        # ---------------------------------------------------------
+        # グラフ 2: \sigma_c vs R_c / \xi
+        # ---------------------------------------------------------
+        fig, ax = plt.subplots(figsize=(8.0, 6.2))
+        ax.axvline(1.0, color='#666666', linestyle='--', linewidth=1.5, zorder=1,
+                   label=r'Crossover $R_c / \xi = 1$')
+
+        # 有限値のプロットとトレンド線
+        finite_mask = df_fit_params['sigma_c'] < 10.0
+        df_finite = df_fit_params[finite_mask]
+        if not df_finite.empty:
+            ax.plot(df_finite['rc_over_xi_mean'], df_finite['sigma_c'],
+                    color='#333333', linestyle='--', linewidth=2.0, alpha=0.7, zorder=2)
+
+        # 軸上限（有限値の可視範囲）
+        y_max = 2.6
+        ax.set_ylim(0.0, y_max)
+
+        for _, r_p in df_fit_params.iterrows():
+            s_val = r_p['sigma_c']
+            if s_val >= 10.0:
+                # 枠外へ外れる表現: 枠の上端線上に上向き三角マーカーを配置し、上向き矢印と \sigma_c -> \infty を描画
+                ax.scatter(r_p['rc_over_xi_mean'], y_max,
+                           color=r_p['color'], marker='^', s=120, edgecolors='black',
+                           linewidths=1.3, zorder=6, clip_on=False,
+                           label=f"{r_p['label']} ($\sigma_c \\to \\infty$)")
+                # 上向きの破線または矢印＋テキスト
+                ax.annotate(r"$\sigma_c \to \infty$" + f"\n({r_p['label']})",
+                            xy=(r_p['rc_over_xi_mean'], y_max),
+                            xytext=(0, 14), textcoords="offset points",
+                            ha='center', va='bottom', fontsize=10.5, color=r_p['color'],
+                            fontweight='bold',
+                            arrowprops=dict(arrowstyle="->", color=r_p['color'], lw=1.5))
+            else:
+                ax.scatter(r_p['rc_over_xi_mean'], s_val,
+                           color=r_p['color'], marker=r_p['marker'], s=100, edgecolors='black',
+                           linewidths=1.2, zorder=5, label=r_p['label'])
+
+        ax.set_xscale('log')
+        ax.set_xlim(0.04, 3.5)
+        ax.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]", fontsize=14, labelpad=8)
+        ax.set_ylabel(r"Gaussian Width Parameter $\sigma_c$ [-]", fontsize=14, labelpad=8)
+        ax.tick_params(axis='both', labelsize=12)
+        ax.grid(True, which='both', linestyle=':', color='#dddddd', alpha=0.8)
+        ax.legend(loc='lower left', fontsize=10.0, framealpha=0.92)
+        #ax.set_title(r"Gaussian Width Parameter $\sigma_c$ vs $R_c / \xi$",
+        #             fontsize=15, fontweight='bold', pad=28)
+
+        fig.tight_layout()
+        save_figure(fig, "cos_i_fitted_param_sigmac_vs_rc_over_xi", OUT_DIRS)
+        plt.close(fig)
+
+        # ---------------------------------------------------------
+        # グラフ 3: 比率 K_1 / K_2 = \kappa_1 / \kappa_2 vs R_c / \xi
+        # (ポテンシャルの偶奇分解 U_odd / U_even より直接読み取った極性結合 K_1 vs ネマティック結合 K_2 の優位性比較)
+        # ---------------------------------------------------------
+        df_fit_params['k1_over_k2'] = df_fit_params['kappa_1'] / df_fit_params['kappa_2']
+
+        fig, ax = plt.subplots(figsize=(8.0, 6.2))
+        ax.axvline(1.0, color='#666666', linestyle='--', linewidth=1.5, zorder=1,
+                   label=r'Crossover $R_c / \xi = 1$')
+
+        # 基準線 K_1 / K_2 = 1 (極性とネマティックの強さが拮抗)
+        ax.axhline(1.0, color='darkred', linestyle=':', linewidth=1.5, zorder=1,
+                   label=r'Equipartition $K_1 / K_2 = 1$')
+
+        # 有限値のトレンド線
+        finite_mask_ratio = (df_fit_params['kappa_2'] > 0.05) & (~np.isnan(df_fit_params['k1_over_k2']))
+        df_finite_ratio = df_fit_params[finite_mask_ratio]
+        if not df_finite_ratio.empty:
+            ax.plot(df_finite_ratio['rc_over_xi_mean'], df_finite_ratio['k1_over_k2'],
+                    color='#333333', linestyle='-', linewidth=2.0, alpha=0.7, zorder=2)
+
+        # 有限値の最大値に基づくプロット上限設定
+        y_max_ratio = 7.0
+        ax.set_ylim(0.0, y_max_ratio)
+
+        for _, r_p in df_fit_params.iterrows():
+            k2_val = r_p['kappa_2']
+            ratio_val = r_p['k1_over_k2']
+            if k2_val <= 0.05 or np.isnan(ratio_val):
+                # \kappa_2 \approx 0 のため K_1 / K_2 -> \infty (完全な極性支配)
+                ax.scatter(r_p['rc_over_xi_mean'], y_max_ratio,
+                           color=r_p['color'], marker='^', s=120, edgecolors='black',
+                           linewidths=1.3, zorder=6, clip_on=False,
+                           label=f"{r_p['label']} ($K_1/K_2 \\to \\infty$)")
+                ax.annotate(r"$K_1 / K_2 \to \infty$" + f"\n({r_p['label']})",
+                            xy=(r_p['rc_over_xi_mean'], y_max_ratio),
+                            xytext=(0, 14), textcoords="offset points",
+                            ha='center', va='bottom', fontsize=10.5, color=r_p['color'],
+                            fontweight='bold',
+                            arrowprops=dict(arrowstyle="->", color=r_p['color'], lw=1.5))
+            else:
+                ax.scatter(r_p['rc_over_xi_mean'], ratio_val,
+                           color=r_p['color'], marker=r_p['marker'], s=100, edgecolors='black',
+                           linewidths=1.2, zorder=5, label=f"{r_p['label']} ({ratio_val:.2f})")
+
+        ax.set_xscale('log')
+        ax.set_xlim(0.04, 3.5)
+        ax.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]", fontsize=14, labelpad=8)
+        ax.set_ylabel(r"Coupling Ratio $K_1 / K_2 = \kappa_1 / \kappa_2$ [-]", fontsize=14, labelpad=8)
+        ax.tick_params(axis='both', labelsize=12)
+        ax.grid(True, which='both', linestyle=':', color='#dddddd', alpha=0.8)
+
+        # 領域のテキスト注記
+        ax.text(0.05, 0.2, r"Nematic Dominant ($K_2 > K_1$)", fontsize=11, color='gray', style='italic')
+        ax.text(0.05, 1.2, r"Polar Dominant ($K_1 > K_2$)", fontsize=11, color='gray', style='italic')
+
+        #ax.legend(loc='lower left', fontsize=10.0, framealpha=0.92)
+
+        fig.tight_layout()
+        save_figure(fig, "cos_i_fitted_param_k1_over_k2_vs_rc_over_xi", OUT_DIRS)
+        plt.close(fig)
+
+        # ---------------------------------------------------------
+        # 8d. ヤコビアン補正ボルツマン反転による有効配向ポテンシャル \tilde{U}_eff(c) の推定
+        #     \tilde{U}_eff(c) = - ln[ \sqrt{1 - c^2} * P(c) / P(0) ]
+        #     理論モデル曲線: \tilde{U}_theo(c) = - \kappa_1 * c + c^2 / (2 \sigma_c^2)
+        # ---------------------------------------------------------
+        # (1) 6パネル版: 各粒子サイズごとの有効ポテンシャル実測値 (95% CI) と理論フィッティング曲線
+        fig, axes = plt.subplots(2, 3, figsize=(16.0, 10.0), sharex=True, sharey=True)
+        axes_flat = axes.flatten()
+
+        c_fine_u = np.linspace(-0.95, 0.95, 400)
+
+        for idx, b_item in enumerate(BEADS_INFO):
+            ax = axes_flat[idx]
+            bname = b_item['name']
+            color = b_item['color']
+            lbl = b_item['label']
+
+            if bname not in boot_hist_dict:
+                ax.text(0.5, 0.5, "No Data", ha='center', va='center', transform=ax.transAxes)
+                continue
+
+            res = boot_hist_dict[bname]
+            u_obs = res['U_eff_obs']
+            ci_low_u = res['ci_low_ueff']
+            ci_high_u = res['ci_high_ueff']
+
+            ax.axhline(0.0, color='#888888', linestyle='-', linewidth=0.9, alpha=0.7)
+            ax.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2)
+
+            # 実測プロット (ビン点 + 95% CI帯)
+            valid_mask = ~np.isnan(u_obs)
+            ax.plot(bin_centers[valid_mask], u_obs[valid_mask], color=color, linewidth=2.2,
+                    marker=b_item['marker'], markersize=6.0,
+                    label=rf"Inverted $\tilde{{U}}_{{\mathrm{{eff}}}}(c)$ ($N={res['n_cargos']}$)", zorder=4)
+            ax.fill_between(bin_centers[valid_mask], ci_low_u[valid_mask], ci_high_u[valid_mask],
+                            color=color, alpha=0.22, label=r"95% CI (Cluster Bootstrap)", zorder=2)
+
+            # 理論ポテンシャル（直接読み取りパラメータに基づく）:
+            # \tilde{U}_theo(c) = - \kappa_1 c + 2 \kappa_2 c^2
+            k1_fit = res.get('kappa_1_fit', np.nan)
+            k2_fit = res.get('kappa_2_fit', np.nan)
+            sig_fit = res.get('sigma_c_fit', np.nan)
+            if not np.isnan(k1_fit) and not np.isnan(k2_fit):
+                u_theo = - k1_fit * c_fine_u + 2.0 * k2_fit * (c_fine_u**2)
+                ax.plot(c_fine_u, u_theo, color='#222222', linestyle='--', linewidth=2.0, alpha=0.9,
+                        label=rf"Direct read: $-\kappa_1 c + 2\kappa_2 c^2$ ($\kappa_1={k1_fit:.2f}, \kappa_2={k2_fit:.2f}$)", zorder=5)
+
+            ax.set_xlim(-1.02, 1.02)
+            ax.set_ylim(-2.5, 3.5)
+            ax.set_title(rf"{lbl}", fontsize=14, fontweight='bold')
+            ax.set_xlabel(r"Directional Coupling $c = \mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=13)
+            if idx % 3 == 0:
+                ax.set_ylabel(r"Effective Potential $\tilde{U}_{\mathrm{eff}}(c)$ [$\zeta_r D_r^{\mathrm{eff}}$]", fontsize=13)
+            ax.grid(True, linestyle=':', alpha=0.6)
+            ax.legend(loc='upper center', fontsize=9.2, framealpha=0.92)
+
+        fig.suptitle(r'Effective Orientation Potential $\tilde{U}_{\mathrm{eff}}(c) = -\ln\left[\sqrt{1-c^2} \frac{P(c)}{P(0)}\right]$ (Jacobian-Corrected Boltzmann Inversion)',
+                     fontsize=16, y=0.99)
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        save_figure(fig, "cos_i_effective_potential_6panels", OUT_DIRS)
+        plt.close(fig)
+
+        # (2) 全粒子統合 1パネル版: 有効ポテンシャルの比較
+        fig, ax = plt.subplots(figsize=(10.0, 7.0))
+        ax.axhline(0.0, color='#888888', linestyle='-', linewidth=0.9, alpha=0.7)
+        ax.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2)
+
+        for idx, b_item in enumerate(BEADS_INFO):
+            bname = b_item['name']
+            if bname not in boot_hist_dict:
+                continue
+            res = boot_hist_dict[bname]
+            u_obs = res['U_eff_obs']
+            ci_low_u = res['ci_low_ueff']
+            ci_high_u = res['ci_high_ueff']
+
+            valid_mask = ~np.isnan(u_obs)
+            ax.plot(bin_centers[valid_mask], u_obs[valid_mask], color=b_item['color'], linewidth=2.2,
+                    marker=b_item['marker'], markersize=5.5, label=rf"{b_item['label']}", zorder=3 + idx)
+            ax.fill_between(bin_centers[valid_mask], ci_low_u[valid_mask], ci_high_u[valid_mask],
+                            color=b_item['color'], alpha=0.12, zorder=2)
+
+        ax.set_xlim(-1.02, 1.02)
+        ax.set_ylim(-2.5, 3.5)
+        ax.set_xlabel(r"Directional Coupling $c = \mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=14, labelpad=8)
+        ax.set_ylabel(r"Effective Potential $\tilde{U}_{\mathrm{eff}}(c)$ [$\zeta_r D_r^{\mathrm{eff}}$]", fontsize=14, labelpad=8)
+        ax.set_title(r"Effective Orientation Potential $\tilde{U}_{\mathrm{eff}}(c)$ across Cargo Sizes",
+                     fontsize=15, fontweight='bold', pad=12)
+        ax.grid(True, linestyle=':', alpha=0.7)
+        ax.legend(loc='upper center', fontsize=10.5, framealpha=0.92)
+        fig.tight_layout()
+        save_figure(fig, "cos_i_effective_potential_1panel", OUT_DIRS)
+        plt.close(fig)
 
     # -------------------------------------------------------------
     # 9. 貨物粒子単位の歪度 \gamma_{1, i} およびその平均 <\gamma_1> の算出と可視化
