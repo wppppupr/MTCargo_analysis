@@ -758,6 +758,89 @@ def main():
     save_fig(fig, "cargo_edge_speed_ratio_vs_diameter")
     plt.close(fig)
 
+    # =========================================================================
+    # 5. 【有効ポテンシャル】無次元化有効ポテンシャル \Phi_eff(r/\xi) = -ln(|u|(r/\xi) / u_inf)
+    #    アクティブマター統計物理における有効トラップポテンシャル（引力井戸）
+    # =========================================================================
+    # Figure 10: \Phi_eff(r/\xi) 全ビーズ重ね描き図
+    fig, ax = plt.subplots(figsize=(8.0, 5.5))
+    for b in BEADS_INFO:
+        b_name = b['name']
+        if b_name not in scaled_grouped_profiles_r:
+            continue
+        p = scaled_grouped_profiles_r[b_name]
+        lbl = f"{b['label']} (N={p['n_exps']})"
+        # phi_eff = -ln(|u|/u_inf)
+        phi_mean = -np.log(np.maximum(p['mean'], 1e-4))
+        # 誤差伝搬: delta(phi) = delta(u) / u
+        phi_sem = p['sem'] / np.maximum(p['mean'], 1e-4)
+        
+        ax.plot(scaled_r_grid, phi_mean, color=b['color'], marker=b['marker'],
+                markevery=max(1, len(scaled_r_grid)//14), markersize=6.0, label=lbl, lw=2.2)
+        ax.fill_between(scaled_r_grid, phi_mean - phi_sem, phi_mean + phi_sem,
+                        color=b['color'], alpha=0.15)
+        
+    ax.axhline(0.0, color='gray', linestyle=':', lw=1.5, label=r'Bulk reference $\Phi_{\mathrm{eff}} = 0$')
+    ax.axvline(1.0, color='black', linestyle='--', alpha=0.5, lw=1.2, label=r'$r = \xi$')
+    ax.axvspan(2.5, max_scaled_r, color='lightgray', alpha=0.25, label=r'Bulk plateau ($r \geq 2.5\xi$)')
+    ax.set_xlabel(r'Scaled distance from cargo edge $r \,/\, \xi \equiv (\mathrm{dist} - R_c) \,/\, \xi$ [-]')
+    ax.set_ylabel(r'Effective Potential $\Phi_{\mathrm{eff}}(r/\xi) \equiv -\ln(|\mathbf{u}| \,/\, u_{\infty})$ [$k_B T_{\mathrm{eff}}$]')
+    ax.set_title(r'Dimensionless Effective Potential around Cargo $\Phi_{\mathrm{eff}}(r/\xi)$')
+    ax.set_xlim(0, max_scaled_r)
+    ax.set_ylim(-0.6, 0.7)
+    ax.legend(loc='upper right', frameon=True, framealpha=0.9, fontsize=9.5)
+    ax.grid(True)
+    save_fig(fig, "cargo_effective_potential_phi_all_beads")
+    plt.close(fig)
+
+    # Figure 11: \Phi_eff(r/\xi) 6パネル個別図
+    fig, axes = plt.subplots(2, 3, figsize=(14, 8.5), sharex=True, sharey=True)
+    axes = axes.flatten()
+    for idx, b in enumerate(BEADS_INFO):
+        ax = axes[idx]
+        b_name = b['name']
+        if b_name not in scaled_grouped_profiles_r:
+            ax.set_visible(False)
+            continue
+        p = scaled_grouped_profiles_r[b_name]
+        
+        # 個別実験のポテンシャル
+        for exp_curve in p['raw']:
+            exp_phi = -np.log(np.maximum(exp_curve, 1e-4))
+            ax.plot(scaled_r_grid, exp_phi, color=b['color'], alpha=0.35, lw=1.2)
+            
+        phi_mean = -np.log(np.maximum(p['mean'], 1e-4))
+        phi_sem = p['sem'] / np.maximum(p['mean'], 1e-4)
+        
+        ax.plot(scaled_r_grid, phi_mean, color=b['color'], marker=b['marker'],
+                markevery=max(1, len(scaled_r_grid)//14), markersize=6.0, lw=2.5, label='Mean ± SEM')
+        ax.fill_between(scaled_r_grid, phi_mean - phi_sem, phi_mean + phi_sem,
+                        color=b['color'], alpha=0.25)
+        ax.axhline(0.0, color='gray', linestyle=':', lw=1.2, label=r'$\Phi_{\infty} = 0$')
+        ax.axvline(1.0, color='black', linestyle='--', alpha=0.5, lw=1.2, label=r'$r = \xi$')
+        ax.axvspan(2.5, max_scaled_r, color='lightgray', alpha=0.2, label=r'Plateau ($r \geq 2.5\xi$)')
+        
+        depth = phi_mean[0]
+        ax.text(0.42, 0.78, f"Well depth: $\\Delta\\Phi = {depth:+.2f}$\n(Trap attraction)",
+                transform=ax.transAxes, fontsize=10.0,
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='azure', alpha=0.9, edgecolor='steelblue'))
+        
+        ax.set_title(f"{b['label']} (N={p['n_exps']} exps)", fontsize=13, fontweight='bold')
+        ax.grid(True)
+        if idx in [0, 3]:
+            ax.set_ylabel(r'$\Phi_{\mathrm{eff}}(r/\xi) \equiv -\ln(|\mathbf{u}|/u_{\infty})$')
+        if idx >= 3:
+            ax.set_xlabel(r'Scaled distance $r \,/\, \xi$ [-]')
+        ax.set_xlim(0, max_scaled_r)
+        ax.set_ylim(-0.6, 0.7)
+        if idx == 0:
+            ax.legend(loc='lower left', fontsize=9.0)
+            
+    plt.suptitle(r'Dimensionless Effective Potential $\Phi_{\mathrm{eff}}(r/\xi) \equiv -\ln(|\mathbf{u}|(r/\xi)/u_{\infty})$ across Cargo Sizes', fontsize=15, y=0.98)
+    plt.tight_layout()
+    save_fig(fig, "cargo_effective_potential_phi_6panels")
+    plt.close(fig)
+
     # Summary CSV の出力
     summary_rows = []
     for b in BEADS_INFO:
@@ -766,6 +849,7 @@ def main():
             p = grouped_profiles_r[b_name]
             p_sc = scaled_grouped_profiles_r.get(b_name, None)
             v_35xi = p_sc['mean'][-1] if p_sc is not None else np.nan
+            phi_depth = -np.log(max(p['mean_norm'][0], 1e-4))
             summary_rows.append({
                 'bead_name': b_name,
                 'diameter_um': b['diameter_um'],
@@ -775,6 +859,7 @@ def main():
                 'edge_norm_sem': p['sem_norm'][0],
                 'edge_slowdown_pct': (1.0 - p['mean_norm'][0]) * 100,
                 'norm_speed_at_3.5xi': v_35xi,
+                'effective_potential_depth_kBT': phi_depth,
             })
     df_summary = pd.DataFrame(summary_rows)
     for out_dir in OUT_DIRS:

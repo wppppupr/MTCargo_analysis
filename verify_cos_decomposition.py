@@ -1602,24 +1602,20 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         U_odd_obs = 0.5 * (U_eff_obs - U_eff_obs_neg)
         U_even_obs = 0.5 * (U_eff_obs + U_eff_obs_neg)
 
-        # 直接読み取り（最小二乗・幾何学的傾き・曲率の推定）:
-        # \kappa_1: - U_odd(c) / c (c > 0 での平均または線形回帰)
-        # \kappa_2: U_even(c) / (2 c^2) (c > 0 での平均または二次項回帰)
-        # 端点付近のノイズを避けるため |c| <= 0.85 のビンを使用
-        fit_c_mask = (bin_centers > 0.05) & (bin_centers <= 0.85) & (~np.isnan(U_odd_obs)) & (~np.isnan(U_even_obs))
-        if np.sum(fit_c_mask) >= 2:
-            c_fit = bin_centers[fit_c_mask]
-            # U_odd = - \kappa_1 * c => \kappa_1 = - sum(U_odd * c) / sum(c^2)
-            k1_direct = - np.sum(U_odd_obs[fit_c_mask] * c_fit) / np.sum(c_fit**2)
-            # U_even = 2 * \kappa_2 * c^2 => \kappa_2 = sum(U_even * c^2) / (2 * sum(c^4))
-            k2_direct = np.sum(U_even_obs[fit_c_mask] * (c_fit**2)) / (2.0 * np.sum(c_fit**4))
-        else:
-            k1_direct, k2_direct = np.nan, np.nan
         # -------------------------------------------------------------
         # 方式2: P_odd / P_even 比率法による極性結合 \kappa_1 と ネマティック結合 \kappa_2 の安定推定
         # 1. P_odd(c) / P_even(c) = tanh(\kappa_1 c)  (ヤコビアン・ガウス減衰・規格化定数がすべて相殺)
         # 2. ln[ sqrt(1 - c^2) * P_even(c) / cosh(\kappa_1 c) ] = const - 2 * \kappa_2 * c^2  (\kappa_2 >= 0)
         # -------------------------------------------------------------
+        dc_bin = bin_centers[1] - bin_centers[0]
+        pos_mask_c = bin_centers > 0
+        neg_mask_c = bin_centers < 0
+
+        # P(c > 0) - P(c < 0) の実測値
+        p_pos_obs = float(np.sum(P_obs[pos_mask_c]) * dc_bin)
+        p_neg_obs = float(np.sum(P_obs[neg_mask_c]) * dc_bin)
+        p_diff_obs = p_pos_obs - p_neg_obs
+
         def estimate_k1_k2(p_e, p_o):
             mask = (bin_centers > 0.05) & (bin_centers <= 0.85) & (p_e > 1e-4)
             if np.sum(mask) < 2:
@@ -1627,23 +1623,17 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             c_m = bin_centers[mask]
             ratio_m = np.clip((p_o / p_e)[mask], -0.999, 0.999)
 
-        # \sigma_c = 1 / sqrt(4 * \kappa_2) (ただし \kappa_2 <= 0 の場合は \infty)
             # 1. \kappa_1 の推定: arctanh(ratio) = \kappa_1 * c
-            # arctanh(P_odd / P_even) の傾きから直接推定 (最小二乗)
             atanh_vals = np.arctanh(ratio_m)
             k1_est = float(np.sum(atanh_vals * c_m) / np.sum(c_m**2))
             k1_est = max(0.0, k1_est)
 
             # 2. \kappa_2 の推定:
-            # y = ln[ denom_jacob * P_even / cosh(\kappa_1 c) ] = const - 2 * \kappa_2 * c^2
             y_vals = np.log(np.clip(denom_jacob[mask] * p_e[mask] / np.cosh(k1_est * c_m), 1e-6, None))
-            # 重み付き/非負制約付き回帰: y = c0 - 2 * \kappa_2 * c^2
             x_sq = c_m**2
-            # 中心化による傾き -2 * \kappa_2 の直接計算
             x_dev = x_sq - np.mean(x_sq)
             y_dev = y_vals - np.mean(y_vals)
             slope = np.sum(x_dev * y_dev) / np.sum(x_dev**2) if np.sum(x_dev**2) > 0 else 0.0
-            # slope = - 2 * \kappa_2 => \kappa_2 = - slope / 2 (負の曲率は物理的に閉じ込めなし \kappa_2 = 0)
             k2_est = max(0.0, float(-0.5 * slope))
 
             return k1_est, k2_est
@@ -1654,12 +1644,12 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         if not np.isnan(k2_direct) and k2_direct > 1e-4:
             sig_c_direct = 1.0 / np.sqrt(4.0 * k2_direct)
         else:
-            sig_c_direct = 20.0 # 実質的に無限大
             sig_c_direct = 20.0 # 実質的に無限大 (減衰なし)
 
         if n_cargos >= 2:
             boot_k1_arr = np.zeros(B_BOOT)
             boot_k2_arr = np.zeros(B_BOOT)
+            boot_pdiff_arr = np.zeros(B_BOOT)
 
             for b_idx in range(B_BOOT):
                 sel_indices = rng_boot.choice(n_cargos, size=n_cargos, replace=True)
@@ -1667,12 +1657,13 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
                 c_boot, _ = np.histogram(sample_pts, bins=bins_cos, density=True)
                 c_boot_neg = c_boot[::-1]
                 boot_P[b_idx] = c_boot
-                boot_Peven[b_idx] = 0.5 * (c_boot + c_boot_neg)
-                boot_Podd[b_idx] = 0.5 * (c_boot - c_boot_neg)
                 pe_b = 0.5 * (c_boot + c_boot_neg)
                 po_b = 0.5 * (c_boot - c_boot_neg)
                 boot_Peven[b_idx] = pe_b
                 boot_Podd[b_idx] = po_b
+
+                # P(c > 0) - P(c < 0)
+                boot_pdiff_arr[b_idx] = (np.sum(c_boot[pos_mask_c]) - np.sum(c_boot[neg_mask_c])) * dc_bin
 
                 with np.errstate(divide='ignore', invalid='ignore'):
                     p_zero_b = c_boot[idx_zero] if c_boot[idx_zero] > 0 else np.nan
@@ -1680,21 +1671,9 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
                     u_b = np.where(arg_u_b > 0, -np.log(arg_u_b), np.nan)
                 boot_Ueff[b_idx] = u_b
 
-                u_b_neg = u_b[::-1]
-                u_odd_b = 0.5 * (u_b - u_b_neg)
-                u_even_b = 0.5 * (u_b + u_b_neg)
                 k1_b, k2_b = estimate_k1_k2(pe_b, po_b)
                 boot_k1_arr[b_idx] = k1_b
                 boot_k2_arr[b_idx] = k2_b
-
-                f_mask_b = (bin_centers > 0.05) & (bin_centers <= 0.85) & (~np.isnan(u_odd_b)) & (~np.isnan(u_even_b))
-                if np.sum(f_mask_b) >= 2:
-                    c_fb = bin_centers[f_mask_b]
-                    boot_k1_arr[b_idx] = - np.sum(u_odd_b[f_mask_b] * c_fb) / np.sum(c_fb**2)
-                    boot_k2_arr[b_idx] = np.sum(u_even_b[f_mask_b] * (c_fb**2)) / (2.0 * np.sum(c_fb**4))
-                else:
-                    boot_k1_arr[b_idx] = np.nan
-                    boot_k2_arr[b_idx] = np.nan
 
             ci_low_p = np.percentile(boot_P, 2.5, axis=0)
             ci_high_p = np.percentile(boot_P, 97.5, axis=0)
@@ -1712,6 +1691,9 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             k1_ci_high = float(np.nanpercentile(boot_k1_arr, 97.5))
             k2_ci_low = float(np.nanpercentile(boot_k2_arr, 2.5))
             k2_ci_high = float(np.nanpercentile(boot_k2_arr, 97.5))
+
+            pdiff_ci_low = float(np.nanpercentile(boot_pdiff_arr, 2.5))
+            pdiff_ci_high = float(np.nanpercentile(boot_pdiff_arr, 97.5))
         else:
             ci_low_p, ci_high_p = P_obs, P_obs
             ci_low_peven, ci_high_peven = P_even_obs, P_even_obs
@@ -1719,6 +1701,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             ci_low_ueff, ci_high_ueff = U_eff_obs, U_eff_obs
             k1_ci_low, k1_ci_high = k1_direct, k1_direct
             k2_ci_low, k2_ci_high = k2_direct, k2_direct
+            pdiff_ci_low, pdiff_ci_high = p_diff_obs, p_diff_obs
 
         boot_hist_dict[bname] = {
             'P_obs': P_obs,
@@ -1742,6 +1725,9 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             'k1_ci_high': k1_ci_high,
             'k2_ci_low': k2_ci_low,
             'k2_ci_high': k2_ci_high,
+            'p_diff_obs': p_diff_obs,
+            'pdiff_ci_low': pdiff_ci_low,
+            'pdiff_ci_high': pdiff_ci_high,
             'n_cargos': n_cargos,
             'n_points': len(cos_vals_all),
             'mean_val': float(np.mean(cos_vals_all)),
@@ -1979,6 +1965,9 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             'k1_ci_high': res.get('k1_ci_high', np.nan),
             'k2_ci_low': res.get('k2_ci_low', np.nan),
             'k2_ci_high': res.get('k2_ci_high', np.nan),
+            'p_diff_obs': res.get('p_diff_obs', np.nan),
+            'pdiff_ci_low': res.get('pdiff_ci_low', np.nan),
+            'pdiff_ci_high': res.get('pdiff_ci_high', np.nan),
         })
 
     df_fit_params = pd.DataFrame(fit_param_records)
@@ -2129,6 +2118,52 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
 
         fig.tight_layout()
         save_figure(fig, "cos_i_fitted_param_k1_over_k2_vs_rc_over_xi", OUT_DIRS)
+        plt.close(fig)
+
+        # ---------------------------------------------------------
+        # グラフ 4: 異方性（順行-逆行の確率差） P(c > 0) - P(c < 0) vs R_c / \xi
+        # ---------------------------------------------------------
+        fig, ax = plt.subplots(figsize=(8.0, 6.0))
+        ax.axvline(1.0, color='#666666', linestyle='--', linewidth=1.5, zorder=1,
+                   label=r'Crossover $R_c / \xi = 1$')
+        ax.axhline(0.0, color='#888888', linestyle=':', linewidth=1.2, zorder=1)
+
+        # トレンド線
+        ax.plot(df_fit_params['rc_over_xi_mean'], df_fit_params['p_diff_obs'],
+                color='#333333', linestyle='-', linewidth=2.0, alpha=0.7, zorder=2)
+
+        # クラスターブートストラップ 95% 信頼区間の縦エラーバー & 横軸 SEM エラーバー付きプロット
+        for _, r_p in df_fit_params.iterrows():
+            x_val = r_p['rc_over_xi_mean']
+            x_sem = r_p['rc_over_xi_sem']
+            xerr = [x_sem] if (not np.isnan(x_sem) and x_sem > 0) else None
+
+            y_val = r_p['p_diff_obs']
+            y_low = r_p['pdiff_ci_low']
+            y_high = r_p['pdiff_ci_high']
+            yerr = [[y_val - y_low], [y_high - y_val]] if (not np.isnan(y_low) and not np.isnan(y_high)) else None
+
+            # エラーバー（縦・横）
+            if (yerr is not None) or (xerr is not None):
+                ax.errorbar(x_val, y_val, xerr=xerr, yerr=yerr,
+                            fmt='none', ecolor=r_p['color'], elinewidth=1.6, capsize=4.0,
+                            capthick=1.2, zorder=4)
+
+            ax.scatter(x_val, y_val,
+                       color=r_p['color'], marker=r_p['marker'], s=100, edgecolors='black',
+                       linewidths=1.2, zorder=5, label=f"{r_p['label']} ({y_val:.2f})")
+
+        ax.set_xscale('log')
+        ax.set_xlim(0.04, 3.5)
+        ax.set_ylim(-0.05, 0.55)
+        ax.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]", fontsize=14, labelpad=8)
+        ax.set_ylabel(r"$P(c > 0) - P(c < 0)$ [-]", fontsize=14, labelpad=8)
+        ax.tick_params(axis='both', labelsize=12)
+        ax.grid(True, which='both', linestyle=':', color='#dddddd', alpha=0.8)
+        ax.legend(loc='upper right', fontsize=10.5, framealpha=0.92)
+
+        fig.tight_layout()
+        save_figure(fig, "cos_i_p_diff_pos_neg_vs_rc_over_xi", OUT_DIRS)
         plt.close(fig)
 
         # ---------------------------------------------------------
