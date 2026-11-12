@@ -2596,7 +2596,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             ax_a.axvspan(lam_c, 1.25, color='#7570b3', alpha=0.08, zorder=1)
             ax_a.axvline(lam_c, color='crimson', linestyle=':', linewidth=1.5, zorder=2)
 
-            ax_a.text(0.12, 0.90, "Caging Phase\n(Stable Well)", fontsize=11, color='#1b7837',
+            ax_a.text(0.12, 0.90, "Diffusive Phase\n(Stable Well)", fontsize=11, color='#1b7837',
                       fontweight='bold', ha='center', va='center')
             ax_a.text(0.75, 0.90, "Ballistic Phase\n(No Fixed Points)", fontsize=11, color='#7570b3',
                       fontweight='bold', ha='center', va='center')
@@ -2651,7 +2651,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             # 代表的な \Lambda のフロー曲線
             flow_configs = [
                 (0.0, '#2b83ba', '-', r'$\Lambda = 0.0$ (Symmetric)'),
-                (0.2, '#1b7837', '-', r'$\Lambda = 0.2 < \Lambda_c$ (Caging)'),
+                (0.2, '#1b7837', '-', r'$\Lambda = 0.2 < \Lambda_c$ (Diffusive)'),
                 (lam_c, '#fdae61', '-.', rf'$\Lambda = \Lambda_c \approx {lam_c:.3f}$ (Critical)'),
                 (0.6, '#7570b3', '--', r'$\Lambda = 0.6 > \Lambda_c$ (Ballistic)'),
             ]
@@ -2879,7 +2879,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             ax_cp3.set_ylim(-1.5, 2.5)
             ax_cp3.set_xlabel(r"Orientation State $c = \mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$ [-]", fontsize=13, labelpad=8)
             ax_cp3.set_ylabel(r"Phase Velocity $F(c; \Lambda) = \frac{1}{4\kappa_2D_r^\mathrm{eff}} \dot{c}$ [-]", fontsize=13, labelpad=8)
-            ax_cp3.set_title(r"(C) Phase Velocity: Caging vs Ballistic Escape", fontsize=14, fontweight='bold', pad=10)
+            ax_cp3.set_title(r"(C) Phase Velocity: Diffusive vs Ballistic Escape", fontsize=14, fontweight='bold', pad=10)
             ax_cp3.grid(True, linestyle=':', alpha=0.7)
             ax_cp3.legend(loc='upper left', fontsize=8.5, framealpha=0.92)
 
