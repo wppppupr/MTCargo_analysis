@@ -1917,3 +1917,92 @@ Warning: this sign-in ends between 2026-11-14 and 2026-11-17 (in 2 days at the e
 > ⚠️ Gemini認証待ちのためスキップ（ターミナルで agy -p 'hi' で事前認証すると有効化されます）
 
 
+### 🔹 Iteration 3 (18:30:25) - 状態: `success`
+* **リクエスト**: U 軸の単位：[ζ_r D_r^eff] を外し、無次元にしてください。
+* **変更スクリプト**: `verify_cos_decomposition.py`
+* **📊 生成されたプロット**:
+  - ![figure/cos_decomposition/cos_decomposition_1panel_cos_theta_i_only.png](figure/cos_decomposition/cos_decomposition_1panel_cos_theta_i_only.png)
+  - ![figure/cos_decomposition/cos_decomposition_6panels.png](figure/cos_decomposition/cos_decomposition_6panels.png)
+  - ![figure/cos_decomposition/cos_decomposition_6panels_cos_theta_i_only.png](figure/cos_decomposition/cos_decomposition_6panels_cos_theta_i_only.png)
+  <details>
+  <summary>その他の生成プロット (全 30 枚を展開)</summary>
+
+  - ![figure/cos_decomposition/cos_decomposition_6panels_normalized_xi.png](figure/cos_decomposition/cos_decomposition_6panels_normalized_xi.png)
+  - ![figure/cos_decomposition/cos_decomposition_6panels_raw.png](figure/cos_decomposition/cos_decomposition_6panels_raw.png)
+  - ![figure/cos_decomposition/cos_decomposition_master_curve_r_over_xi.png](figure/cos_decomposition/cos_decomposition_master_curve_r_over_xi.png)
+  - ![figure/cos_decomposition/cos_decomposition_raw.png](figure/cos_decomposition/cos_decomposition_raw.png)
+  - ![figure/cos_decomposition/cos_decomposition_vs_radius.png](figure/cos_decomposition/cos_decomposition_vs_radius.png)
+  - ![figure/cos_decomposition/cos_decomposition_vs_rc_over_xi.png](figure/cos_decomposition/cos_decomposition_vs_rc_over_xi.png)
+  - ![figure/cos_decomposition/cos_decomposition_vs_rc_over_xi_raw.png](figure/cos_decomposition/cos_decomposition_vs_rc_over_xi_raw.png)
+  - ![figure/cos_decomposition/cos_i_effective_potential_1panel.png](figure/cos_decomposition/cos_i_effective_potential_1panel.png)
+  - ![figure/cos_decomposition/cos_i_effective_potential_6panels.png](figure/cos_decomposition/cos_i_effective_potential_6panels.png)
+  - ![figure/cos_decomposition/cos_i_effective_potential_arctanh_fit_6panels.png](figure/cos_decomposition/cos_i_effective_potential_arctanh_fit_6panels.png)
+  - ![figure/cos_decomposition/cos_i_fifth_moment_vs_rc_over_xi.png](figure/cos_decomposition/cos_i_fifth_moment_vs_rc_over_xi.png)
+  - ![figure/cos_decomposition/cos_i_fitted_param_atanh_A_over_k2_vs_rc_over_xi.png](figure/cos_decomposition/cos_i_fitted_param_atanh_A_over_k2_vs_rc_over_xi.png)
+  - ![figure/cos_decomposition/cos_i_fitted_param_bifurcation_lambda_vs_rc_over_xi.png](figure/cos_decomposition/cos_i_fitted_param_bifurcation_lambda_vs_rc_over_xi.png)
+  - ![figure/cos_decomposition/cos_i_fitted_param_k1_over_k2_vs_rc_over_xi.png](figure/cos_decomposition/cos_i_fitted_param_k1_over_k2_vs_rc_over_xi.png)
+  - ![figure/cos_decomposition/cos_i_fitted_param_kappa1_vs_rc_over_xi.png](figure/cos_decomposition/cos_i_fitted_param_kappa1_vs_rc_over_xi.png)
+  - ![figure/cos_decomposition/cos_i_fitted_param_sigmac_vs_rc_over_xi.png](figure/cos_decomposition/cos_i_fitted_param_sigmac_vs_rc_over_xi.png)
+  - ![figure/cos_decomposition/cos_i_model_topology_comparison_truncated_vs_hybrid_3panels.png](figure/cos_decomposition/cos_i_model_topology_comparison_truncated_vs_hybrid_3panels.png)
+  - ![figure/cos_decomposition/cos_i_p_diff_pos_neg_vs_rc_over_xi.png](figure/cos_decomposition/cos_i_p_diff_pos_neg_vs_rc_over_xi.png)
+  - ![figure/cos_decomposition/cos_i_peven_podd_comparison_1panel.png](figure/cos_decomposition/cos_i_peven_podd_comparison_1panel.png)
+  - ![figure/cos_decomposition/cos_i_peven_podd_histograms_6panels.png](figure/cos_decomposition/cos_i_peven_podd_histograms_6panels.png)
+  - ![figure/cos_decomposition/cos_i_probability_density_1panel.png](figure/cos_decomposition/cos_i_probability_density_1panel.png)
+  - ![figure/cos_decomposition/cos_i_probability_density_histograms.png](figure/cos_decomposition/cos_i_probability_density_histograms.png)
+  - ![figure/cos_decomposition/cos_i_saddle_node_bifurcation_phase_dynamics_3panels.png](figure/cos_decomposition/cos_i_saddle_node_bifurcation_phase_dynamics_3panels.png)
+  - ![figure/cos_decomposition/cos_i_second_moment_vs_rc_over_xi.png](figure/cos_decomposition/cos_i_second_moment_vs_rc_over_xi.png)
+  - ![figure/cos_decomposition/cos_i_skewness_vs_rc_over_xi.png](figure/cos_decomposition/cos_i_skewness_vs_rc_over_xi.png)
+  - ![figure/cos_decomposition/cos_i_third_central_moment_vs_rc_over_xi.png](figure/cos_decomposition/cos_i_third_central_moment_vs_rc_over_xi.png)
+  - ![figure/cos_decomposition/cos_i_third_moment_vs_rc_over_xi.png](figure/cos_decomposition/cos_i_third_moment_vs_rc_over_xi.png)
+  - ![figure/cos_decomposition/cos_i_vs_phi_scatter.png](figure/cos_decomposition/cos_i_vs_phi_scatter.png)
+  - ![figure/cos_decomposition/cos_instantaneous_decomposition_scatter.png](figure/cos_decomposition/cos_instantaneous_decomposition_scatter.png)
+  - ![figure/cos_decomposition/cos_instantaneous_decomposition_scatter_3panels.png](figure/cos_decomposition/cos_instantaneous_decomposition_scatter_3panels.png)
+  </details>
+
+#### 📝 解析結果と物理的考察
+Ũ_eff(c) の縦軸から単位 [ζ_r D_r^eff] を外して無次元にし、`verify_cos_decomposition.py` を実行して図を作り直しました。新しい図は目で見て確認済みです。
+
+**変更内容**
+- `verify_cos_decomposition.py` の縦軸ラベル 3 か所（2221、2254、2329 行目）を `Effective Potential $\tilde{U}_{\mathrm{eff}}(c)$` だけにしました。ラベル以外の計算やデータは変えていません。
+- 定義は図のタイトルにあるとおり Ũ_eff(c) = −ln[√(1−c²) P(c)/P(0)] で、確率の比の対数です。もともと単位を持たないので、単位なしの表示が定義と合っています。
+- スクリプト全体（約 65 秒）が最後まで動き、`figure/cos_decomposition/` の下に PNG と SVG を保存しました。作り直したのは `cos_i_effective_potential_1panel`、`_6panels`、`_arctanh_fit_6panels` で、ROOT_DIR 側のフォルダにも同じものを出しています。
+- コミットはしていません。
+
+### 🔬 グラフの解釈と物理的結論 (Key Findings)
+- **グラフから読み取れる傾向**:
+  - **小さいビーズ（0.63、1.18 µm）**: Ũ は c が大きくなるにつれてほぼまっすぐ下がり、c → +1 で最も低くなります。0.63 µm では c = +0.96 で約 −1.5、c = −1 側で +0.4 です。直接読み取りの値は 0.63 µm で κ₁ = 0.46、κ₂ = 0.00、1.18 µm で κ₁ = 0.49、κ₂ = 0.08 で、c² の項はほとんどありません。
+  - **3.37〜7.24 µm**: 形が谷型に変わり、最も低い点は c ≈ 0.1〜0.2 にあります。両端は c = −1 で約 2.2〜2.6、c = +1 で約 0.4〜1.3 まで上がります。κ₂ は 0.70（3.37 µm）、0.98（5.00 µm）、1.20（7.24 µm）と、ビーズが大きいほど増えます。κ₁ は 0.35〜0.73 でサイズによる差は小さいです。
+  - **20 µm**: 曲線はほぼ平らで、95% CI がどの c でも 0 を含みます。軌道が 3 本しかありません。
+- **物理的結論・メカニズムの示唆**:
+  - ラベルを変えただけなので、これまでの結論はそのまま成り立ちます。小さいカーゴは流れの方向にそろい（c → +1、一次の項 κ₁ が主）、大きいカーゴは流れに対して斜めの向き（c ≈ 0 付近）に閉じ込められます（c² の項 κ₂ が主）。この切り替わりは前回のブートストラップで求めた Λ = A/(4κ₂) の移り変わりと同じ向きです。
+  - 縦軸の数値は、確率の比の対数として読めます。たとえば 7.24 µm では、c = −1 の向きは c ≈ 0 に比べて e^(−2.5) ≈ 0.08 倍しか起こりません。
+  - 注意点があります。この図の κ₂ は Ũ(c) から直接読み取った値です。前回の θ フィットで求めた κ₂（0.20、0.77 など）とは求め方が違うので、二つの値を同じ表で比べないでください。
+- **代表的な主図**:
+  - `figure/cos_decomposition/cos_i_effective_potential_1panel.png`：全サイズを 1 枚に重ねた図で、一直線の傾きから谷型への変化が一目で分かります。
+  - `figure/cos_decomposition/cos_i_effective_potential_6panels.png`：サイズごとに分けた図で、95% CI と −κ₁c + 2κ₂c² の線が入っています。
+Warning: this sign-in ends between 2026-11-14 and 2026-11-17 (in 2 days at the earliest). Renewing it does not move those dates. Run claude auth login before then, or use claude setup-token for unattended jobs.
+
+#### 💡 Antigravity (Gemini) の物理的セカンドオピニオン
+> ⚠️ Gemini認証待ちのためスキップ（ターミナルで agy -p 'hi' で事前認証すると有効化されます）
+
+
+
+### 🔹 c(t) の自己相関時間（サイズ別）
+* **スクリプト**: `c_autocorr_time.py`（新規。キャッシュは `figure/c_autocorr/c_instant_cache.pkl`、`--rebuild` で作り直し）
+* **出力**: `figure/c_autocorr/c_autocorr_cos_i.png`（主図）、`c_autocorr_cos_bulk.png`、`c_autocorr_time_by_size.csv`、`c_autocorr_curves.csv`
+* c = cos θ_i（粒子直下窓の瞬時値で、Ũ_eff(c) と同じデータ）。Δt = 4 s。同じ軌道の中で frame 差がちょうど τ になるペアだけを使っています。誤差は軌道単位のクラスタブートストラップ（500 回）による 95% CI です。
+* δc はサイズ全体の平均から引いたもの（ens）を主にしています。
+
+| 直径 | N 軌道 | C(4 s) | 速い成分 1−C(Δt) | 遅い振幅 a | τ_s [s] | 平坦部 b |
+|---|---|---|---|---|---|---|
+| 0.63 µm | 13 | 0.20 | 0.80 [0.69, 0.87] | 0.11 [0.07, 0.15] | 38 [25, 90] | 0.09 [0.02, 0.19] |
+| 1.18 µm | 17 | 0.29 | 0.72 [0.63, 0.79] | 0.18 [0.11, 0.28] | 57 [34, 115] | 0.08 [0.04, 0.13] |
+| 3.37 µm | 13 | 0.09 | 0.91 [0.86, 0.96] | 0.08 [0.05, 0.14] | 74 [23, 275] | 0.02 [−0.04, 0.05] |
+| 5.00 µm | 12 | 0.09 | 0.91 [0.83, 0.97] | 0.10 [0.05, 0.18] | 41 [22, 84] | 0.01 [−0.01, 0.02] |
+| 7.24 µm | 12 | 0.18 | 0.82 [0.74, 0.91] | 0.22 [0.14, 0.33] | 14 [10, 20] | 0.01 [0.00, 0.02] |
+| 20.0 µm | 3 | −0.11 | — | — | フィットが境界に張り付き、決まらない | — |
+
+* τ ≥ 4 s の部分に C(τ) = a·e^(−τ/τ_s) + b をフィットしました。
+* τ_1/e はどのサイズでも Δt = 4 s より短く、分解できません。CSV には線形補間した 2.7〜3.5 s が入っていますが、`tau_1e_resolved=False` で、意味のある値ではありません。
+* 軌道ごとの平均を引いた場合（traj）は b ≈ 0 になり、τ_s はほぼ同じです（0.63 µm 34 s、1.18 µm 52 s、7.24 µm 13 s）。
+* c = cos Θ_bulk でも数値はほぼ同じです（CSV を参照）。
