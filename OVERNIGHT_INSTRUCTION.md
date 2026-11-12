@@ -7,14 +7,10 @@
 
 ## 🎯 優先タスク（チェックボックス形式）
 
-- [ ] 各トラジェクトリの各フレームにおいて、貨物瞬時速度 $\mathbf{v}(t)$ を局所微小管流向 $\hat{\mathbf{u}}$ に対する縦成分 $v_\parallel = \mathbf{v}\cdot\hat{\mathbf{u}}$ と直交成分 $v_\perp = -v_x \sin\theta_u + v_y \cos\theta_u$ に分解し、解析用データフレームに格納する（列名: v_parallel, v_perp, v_mag）。
-- [ ] 軌跡のスプライン平滑化（または差分間隔 $\Delta t$）のパラメータを変え、局所トラッキングノイズが $v_\parallel$ および $v_\perp$ の分布幅（分散）に与える影響を検証・確定する。
-- [ ] 貨物サイズごとに $\langle v_\parallel \rangle$, $\langle v_\parallel^2 \rangle$, $\langle v_\perp^2 \rangle$, $\langle v^2 \rangle$ をクラスターブートストラップ法（トラジェクトリ単位リサンプリング）により計算し、95% 信頼区間を算出する。
-- [ ] 横軸 $R_c/\xi$ に対し、正味の直進駆動力 $\langle v_\parallel \rangle$ と直交揺動強度 $\sqrt{\langle v_\perp^2 \rangle}$ を重ねてプロットし、$R_c \approx \xi$ におけるパリティ回復と直交モードへのエネルギー集中を示す図を作成する（figure/v_parallel_perp_vs_rc_over_xi.pdf）。
-- [ ] 直交エネルギー分配比 $\langle v_\perp^2 \rangle / \langle v^2 \rangle$ のサイズ依存性をプロットし、大粒子において運動エネルギーが消失（凍結）せず直交揺らぎへ 100% 転換されていることを確認する。
-- [ ] 各サイズにおいて、機械的仕事率の相関指標 $\eta_T \equiv \frac{\langle \mathbf{v} \cdot \mathbf{u} \rangle}{\sqrt{\langle \vert{}\mathbf{v}\vert{}^2 \rangle}\sqrt{\langle \vert{}\mathbf{u}\vert{}^2 \rangle}}$ を算出し、ブートストラップ誤差棒を算出する。
-- [ ] 横軸 $R_c/\xi$ に対する $\eta_T$ のスケーリング曲線をプロットし、$R_c/\xi \approx 1$ で微小管流からの推進力取得が急激に遮断（Quenching）される転移挙動を可視化する
-
+- [ ]  NGP：軌道ごとの速度の違いだけでも O(1) になります。軌道ごとに NGP を計算するか、軌道ごとに規格化してから計算するものも作ってください。
+- [ ] フィットパラメータの誤差：A、κ₂、Λ にクラスタブートストラップで CI を付けてください。0.63 µm は κ₂=0.00 で境界に張り付いているので、Λ は「下限値」として示すのが正確です。誤差なしの Λ では、Λ_c との上下関係を主張できません。
+- [ ]  U 軸の単位：[ζ_r D_r^eff] を外し、無次元にしてください。
+- [ ] c(t) の自己相関時間をサイズごとに出してください。
 
 ## 進め方の注意
 
