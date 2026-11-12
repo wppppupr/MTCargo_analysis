@@ -2,22 +2,29 @@
 """
 calc_and_plot_velocity_potential_2d.py
 
-【解析 2：速度空間の有効ポテンシャル V(v_parallel, v_perp) の 2D 等高線図】
+【解析 2：速度空間の有効ポテンシャル V(v_parallel, v_perp) の 2D 等高線図 & 偶奇分解による対称性定量化】
 配向角で行ったボルツマン反転を、速度空間 (v_parallel, v_perp) に対して直接実行する。
 
 (1) 2次元確率密度の推定:
     各ビーズサイズについて、全軌跡ポイントの (v_parallel, v_perp) の 2D ガウス KDE
-    および高解像度 2次元ヒストグラムから確率密度 P(v_parallel, v_perp) を推定。
+    から確率密度 P(v_parallel, v_perp) を推定。
 
 (2) 速度空間ポテンシャルの反転:
     V_eff(v_parallel, v_perp) = - ln [ P(v_parallel, v_perp) / P_max ]
 
-(3) トポロジー・地形変化の可視化:
-    - 6条件 (0.63 um ~ 20 um) を 2x3 グリッドの 2D コンター図（等高線 + カラーマップ）で並列表示。
-    - 小粒子: v_parallel > 0 方向にポテンシャルの谷が大きく歪み・傾いた非対称地形（空間パリティ破れ）。
-    - 大粒子: 原点を中心とする同心円状の対称地形へと回復（空間パリティ回復）。
-    - 断面プロット: v_perp = 0 に沿った縦断面 V(v_parallel, 0) と、v_parallel = 0 に沿った横断面 V(0, v_perp)。
-    - 各ビーズサイズの歪み度（Skewness, 非対称性指数）を定量評価してサマリー CSV に出力。
+(3) 偶奇分解（Even-Odd Decomposition）による大域的対称性定量評価:
+    ポテンシャルを縦速度 v_parallel に関して偶関数（対称な井戸）と奇関数（パリティを破る傾斜場）に分解:
+        V_even(v_parallel) = [ V(v_parallel) + V(-v_parallel) ] / 2
+        V_odd(v_parallel)  = [ V(v_parallel) - V(-v_parallel) ] / 2
+    大域的奇成分ノルム（Global Odd-Component Integral）:
+        A_odd = int_0^{v_max} |V_odd(v_parallel)| dv_parallel
+    無次元化非対称寄与率（Asymmetry Ratio）:
+        eta_asym = [ int_0^{v_max} |V_odd(v_parallel)| dv_parallel ] / [ int_0^{v_max} V_even(v_parallel) dv_parallel ]
+
+(4) トポロジー・地形変化の可視化:
+    - 2D コンター図（等高線 + カラーマップ）
+    - 偶奇分解プロット: 各ビーズサイズの V(v_parallel), V_even, V_odd の 6パネル比較
+    - 偶奇成分の大域的積分指標 A_odd および eta_asym のスケーリング曲線
 """
 
 import os
@@ -28,6 +35,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.stats import gaussian_kde
+from scipy.integrate import trapezoid
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
@@ -67,6 +75,7 @@ BEADS_INFO = [
 SCALE = 0.11  # um / pixel
 DT = 4.0      # s / frame
 V_UNIT = SCALE / DT  # 0.0275 um/s
+V_MAX_INTEGRAL = 0.15  # um/s: 積分範囲 v_max
 
 
 def load_and_decompose():
@@ -101,14 +110,22 @@ def load_and_decompose():
     return df
 
 
-def compute_effective_potentials(df, grid_limit=0.25, n_grid=101):
+def compute_effective_potentials(df, grid_limit=0.25, n_grid=101, v_max=V_MAX_INTEGRAL):
     """
     各ビーズサイズについて 2D ガウス KDE を計算し、
     V_eff(v_parallel, v_perp) = - ln( P / P_max ) を求める。
+    さらに v_perp = 0 に沿ったスライスを抽出し、偶奇分解および積分ノルムを算出する。
     """
     grid_1d = np.linspace(-grid_limit, grid_limit, n_grid)
     V_PAR, V_PERP = np.meshgrid(grid_1d, grid_1d)
     pts = np.vstack([V_PAR.ravel(), V_PERP.ravel()])
+    
+    center_idx = n_grid // 2  # v = 0 のインデックス
+    
+    # 積分範囲のグリッド [0, v_max]
+    v_mask = (grid_1d >= 0) & (grid_1d <= v_max)
+    pos_v = grid_1d[v_mask]
+    n_pts_pos = len(pos_v)
     
     results = {}
     summary_records = []
@@ -135,15 +152,32 @@ def compute_effective_potentials(df, grid_limit=0.25, n_grid=101):
         min_v_par = grid_1d[min_idx[1]]
         min_v_perp = grid_1d[min_idx[0]]
         
-        # 非対称性指標: v_par > 0 と v_par < 0 でのポテンシャル勾配の非対称度
-        # ΔV_asym = V( -0.1, 0 ) - V( +0.1, 0 ) (正なら前方に転がりやすい)
-        center_idx = n_grid // 2
-        # v_par = +0.1 um/s, -0.1 um/s での値
+        # v_perp = 0 に沿った縦方向スライス V(v_parallel, 0)
+        slice_par = V_eff[center_idx, :]
+        
+        # 偶奇分解 (Even-Odd Decomposition)
+        # 正方向 V(+v) と 負方向 V(-v) を抽出
+        V_pos = slice_par[center_idx : center_idx + n_pts_pos]
+        V_neg = slice_par[center_idx - n_pts_pos + 1 : center_idx + 1][::-1]
+        
+        V_even = 0.5 * (V_pos + V_neg)
+        V_odd = 0.5 * (V_pos - V_neg)
+        
+        # 大域的奇成分ノルム A_odd = int_0^{v_max} |V_odd(v)| dv
+        A_odd = float(trapezoid(np.abs(V_odd), pos_v))
+        
+        # 偶成分の積分 (井戸の全体ポテンシャル) I_even = int_0^{v_max} V_even(v) dv
+        I_even = float(trapezoid(V_even, pos_v))
+        
+        # 無次元化非対称寄与率 eta_asym = A_odd / I_even
+        eta_asym = float(A_odd / I_even if I_even > 0 else 0.0)
+        
+        # 局所非対称指標: ΔV_asym = V(-0.1, 0) - V(+0.1, 0)
         idx_pos = np.argmin(np.abs(grid_1d - 0.10))
         idx_neg = np.argmin(np.abs(grid_1d - (-0.10)))
-        v_eff_pos = V_eff[center_idx, idx_pos]
-        v_eff_neg = V_eff[center_idx, idx_neg]
-        delta_v_asym = v_eff_neg - v_eff_pos
+        v_eff_pos = slice_par[idx_pos]
+        v_eff_neg = slice_par[idx_neg]
+        delta_v_asym = float(v_eff_neg - v_eff_pos)
         
         # 歪度 (Skewness)
         skew_par = float((sub['v_par'] - sub['v_par'].mean()).pow(3).mean() / (sub['v_par'].std()**3))
@@ -157,6 +191,15 @@ def compute_effective_potentials(df, grid_limit=0.25, n_grid=101):
             'grid_1d': grid_1d,
             'P_2d': P_2d,
             'V_eff': V_eff,
+            'slice_par': slice_par,
+            'pos_v': pos_v,
+            'V_pos': V_pos,
+            'V_neg': V_neg,
+            'V_even': V_even,
+            'V_odd': V_odd,
+            'A_odd': A_odd,
+            'I_even': I_even,
+            'eta_asym': eta_asym,
             'min_v_par': min_v_par,
             'min_v_perp': min_v_perp,
             'delta_v_asym': delta_v_asym,
@@ -171,11 +214,15 @@ def compute_effective_potentials(df, grid_limit=0.25, n_grid=101):
             'radius_um': info['radius_um'],
             'rc_over_xi': rc_xi,
             'n_frames': len(sub),
-            'min_v_par': min_v_par,
-            'min_v_perp': min_v_perp,
+            'v_max_integral_um_s': v_max,
+            'A_odd_integral': A_odd,
+            'I_even_integral': I_even,
+            'eta_asym_ratio': eta_asym,
             'delta_v_asym_at_01um_s': delta_v_asym,
             'skewness_v_parallel': skew_par,
             'skewness_v_perp': skew_perp,
+            'min_v_par': min_v_par,
+            'min_v_perp': min_v_perp,
             'v_par_mean': sub['v_par'].mean(),
             'v_par_std': sub['v_par'].std(),
             'v_perp_std': sub['v_perp'].std(),
@@ -185,19 +232,136 @@ def compute_effective_potentials(df, grid_limit=0.25, n_grid=101):
     return results, df_summary
 
 
+def plot_even_odd_decomposition_grid(results):
+    """
+    全6サイズについて、V(v_parallel), V_even(v_parallel), V_odd(v_parallel) の
+    偶奇分解を 2x3 グリッドで視覚化するプロット。
+    """
+    fig, axes = plt.subplots(2, 3, figsize=(15.5, 9.0), sharex=True, sharey=True)
+    axes = axes.flatten()
+    
+    for idx, info in enumerate(BEADS_INFO):
+        ax = axes[idx]
+        b_name = info['name']
+        data = results[b_name]
+        
+        pos_v = data['pos_v']
+        V_pos = data['V_pos']
+        V_neg = data['V_neg']
+        V_even = data['V_even']
+        V_odd = data['V_odd']
+        rc_xi = data['rc_over_xi']
+        
+        # 偶成分 (対称な井戸)
+        ax.plot(pos_v, V_even, color='#332288', linewidth=2.4, label=r"$\tilde{\mathcal{V}}_{\mathrm{even}}$ (Symmetric well)")
+        # 奇成分 (パリティ破れ・傾斜場)
+        ax.plot(pos_v, V_odd, color='#CC6677', linewidth=2.4, linestyle='--', label=r"$\tilde{\mathcal{V}}_{\mathrm{odd}}$ (Parity breaking)")
+        # 奇成分の絶対値（積分対象）
+        ax.fill_between(pos_v, 0, np.abs(V_odd), color='#CC6677', alpha=0.18,
+                        label=rf"$\mathcal{{A}}_{{\mathrm{{odd}}}}={data['A_odd']:.3f}$")
+        
+        # 元の正方向・負方向の線（薄く表示）
+        ax.plot(pos_v, V_pos, color='gray', linestyle=':', linewidth=1.2, alpha=0.7, label=r"$\tilde{\mathcal{V}}(+v_\parallel)$")
+        ax.plot(pos_v, V_neg, color='gray', linestyle='-.', linewidth=1.2, alpha=0.7, label=r"$\tilde{\mathcal{V}}(-v_\parallel)$")
+        
+        ax.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.6)
+        
+        # タイトルおよび情報
+        ax.set_title(rf"{info['label']}  ($R_c/\xi \approx {rc_xi:.2f}$)",
+                     fontsize=12.5, weight='bold', pad=8)
+        
+        # 評価指標のバッジ
+        ax.text(0.05, 0.93,
+                rf"$\mathcal{{A}}_{{\mathrm{{odd}}}} = {data['A_odd']:.4f}$" + "\n" +
+                rf"$\eta_{{\mathrm{{asym}}}} = {data['eta_asym']:.3f}$ ({data['eta_asym']*100:.1f}\%)",
+                transform=ax.transAxes, fontsize=10.5, weight='bold',
+                color='#332288', verticalalignment='top',
+                bbox=dict(boxstyle='round,pad=0.35', facecolor='#F0F0F0', edgecolor='gray', alpha=0.9))
+        
+        ax.set_xlim(0, V_MAX_INTEGRAL)
+        ax.set_ylim(-1.0, 4.0)
+        ax.set_xlabel(r"Velocity magnitude $v_\parallel\ [\mu\mathrm{m/s}]$", fontsize=11)
+        ax.set_ylabel(r"Potential Component", fontsize=11)
+        ax.grid(True, linestyle=':', alpha=0.45)
+        
+        if idx == 0:
+            ax.legend(loc='lower right', fontsize=8.8, framealpha=0.9)
+    
+    fig.suptitle(r"Even-Odd Decomposition of Velocity Potential $\tilde{\mathcal{V}}(v_\parallel)$: Parity Breaking to Restoration",
+                 fontsize=14.5, weight='bold', y=0.98)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    
+    for d in OUT_DIRS:
+        d.mkdir(parents=True, exist_ok=True)
+        fig.savefig(d / "velocity_potential_even_odd_decomposition_grid.png", dpi=300)
+        fig.savefig(d / "velocity_potential_even_odd_decomposition_grid.svg")
+    plt.close(fig)
+    print("Saved Figure: velocity_potential_even_odd_decomposition_grid.png / .svg")
+
+
+def plot_odd_integral_and_ratio_vs_rc_xi(df_summary):
+    """
+    奇成分大域ノルム A_odd および無次元化非対称寄与率 eta_asym の
+    スケーリングプロット (vs R_c / xi)。
+    """
+    df_plot = df_summary.sort_values(by='rc_over_xi').copy()
+    x = df_plot['rc_over_xi']
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 5.0))
+    
+    # --- (A) 大域的奇成分ノルム A_odd ---
+    ax1.plot(x, df_plot['A_odd_integral'], 'o-', color='#CC6677',
+             linewidth=2.4, markersize=8.5, label=r"Odd norm $\mathcal{A}_{\mathrm{odd}} = \int | \tilde{\mathcal{V}}_{\mathrm{odd}} | dv$")
+    ax1.axhline(0, color='gray', linestyle='--', linewidth=1.0)
+    ax1.axvline(1.0, color='black', linestyle=':', linewidth=1.5, alpha=0.6, label=r"$R_c = \xi$")
+    ax1.set_xscale('log')
+    ax1.set_xlabel(r"Scaled Cargo Radius $R_c / \xi$", fontsize=12.5)
+    ax1.set_ylabel(r"Odd-Component Norm $\mathcal{A}_{\mathrm{odd}}\ [\mu\mathrm{m/s}]$", fontsize=12)
+    ax1.set_title(r"(A) Global Odd-Component Norm $\mathcal{A}_{\mathrm{odd}}$ vs $R_c/\xi$", fontsize=12.5, weight='bold')
+    ax1.grid(True, which='both', linestyle=':', alpha=0.45)
+    ax1.legend(loc='upper right', fontsize=10, framealpha=0.9)
+    
+    for _, row in df_plot.iterrows():
+        ax1.annotate(f"{row['diameter_um']:.2g} $\mu\mathrm{{m}}$\n({row['A_odd_integral']:.3f})",
+                     xy=(row['rc_over_xi'], row['A_odd_integral']),
+                     xytext=(0, 9), textcoords='offset points',
+                     ha='center', fontsize=9.5, color='#CC6677', weight='bold')
+    
+    # --- (B) 無次元化非対称寄与率 eta_asym ---
+    ax2.plot(x, df_plot['eta_asym_ratio'] * 100, 's-', color='#332288',
+             linewidth=2.4, markersize=8.5, label=r"Asymmetry contribution $\eta_{\mathrm{asym}} = \mathcal{A}_{\mathrm{odd}} / \mathcal{I}_{\mathrm{even}}$")
+    ax2.axhline(0, color='gray', linestyle='--', linewidth=1.0)
+    ax2.axvline(1.0, color='black', linestyle=':', linewidth=1.5, alpha=0.6, label=r"$R_c = \xi$")
+    ax2.set_xscale('log')
+    ax2.set_xlabel(r"Scaled Cargo Radius $R_c / \xi$", fontsize=12.5)
+    ax2.set_ylabel(r"Asymmetry Contribution Ratio $\eta_{\mathrm{asym}}\ [\%]$", fontsize=12)
+    ax2.set_title(r"(B) Dimensionless Asymmetry Ratio $\eta_{\mathrm{asym}}$ vs $R_c/\xi$", fontsize=12.5, weight='bold')
+    ax2.set_ylim(-2, 35)
+    ax2.grid(True, which='both', linestyle=':', alpha=0.45)
+    ax2.legend(loc='upper right', fontsize=10, framealpha=0.9)
+    
+    for _, row in df_plot.iterrows():
+        ax2.annotate(f"{row['diameter_um']:.2g} $\mu\mathrm{{m}}$\n({row['eta_asym_ratio']*100:.1f}%)",
+                     xy=(row['rc_over_xi'], row['eta_asym_ratio'] * 100),
+                     xytext=(0, 9), textcoords='offset points',
+                     ha='center', fontsize=9.5, color='#332288', weight='bold')
+    
+    plt.tight_layout()
+    for d in OUT_DIRS:
+        fig.savefig(d / "velocity_potential_even_odd_asymmetry_vs_rc_xi.png", dpi=300)
+        fig.savefig(d / "velocity_potential_even_odd_asymmetry_vs_rc_xi.svg")
+    plt.close(fig)
+    print("Saved Figure: velocity_potential_even_odd_asymmetry_vs_rc_xi.png / .svg")
+
+
 def plot_2d_contour_grid(results):
-    """
-    (3) 期待されるトポロジーの変化（2D コンター図）
-    全サイズ (0.63 ~ 20 um) の V_eff(v_parallel, v_perp) を 2x3 グリッドで並べ、
-    等高線とカラーマップで地形変化を可視化する。
-    """
+    """2D 等高線図グリッドの作成"""
     fig, axes = plt.subplots(2, 3, figsize=(15.5, 9.5), sharex=True, sharey=True)
     axes = axes.flatten()
     
-    # 等高線のレベル設定: 0 から 5 まで 0.5 刻み
     contour_levels = np.linspace(0.0, 5.0, 11)
-    
     last_cs = None
+    
     for idx, info in enumerate(BEADS_INFO):
         ax = axes[idx]
         b_name = info['name']
@@ -208,37 +372,29 @@ def plot_2d_contour_grid(results):
         V_eff = data['V_eff']
         rc_xi = data['rc_over_xi']
         
-        # 等高線塗りつぶし (Contourf)
         cf = ax.contourf(V_PAR, V_PERP, V_eff, levels=contour_levels,
                          cmap='viridis_r', extend='max')
-        # 等高線 (Contour lines)
         cs = ax.contour(V_PAR, V_PERP, V_eff, levels=contour_levels,
                         colors='white', linewidths=0.7, alpha=0.6)
         last_cs = cf
         
-        # 基準線 (v_parallel = 0, v_perp = 0)
         ax.axvline(0, color='gray', linestyle=':', linewidth=1.2, alpha=0.7)
         ax.axhline(0, color='gray', linestyle=':', linewidth=1.2, alpha=0.7)
         
-        # 最小ポテンシャル位置（最頻速度）のプロット
         ax.plot(data['min_v_par'], data['min_v_perp'], marker='+', markersize=10,
                 markeredgewidth=2.2, color='red', label='Potential Min')
         
-        # 平均速度位置のプロット
-        ax.plot(data['info']['diameter_um'], 0) # ダミーではなく実際の位置
-        sub_mean_par = results[b_name]['info']['name']
-        
-        # タイトルおよび情報注記
         ax.set_title(rf"{info['label']}  ($R_c/\xi \approx {rc_xi:.2f}$)",
                      fontsize=13, weight='bold', pad=8)
         
-        # 非対称度注記
+        # 偶奇分解指標と非対称度をバッジで表示
         ax.text(0.05, 0.92,
-                rf"$\Delta\tilde{{\mathcal{{V}}}}_{{asym}} = {data['delta_v_asym']:+.2f}$" + "\n" +
+                rf"$\mathcal{{A}}_{{\mathrm{{odd}}}} = {data['A_odd']:.3f}$" + "\n" +
+                rf"$\eta_{{\mathrm{{asym}}}} = {data['eta_asym']*100:.1f}\%$" + "\n" +
                 rf"$\mathrm{{Skew}}(v_\parallel) = {data['skew_par']:+.2f}$",
-                transform=ax.transAxes, fontsize=10, weight='bold',
+                transform=ax.transAxes, fontsize=9.5, weight='bold',
                 color='white', verticalalignment='top',
-                bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.55))
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.6))
         
         ax.set_xlim(-0.22, 0.22)
         ax.set_ylim(-0.22, 0.22)
@@ -260,19 +416,14 @@ def plot_2d_contour_grid(results):
     plt.subplots_adjust(right=0.90, top=0.91, bottom=0.08, left=0.07, hspace=0.25, wspace=0.22)
     
     for d in OUT_DIRS:
-        d.mkdir(parents=True, exist_ok=True)
         fig.savefig(d / "velocity_potential_2d_contour_grid.png", dpi=300)
         fig.savefig(d / "velocity_potential_2d_contour_grid.svg")
     plt.close(fig)
-    print("Saved Figure 1: velocity_potential_2d_contour_grid.png / .svg")
+    print("Saved Figure: velocity_potential_2d_contour_grid.png / .svg")
 
 
 def plot_1d_potential_slices(results):
-    """
-    ポテンシャルの断面プロット:
-    (A) 縦方向断面 V(v_parallel, 0): 小粒子での前傾非対称性から大粒子での完全対称放物線への転移
-    (B) 直交方向断面 V(0, v_perp): 全サイズで原点対称な調和振動子型井戸（能動揺らぎの普遍性）
-    """
+    """ポテンシャルの断面プロット (v_perp = 0 および v_parallel = 0)"""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.0, 5.2))
     
     for info in BEADS_INFO:
@@ -282,19 +433,13 @@ def plot_1d_potential_slices(results):
         V_eff = data['V_eff']
         center_idx = len(grid_1d) // 2
         
-        # (A) v_perp = 0 に沿った v_parallel 依存性
         slice_par = V_eff[center_idx, :]
-        # (B) v_parallel = 0 に沿った v_perp 依存性
         slice_perp = V_eff[:, center_idx]
-        
         label = rf"{info['label']} ($R_c/\xi \approx {data['rc_over_xi']:.2f}$)"
         
-        ax1.plot(grid_1d, slice_par, label=label, color=info['color'],
-                 linewidth=2.2, linestyle='-')
-        ax2.plot(grid_1d, slice_perp, label=label, color=info['color'],
-                 linewidth=2.2, linestyle='-')
+        ax1.plot(grid_1d, slice_par, label=label, color=info['color'], linewidth=2.2)
+        ax2.plot(grid_1d, slice_perp, label=label, color=info['color'], linewidth=2.2)
     
-    # 軸・装飾
     ax1.axvline(0, color='gray', linestyle=':', linewidth=1.2)
     ax1.set_xlabel(r"Longitudinal velocity $v_\parallel\ [\mu\mathrm{m/s}]$", fontsize=12)
     ax1.set_ylabel(r"Effective Potential $\tilde{\mathcal{V}}_{\mathrm{eff}}(v_\parallel, v_\perp=0)$", fontsize=12)
@@ -303,12 +448,6 @@ def plot_1d_potential_slices(results):
     ax1.set_ylim(-0.2, 5.0)
     ax1.grid(True, linestyle=':', alpha=0.5)
     ax1.legend(loc='upper center', fontsize=9.5, framealpha=0.85)
-    
-    # 矢印で前傾の緩和を示す注記
-    ax1.annotate("Asymmetric tilted valley\n(Propulsion bias)",
-                 xy=(0.08, 1.2), xytext=(0.07, 2.8),
-                 arrowprops=dict(facecolor='#882255', shrink=0.08, width=1.5, headwidth=6),
-                 fontsize=9.5, color='#882255', weight='bold')
     
     ax2.axvline(0, color='gray', linestyle=':', linewidth=1.2)
     ax2.set_xlabel(r"Transverse velocity $v_\perp\ [\mu\mathrm{m/s}]$", fontsize=12)
@@ -324,67 +463,11 @@ def plot_1d_potential_slices(results):
         fig.savefig(d / "velocity_potential_1d_slices.png", dpi=300)
         fig.savefig(d / "velocity_potential_1d_slices.svg")
     plt.close(fig)
-    print("Saved Figure 2: velocity_potential_1d_slices.png / .svg")
-
-
-def plot_asymmetry_metric_vs_rc_xi(df_summary):
-    """
-    ポテンシャルの非対称性指標 ΔV_asym および歪度 Skew(v_parallel) vs R_c/xi
-    """
-    df_plot = df_summary.sort_values(by='rc_over_xi').copy()
-    
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.0, 4.8))
-    
-    x = df_plot['rc_over_xi']
-    
-    # 1. ΔV_asym
-    ax1.plot(x, df_plot['delta_v_asym_at_01um_s'], 'o-', color='#CC6677',
-             linewidth=2.2, markersize=8)
-    ax1.axhline(0, color='gray', linestyle='--', linewidth=1.2)
-    ax1.axvline(1.0, color='black', linestyle=':', linewidth=1.5, alpha=0.6, label=r"$R_c = \xi$")
-    ax1.set_xscale('log')
-    ax1.set_xlabel(r"Scaled Cargo Radius $R_c / \xi$", fontsize=12)
-    ax1.set_ylabel(r"Potential Asymmetry $\Delta\tilde{\mathcal{V}}_{\mathrm{asym}}$ at $\pm 0.1\,\mu\mathrm{m/s}$", fontsize=11)
-    ax1.set_title(r"Longitudinal Asymmetry: $\tilde{\mathcal{V}}(-0.1) - \tilde{\mathcal{V}}(+0.1)$", fontsize=12, weight='bold')
-    ax1.grid(True, which='both', linestyle=':', alpha=0.4)
-    ax1.legend(loc='upper right', fontsize=10)
-    
-    for _, row in df_plot.iterrows():
-        ax1.annotate(f"{row['diameter_um']:.2g} $\mu\mathrm{{m}}$",
-                     xy=(row['rc_over_xi'], row['delta_v_asym_at_01um_s']),
-                     xytext=(0, 7), textcoords='offset points',
-                     ha='center', fontsize=9, color='#CC6677', weight='bold')
-    
-    # 2. Skewness
-    ax2.plot(x, df_plot['skewness_v_parallel'], 's-', color='#332288',
-             linewidth=2.2, markersize=8, label=r"$\mathrm{Skew}(v_\parallel)$")
-    ax2.plot(x, df_plot['skewness_v_perp'], '^-', color='#117733',
-             linewidth=2.2, markersize=8, label=r"$\mathrm{Skew}(v_\perp) \approx 0$")
-    ax2.axhline(0, color='gray', linestyle='--', linewidth=1.2)
-    ax2.axvline(1.0, color='black', linestyle=':', linewidth=1.5, alpha=0.6, label=r"$R_c = \xi$")
-    ax2.set_xscale('log')
-    ax2.set_xlabel(r"Scaled Cargo Radius $R_c / \xi$", fontsize=12)
-    ax2.set_ylabel(r"Velocity Distribution Skewness", fontsize=12)
-    ax2.set_title(r"Skewness vs $R_c/\xi$ (Parity Restoration)", fontsize=12, weight='bold')
-    ax2.grid(True, which='both', linestyle=':', alpha=0.4)
-    ax2.legend(loc='upper right', fontsize=10)
-    
-    for _, row in df_plot.iterrows():
-        ax2.annotate(f"{row['diameter_um']:.2g} $\mu\mathrm{{m}}$",
-                     xy=(row['rc_over_xi'], row['skewness_v_parallel']),
-                     xytext=(0, 7), textcoords='offset points',
-                     ha='center', fontsize=9, color='#332288', weight='bold')
-    
-    plt.tight_layout()
-    for d in OUT_DIRS:
-        fig.savefig(d / "velocity_potential_asymmetry_vs_rc_xi.png", dpi=300)
-        fig.savefig(d / "velocity_potential_asymmetry_vs_rc_xi.svg")
-    plt.close(fig)
-    print("Saved Figure 3: velocity_potential_asymmetry_vs_rc_xi.png / .svg")
+    print("Saved Figure: velocity_potential_1d_slices.png / .svg")
 
 
 def main():
-    print("=== Velocity Space Effective Potential V(v_parallel, v_perp) Analysis ===")
+    print("=== Velocity Space Effective Potential & Even-Odd Decomposition Analysis ===")
     df = load_and_decompose()
     results, df_summary = compute_effective_potentials(df)
     
@@ -398,14 +481,14 @@ def main():
     # プロット作成
     plot_2d_contour_grid(results)
     plot_1d_potential_slices(results)
-    plot_asymmetry_metric_vs_rc_xi(df_summary)
+    plot_even_odd_decomposition_grid(results)
+    plot_odd_integral_and_ratio_vs_rc_xi(df_summary)
     
-    print("\n--- Summary Table ---")
-    cols_to_print = ['bead_name', 'diameter_um', 'rc_over_xi', 'delta_v_asym_at_01um_s', 'skewness_v_parallel', 'skewness_v_perp']
+    print("\n--- Even-Odd Symmetry Decomposition Summary Table ---")
+    cols_to_print = ['bead_name', 'diameter_um', 'rc_over_xi', 'A_odd_integral', 'I_even_integral', 'eta_asym_ratio', 'delta_v_asym_at_01um_s', 'skewness_v_parallel']
     print(df_summary[cols_to_print].to_string(index=False))
     print("\nAnalysis completed successfully!")
 
 
 if __name__ == "__main__":
     main()
-

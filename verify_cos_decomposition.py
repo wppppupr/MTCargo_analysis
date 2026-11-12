@@ -2260,6 +2260,635 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         save_figure(fig, "cos_i_effective_potential_1panel", OUT_DIRS)
         plt.close(fig)
 
+        # ---------------------------------------------------------
+        # 8e. ポテンシャル形状 \tilde{U}(c) = - A * arctanh(c) + 2 * \kappa_2 * c^2 によるフィッティンググラフ（別図）
+        #     （順行方向への吸引とネマティック調和閉じ込めの組み合わせ）
+        # ---------------------------------------------------------
+        fig, axes = plt.subplots(2, 3, figsize=(16.0, 10.0), sharex=True, sharey=True)
+        axes_flat = axes.flatten()
+
+        c_fine_atanh = np.linspace(-0.95, 0.95, 400)
+
+        for idx, b_item in enumerate(BEADS_INFO):
+            ax = axes_flat[idx]
+            bname = b_item['name']
+            color = b_item['color']
+            lbl = b_item['label']
+
+            if bname not in boot_hist_dict:
+                ax.text(0.5, 0.5, "No Data", ha='center', va='center', transform=ax.transAxes)
+                continue
+
+            res = boot_hist_dict[bname]
+            u_obs = res['U_eff_obs']
+            ci_low_u = res['ci_low_ueff']
+            ci_high_u = res['ci_high_ueff']
+
+            ax.axhline(0.0, color='#888888', linestyle='-', linewidth=0.9, alpha=0.7)
+            ax.axvline(0.0, color='#888888', linestyle=':', linewidth=1.2)
+
+            # 実測ポテンシャル（ビン点 + 95% CI帯）
+            valid_mask = ~np.isnan(u_obs)
+            ax.plot(bin_centers[valid_mask], u_obs[valid_mask], color=color, linewidth=2.2,
+                    marker=b_item['marker'], markersize=6.0,
+                    label=rf"Inverted $\tilde{{U}}_{{\mathrm{{eff}}}}(c)$ ($N={res['n_cargos']}$)", zorder=4)
+            ax.fill_between(bin_centers[valid_mask], ci_low_u[valid_mask], ci_high_u[valid_mask],
+                            color=color, alpha=0.22, label=r"95% CI (Cluster Bootstrap)", zorder=2)
+
+            # フィッティング: \tilde{U}(c) = - A * arctanh(c) + 2 * \kappa_2 * c^2
+            # 偶奇成分の分離推定（比率法）により、ノイズによる人工的な極小・極大（偽の山谷）の発生を防止
+            # 1. arctanh(P_odd / P_even) = A * arctanh(c) から極性強度 A を決定
+            # 2. ln[ sqrt(1 - c^2) * P_even / cosh(A * arctanh(c)) ] = const - 2 * \kappa_2 * c^2 から \kappa_2 を決定
+            pe_obs = res['P_even_obs']
+            po_obs = res['P_odd_obs']
+            mask_ratio = (bin_centers > 0.05) & (bin_centers <= 0.85) & (pe_obs > 1e-4)
+            if np.sum(mask_ratio) >= 2:
+                c_m = bin_centers[mask_ratio]
+                ratio_m = np.clip((po_obs / pe_obs)[mask_ratio], -0.999, 0.999)
+                atanh_ratio = np.arctanh(ratio_m)
+                atanh_c = np.arctanh(c_m)
+                A_fit = float(np.sum(atanh_ratio * atanh_c) / np.sum(atanh_c**2))
+                A_fit = max(0.0, A_fit)
+
+                y_vals = np.log(np.clip(denom_jacob[mask_ratio] * pe_obs[mask_ratio] / np.cosh(A_fit * atanh_c), 1e-6, None))
+                x_sq = c_m**2
+                x_dev = x_sq - np.mean(x_sq)
+                y_dev = y_vals - np.mean(y_vals)
+                slope = np.sum(x_dev * y_dev) / np.sum(x_dev**2) if np.sum(x_dev**2) > 0 else 0.0
+                k2_atanh_fit = max(0.0, float(-0.5 * slope))
+
+                u_theo_atanh = - A_fit * np.arctanh(c_fine_atanh) + 2.0 * k2_atanh_fit * (c_fine_atanh**2)
+                ax.plot(c_fine_atanh, u_theo_atanh, color='#222222', linestyle='--', linewidth=2.0, alpha=0.9,
+                        label=rf"Fit: $-A\operatorname{{arctanh}}(c) + 2\kappa_2 c^2$" + f"\n($A={A_fit:.2f}, \kappa_2={k2_atanh_fit:.2f}$)", zorder=5)
+
+            ax.set_xlim(-1.02, 1.02)
+            ax.set_ylim(-2.5, 3.5)
+            ax.set_title(rf"{lbl}", fontsize=14, fontweight='bold')
+            ax.set_xlabel(r"Directional Coupling $c = \mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=13)
+            if idx % 3 == 0:
+                ax.set_ylabel(r"Effective Potential $\tilde{U}_{\mathrm{eff}}(c)$ [$\zeta_r D_r^{\mathrm{eff}}$]", fontsize=13)
+            ax.grid(True, linestyle=':', alpha=0.6)
+            ax.legend(loc='upper center', fontsize=9.2, framealpha=0.92)
+
+        fig.suptitle(r'Effective Potential with $\operatorname{arctanh}(c)$ Fitting: $\tilde{U}(c) \approx - A \operatorname{arctanh}(c) + 2 \kappa_2 c^2$',
+                     fontsize=16, y=0.99)
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        save_figure(fig, "cos_i_effective_potential_arctanh_fit_6panels", OUT_DIRS)
+        plt.close(fig)
+
+        # ---------------------------------------------------------
+        # 8f. 比率 A / \kappa_2 vs R_c / \xi のグラフ
+        #     - beads20um (20 \mu m) は A -> 0, \kappa_2 -> 0 の極限として 1.0 に収束したとしてプロット
+        #     - 20 \mu m は参考値として色抜き（白抜きマーカー、facecolor='none' または 'white'）
+        # ---------------------------------------------------------
+        atanh_ratio_records = []
+        for b_item in BEADS_INFO:
+            bname = b_item['name']
+            if bname not in boot_hist_dict:
+                continue
+            res = boot_hist_dict[bname]
+            u_obs = res['U_eff_obs']
+            row_rc = df_rc_xi[df_rc_xi['bead_name'] == bname]
+            rc_xi_m = float(row_rc['rc_over_xi_mean'].values[0]) if not row_rc.empty else np.nan
+            rc_xi_s = float(row_rc['rc_over_xi_sem'].values[0]) if not row_rc.empty else 0.0
+
+            pe_obs = res['P_even_obs']
+            po_obs = res['P_odd_obs']
+            mask_ratio = (bin_centers > 0.05) & (bin_centers <= 0.85) & (pe_obs > 1e-4)
+
+            A_val, k2_val = np.nan, np.nan
+            if np.sum(mask_ratio) >= 2:
+                c_m = bin_centers[mask_ratio]
+                ratio_m = np.clip((po_obs / pe_obs)[mask_ratio], -0.999, 0.999)
+                atanh_ratio = np.arctanh(ratio_m)
+                atanh_c = np.arctanh(c_m)
+                A_val = float(np.sum(atanh_ratio * atanh_c) / np.sum(atanh_c**2))
+                A_val = max(0.0, A_val)
+
+                y_vals = np.log(np.clip(denom_jacob[mask_ratio] * pe_obs[mask_ratio] / np.cosh(A_val * atanh_c), 1e-6, None))
+                x_sq = c_m**2
+                x_dev = x_sq - np.mean(x_sq)
+                y_dev = y_vals - np.mean(y_vals)
+                slope = np.sum(x_dev * y_dev) / np.sum(x_dev**2) if np.sum(x_dev**2) > 0 else 0.0
+                k2_val = max(0.0, float(-0.5 * slope))
+
+            atanh_ratio_records.append({
+                'bead_name': bname,
+                'label': b_item['label'],
+                'color': b_item['color'],
+                'marker': b_item['marker'],
+                'rc_over_xi_mean': rc_xi_m,
+                'rc_over_xi_sem': rc_xi_s,
+                'A': A_val,
+                'kappa_2': k2_val,
+            })
+
+        df_atanh_ratios = pd.DataFrame(atanh_ratio_records)
+        if not df_atanh_ratios.empty:
+            df_atanh_ratios = df_atanh_ratios.sort_values('rc_over_xi_mean').reset_index(drop=True)
+
+            fig, ax = plt.subplots(figsize=(8.0, 6.2))
+            ax.axvline(1.0, color='#666666', linestyle='--', linewidth=1.5, zorder=1,
+                       label=r'Crossover $R_c / \xi = 1$')
+            ax.axhline(1.0, color='#888888', linestyle=':', linewidth=1.2, zorder=1,
+                       label=r'Equipartition $A / \kappa_2 = 1$')
+
+            # サドルノード分岐線: \Lambda = A / (4 * \kappa_2) = 2 / (3 * \sqrt{3}) \approx 0.385
+            # すなわち A / \kappa_2 = 4 * \Lambda_c = 8 / (3 * \sqrt{3}) \approx 1.540
+            lam_crit = 2.0 / (3.0 * np.sqrt(3.0))
+            ratio_sn = 4.0 * lam_crit
+            ax.axhline(ratio_sn, color='darkred', linestyle='-.', linewidth=1.6, zorder=1,
+                       label=rf'Saddle-Node Bifurcation $A / \kappa_2 \approx {ratio_sn:.2f}$ ($\Lambda = 0.385$)')
+
+            y_max_a_ratio = 5.0
+            ax.set_ylim(0.0, y_max_a_ratio)
+
+            # トレンド線（有限値の通常データ点 beads1um, beads3um, beads7um, beads5um）
+            trend_mask = (df_atanh_ratios['bead_name'] != 'beads06um') & (df_atanh_ratios['bead_name'] != 'beads20um')
+            df_trend = df_atanh_ratios[trend_mask].copy()
+            df_trend['ratio'] = df_trend['A'] / df_trend['kappa_2']
+            ax.plot(df_trend['rc_over_xi_mean'], df_trend['ratio'],
+                    color='#333333', linestyle='-', linewidth=2.0, alpha=0.7, zorder=2)
+
+            for _, r_p in df_atanh_ratios.iterrows():
+                bname = r_p['bead_name']
+                x_val = r_p['rc_over_xi_mean']
+                x_sem = r_p['rc_over_xi_sem']
+                xerr = [x_sem] if (not np.isnan(x_sem) and x_sem > 0) else None
+
+                if bname == 'beads06um':
+                    # \kappa_2 \to 0 のため A / \kappa_2 \to \infty
+                    ax.scatter(x_val, y_max_a_ratio,
+                               color=r_p['color'], marker='^', s=120, edgecolors='black',
+                               linewidths=1.3, zorder=6, clip_on=False,
+                               label=f"{r_p['label']} ($A/\\kappa_2 \\to \\infty$)")
+                    ax.annotate(r"$A / \kappa_2 \to \infty$" + f"\n({r_p['label']})",
+                                xy=(x_val, y_max_a_ratio),
+                                xytext=(0, 14), textcoords="offset points",
+                                ha='center', va='bottom', fontsize=10.5, color=r_p['color'],
+                                fontweight='bold',
+                                arrowprops=dict(arrowstyle="->", color=r_p['color'], lw=1.5))
+                    if xerr is not None:
+                        ax.errorbar(x_val, y_max_a_ratio, xerr=xerr, fmt='none',
+                                    ecolor=r_p['color'], elinewidth=1.6, capsize=4.0, capthick=1.2, zorder=4)
+
+                elif bname == 'beads20um':
+                    # 20 µm: A=0, \kappa_2=0, \Lambda=0 の極限、参考値として色抜き（白抜きマーカー）
+                    y_val = 0.0
+                    ax.scatter(x_val, y_val,
+                               facecolors='white', edgecolors=r_p['color'], marker=r_p['marker'],
+                               s=110, linewidths=2.0, linestyle='--', zorder=6,
+                               label=f"{r_p['label']} (limit $\\to 0$, ref)")
+                    ax.annotate(r"$A, \kappa_2 \to 0$ ($\to 0$, ref)",
+                                xy=(x_val, y_val), xytext=(0, 12), textcoords="offset points",
+                                ha='center', va='bottom', fontsize=9.5, color='#555555',
+                                fontweight='bold')
+                    if xerr is not None:
+                        ax.errorbar(x_val, y_val, xerr=xerr, fmt='none',
+                                    ecolor='#888888', elinewidth=1.6, capsize=4.0, capthick=1.2, zorder=4)
+
+                else:
+                    # beads1um, beads3um, beads7um, beads5um
+                    y_val = r_p['A'] / r_p['kappa_2']
+                    if xerr is not None:
+                        ax.errorbar(x_val, y_val, xerr=xerr, fmt='none',
+                                    ecolor=r_p['color'], elinewidth=1.6, capsize=4.0, capthick=1.2, zorder=4)
+                    ax.scatter(x_val, y_val,
+                               color=r_p['color'], marker=r_p['marker'], s=100, edgecolors='black',
+                               linewidths=1.2, zorder=5, label=f"{r_p['label']} ({y_val:.2f})")
+
+            ax.set_xscale('log')
+            ax.set_xlim(0.04, 3.5)
+            ax.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]", fontsize=14, labelpad=8)
+            ax.set_ylabel(r"Potential Ratio $A / \kappa_2$ [-]", fontsize=14, labelpad=8)
+            ax.tick_params(axis='both', labelsize=12)
+            ax.grid(True, which='both', linestyle=':', color='#dddddd', alpha=0.8)
+
+            # 領域の注記
+            ax.text(0.05, 0.25, r"Well Stabilized ($\Lambda < 0.385$)", fontsize=10.5, color='darkred', style='italic')
+            ax.text(0.05, 1.65, r"No Minimum ($\Lambda > 0.385$)", fontsize=10.5, color='darkblue', style='italic')
+
+            ax.legend(loc='lower left', fontsize=9.5, framealpha=0.92)
+
+            fig.tight_layout()
+            save_figure(fig, "cos_i_fitted_param_atanh_A_over_k2_vs_rc_over_xi", OUT_DIRS)
+            plt.close(fig)
+
+            # ---------------------------------------------------------
+            # 8g. サドルノード分岐パラメータ \Lambda = A / (4 * \kappa_2) vs R_c / \xi の直接プロット
+            # ---------------------------------------------------------
+            fig_lam, ax_lam = plt.subplots(figsize=(8.0, 6.2))
+            ax_lam.axvline(1.0, color='#666666', linestyle='--', linewidth=1.5, zorder=1,
+                           label=r'Crossover $R_c / \xi = 1$')
+            ax_lam.axhline(lam_crit, color='darkred', linestyle='-.', linewidth=1.8, zorder=1,
+                           label=rf'Saddle-Node Critical $\Lambda_c \approx {lam_crit:.3f}$')
+
+            y_max_lam = 1.5
+            ax_lam.set_ylim(0.0, y_max_lam)
+
+            # トレンド線
+            df_trend_lam = df_atanh_ratios[trend_mask].copy()
+            df_trend_lam['lambda'] = df_trend_lam['A'] / (4.0 * df_trend_lam['kappa_2'])
+            ax_lam.plot(df_trend_lam['rc_over_xi_mean'], df_trend_lam['lambda'],
+                        color='#333333', linestyle='-', linewidth=2.0, alpha=0.7, zorder=2)
+
+            for _, r_p in df_atanh_ratios.iterrows():
+                bname = r_p['bead_name']
+                x_val = r_p['rc_over_xi_mean']
+                x_sem = r_p['rc_over_xi_sem']
+                xerr = [x_sem] if (not np.isnan(x_sem) and x_sem > 0) else None
+
+                if bname == 'beads06um':
+                    ax_lam.scatter(x_val, y_max_lam,
+                                   color=r_p['color'], marker='^', s=120, edgecolors='black',
+                                   linewidths=1.3, zorder=6, clip_on=False,
+                                   label=f"{r_p['label']} ($\\Lambda \\to \\infty$)")
+                    ax_lam.annotate(r"$\Lambda \to \infty$" + f"\n({r_p['label']})",
+                                    xy=(x_val, y_max_lam),
+                                    xytext=(0, 14), textcoords="offset points",
+                                    ha='center', va='bottom', fontsize=10.5, color=r_p['color'],
+                                    fontweight='bold',
+                                    arrowprops=dict(arrowstyle="->", color=r_p['color'], lw=1.5))
+                    if xerr is not None:
+                        ax_lam.errorbar(x_val, y_max_lam, xerr=xerr, fmt='none',
+                                        ecolor=r_p['color'], elinewidth=1.6, capsize=4.0, capthick=1.2, zorder=4)
+
+                elif bname == 'beads20um':
+                    y_val = 0.0 # Lambda -> 0 (ref)
+                    ax_lam.scatter(x_val, y_val,
+                                   facecolors='white', edgecolors=r_p['color'], marker=r_p['marker'],
+                                   s=110, linewidths=2.0, linestyle='--', zorder=6,
+                                   label=f"{r_p['label']} (limit $\\to 0$, ref)")
+                    ax_lam.annotate(r"$\Lambda \to 0$ (ref)",
+                                    xy=(x_val, y_val), xytext=(0, 12), textcoords="offset points",
+                                    ha='center', va='bottom', fontsize=9.5, color='#555555',
+                                    fontweight='bold')
+                    if xerr is not None:
+                        ax_lam.errorbar(x_val, y_val, xerr=xerr, fmt='none',
+                                        ecolor='#888888', elinewidth=1.6, capsize=4.0, capthick=1.2, zorder=4)
+
+                else:
+                    y_val = r_p['A'] / (4.0 * r_p['kappa_2'])
+                    if xerr is not None:
+                        ax_lam.errorbar(x_val, y_val, xerr=xerr, fmt='none',
+                                        ecolor=r_p['color'], elinewidth=1.6, capsize=4.0, capthick=1.2, zorder=4)
+                    ax_lam.scatter(x_val, y_val,
+                                   color=r_p['color'], marker=r_p['marker'], s=100, edgecolors='black',
+                                   linewidths=1.2, zorder=5, label=f"{r_p['label']} ({y_val:.2f})")
+
+            ax_lam.set_xscale('log')
+            ax_lam.set_xlim(0.04, 3.5)
+            ax_lam.set_xlabel(r"Normalized Cargo Radius $R_c / \xi$ [-]", fontsize=14, labelpad=8)
+            ax_lam.set_ylabel(r"Bifurcation Parameter $\Lambda = \frac{A}{4\kappa_2}$ [-]", fontsize=14, labelpad=8)
+            ax_lam.tick_params(axis='both', labelsize=12)
+            ax_lam.grid(True, which='both', linestyle=':', color='#dddddd', alpha=0.8)
+
+            ax_lam.text(0.05, 0.10, r"Orthogonal Well Stabilized ($\Lambda < 0.385$)", fontsize=10.5, color='darkred', style='italic')
+            ax_lam.text(0.05, 0.45, r"No Orthogonal Minimum ($\Lambda > 0.385$)", fontsize=10.5, color='darkblue', style='italic')
+
+            ax_lam.legend(loc='upper right', fontsize=9.5, framealpha=0.92)
+
+            fig_lam.tight_layout()
+            save_figure(fig_lam, "cos_i_fitted_param_bifurcation_lambda_vs_rc_over_xi", OUT_DIRS)
+            plt.close(fig_lam)
+
+            # ---------------------------------------------------------
+            # 8h. 過減衰配向ダイナミクスの線形安定性解析（3 パネル統合図）
+            #     Panel (A): サドルノード分岐図 (Bifurcation Diagram: c* vs \Lambda)
+            #     Panel (B): 位相フロー場 (Phase Flow: F(c) = \Lambda/(1-c^2) - c)
+            #     Panel (C): 線形緩和率 / 臨界減速 (Linear Relaxation Rate: \lambda/(4\kappa_2) vs \Lambda)
+            # ---------------------------------------------------------
+            fig_bif, axes_bif = plt.subplots(1, 3, figsize=(18.0, 5.5))
+            ax_a, ax_b, ax_c = axes_bif
+
+            # --- 理論曲線の計算 ---
+            lam_c = 2.0 / (3.0 * np.sqrt(3.0)) # \approx 0.3849
+            lam_arr = np.linspace(0.0001, lam_c, 400)
+            arg_sin = np.clip(3.0 * np.sqrt(3.0) / 2.0 * lam_arr, -1.0, 1.0)
+
+            # 安定枝 (c_min: 0 <= c* < 1/sqrt(3))
+            psi_min = (1.0 / 3.0) * np.arcsin(arg_sin)
+            c_star_stable = (2.0 / np.sqrt(3.0)) * np.sin(psi_min)
+
+            # 不安定枝 (c_max: 1/sqrt(3) < c* < 1)
+            psi_max = (np.pi / 3.0) - (1.0 / 3.0) * np.arcsin(arg_sin)
+            c_star_unstable = (2.0 / np.sqrt(3.0)) * np.sin(psi_max)
+
+            # 線形化固有値 \lambda / (4 \kappa_2) = - (1 - 3 c*^2) / (1 - c*^2)
+            eig_stable = - (1.0 - 3.0 * c_star_stable**2) / (1.0 - c_star_stable**2)
+            eig_unstable = - (1.0 - 3.0 * c_star_unstable**2) / (1.0 - c_star_unstable**2)
+
+            # ==========================================
+            # Panel (A): サドルノード分岐図
+            # ==========================================
+            ax_a.plot(lam_arr, c_star_stable, color='#1b7837', linestyle='-', linewidth=2.5,
+                      label=r'Stable Node Branch $c_{\min}$ ($\lambda < 0$)', zorder=3)
+            ax_a.plot(lam_arr, c_star_unstable, color='#d95f02', linestyle='--', linewidth=2.2,
+                      label=r'Unstable Saddle Branch $c_{\max}$ ($\lambda > 0$)', zorder=3)
+
+            # サドルノード臨界点
+            c_crit = 1.0 / np.sqrt(3.0)
+            ax_a.scatter(lam_c, c_crit, color='crimson', marker='*', s=180, edgecolors='black',
+                         linewidths=1.2, zorder=6, label=rf'SN Bifurcation Point ($\Lambda_c \approx {lam_c:.3f}$)')
+
+            # 領域の背景色分け（弾道輸送相 vs ケージング相）
+            ax_a.axvspan(0.0, lam_c, color='#1b7837', alpha=0.07, zorder=1)
+            ax_a.axvspan(lam_c, 1.25, color='#7570b3', alpha=0.08, zorder=1)
+            ax_a.axvline(lam_c, color='crimson', linestyle=':', linewidth=1.5, zorder=2)
+
+            ax_a.text(0.12, 0.90, "Caging Phase\n(Stable Well)", fontsize=11, color='#1b7837',
+                      fontweight='bold', ha='center', va='center')
+            ax_a.text(0.75, 0.90, "Ballistic Phase\n(No Fixed Points)", fontsize=11, color='#7570b3',
+                      fontweight='bold', ha='center', va='center')
+
+            # 実験データのプロット
+            for _, r_p in df_atanh_ratios.iterrows():
+                bname = r_p['bead_name']
+                a_val = r_p['A']
+                k2_val = r_p['kappa_2']
+                lbl = r_p['label']
+                col = r_p['color']
+                mrk = r_p['marker']
+
+                if k2_val > 0.001:
+                    lam_exp = a_val / (4.0 * k2_val)
+                    if lam_exp <= lam_c:
+                        # 安定枝上の理論固定点に対応
+                        arg_e = np.clip(3.0 * np.sqrt(3.0) / 2.0 * lam_exp, -1.0, 1.0)
+                        c_e = float((2.0 / np.sqrt(3.0)) * np.sin((1.0 / 3.0) * np.arcsin(arg_e)))
+                        if bname == 'beads20um':
+                            ax_a.scatter(0.0, 0.0, facecolors='white', edgecolors=col, marker=mrk,
+                                         s=110, linewidths=2.0, linestyle='--', zorder=5, label=f"{lbl} ($\Lambda=0$, ref)")
+                        else:
+                            ax_a.scatter(lam_exp, c_e, color=col, marker=mrk, s=100, edgecolors='black',
+                                         linewidths=1.2, zorder=5, label=f"{lbl} ($\Lambda={lam_exp:.2f}$)")
+                    else:
+                        # 弾道輸送領域 (\Lambda > \Lambda_c)
+                        # 右端枠外に矢印プロット
+                        ax_a.scatter(min(lam_exp, 1.15), 0.95, color=col, marker='>', s=110, edgecolors='black',
+                                     linewidths=1.2, zorder=5, label=f"{lbl} ($\Lambda={lam_exp:.2f} > \Lambda_c$)")
+                else:
+                    # \Lambda -> \infty
+                    ax_a.scatter(1.15, 0.95, color=col, marker='>', s=110, edgecolors='black',
+                                 linewidths=1.2, zorder=5, label=f"{lbl} ($\Lambda \\to \\infty$)")
+
+            ax_a.set_xlim(-0.02, 1.25)
+            ax_a.set_ylim(-0.05, 1.05)
+            ax_a.set_xlabel(r"Control Parameter $\Lambda = \frac{\alpha}{4\kappa_2}$ [-]", fontsize=13, labelpad=8)
+            ax_a.set_ylabel(r"Fixed Point $c^* = (\mathbf{\hat{v}} \cdot \mathbf{\hat{u}})^*$ [-]", fontsize=13, labelpad=8)
+            ax_a.set_title(r"(A) Saddle-Node Bifurcation Diagram", fontsize=14, fontweight='bold', pad=10)
+            ax_a.grid(True, linestyle=':', alpha=0.7)
+            ax_a.legend(loc='lower right', fontsize=8.8, framealpha=0.92)
+
+            # ==========================================
+            # Panel (B): 位相フロー場とベクトル場
+            # ==========================================
+            c_flow = np.linspace(-0.95, 0.95, 500)
+            denom_flow = 1.0 - c_flow**2
+            ax_b.axhline(0.0, color='#666666', linestyle='-', linewidth=1.2, zorder=2)
+            ax_b.axvline(0.0, color='#aaaaaa', linestyle=':', linewidth=1.0, zorder=1)
+
+            # 代表的な \Lambda のフロー曲線
+            flow_configs = [
+                (0.0, '#2b83ba', '-', r'$\Lambda = 0.0$ (Symmetric)'),
+                (0.2, '#1b7837', '-', r'$\Lambda = 0.2 < \Lambda_c$ (Caging)'),
+                (lam_c, '#fdae61', '-.', rf'$\Lambda = \Lambda_c \approx {lam_c:.3f}$ (Critical)'),
+                (0.6, '#7570b3', '--', r'$\Lambda = 0.6 > \Lambda_c$ (Ballistic)'),
+            ]
+
+            for l_val, c_color, l_style, l_label in flow_configs:
+                f_val = (l_val / denom_flow) - c_flow
+                ax_b.plot(c_flow, f_val, color=c_color, linestyle=l_style, linewidth=2.0, label=l_label, zorder=3)
+
+                # 固定点のマーカー
+                if l_val <= lam_c:
+                    arg_l = np.clip(3.0 * np.sqrt(3.0) / 2.0 * l_val, -1.0, 1.0)
+                    cs_stab = (2.0 / np.sqrt(3.0)) * np.sin((1.0 / 3.0) * np.arcsin(arg_l))
+                    ax_b.scatter(cs_stab, 0.0, color=c_color, marker='o', s=60, edgecolors='black', zorder=5)
+
+                    if l_val > 0.001 and l_val < lam_c:
+                        cs_unstab = (2.0 / np.sqrt(3.0)) * np.sin((np.pi / 3.0) - (1.0 / 3.0) * np.arcsin(arg_l))
+                        ax_b.scatter(cs_unstab, 0.0, facecolors='none', edgecolors=c_color, marker='o', s=60, linewidths=1.5, zorder=5)
+
+            # フロー方向の矢印 (\Lambda = 0.2 のケージング領域を代表としてゼロ線 y=0 付近に配置)
+            # 安定固定点 c_s \approx 0.21, 不安定固定点 c_u \approx 0.88
+            # 区間 1 (c < 0.21): F > 0 -> 右向き (->)
+            # 区間 2 (0.21 < c < 0.88): F < 0 -> 左向き (<-) (安定ノードへ引き戻される復元フロー)
+            # 区間 3 (c > 0.88): F > 0 -> 右向き (->) (境界 c=1 への脱出フロー)
+            y_arr = -0.1 # ゼロ線上にフローの矢印を描画
+            # 区間 1: c < 0.21 (右向き)
+            ax_b.annotate('', xy=(-0.35, y_arr), xytext=(-0.55, y_arr),
+                          arrowprops=dict(arrowstyle="->", color='#1b7837', lw=2.0))
+            ax_b.annotate('', xy=(0.05, y_arr), xytext=(-0.15, y_arr),
+                          arrowprops=dict(arrowstyle="->", color='#1b7837', lw=2.0))
+            # 区間 2: 0.21 < c < 0.88 (左向き)
+            ax_b.annotate('', xy=(0.35, y_arr), xytext=(0.55, y_arr),
+                          arrowprops=dict(arrowstyle="->", color='#1b7837', lw=2.0))
+            ax_b.annotate('', xy=(0.65, y_arr), xytext=(0.80, y_arr),
+                          arrowprops=dict(arrowstyle="->", color='#1b7837', lw=2.0))
+            # 区間 3: c > 0.88 (右向き)
+            ax_b.annotate('', xy=(0.94, y_arr), xytext=(0.90, y_arr),
+                          arrowprops=dict(arrowstyle="->", color='#d95f02', lw=2.0))
+
+            ax_b.set_xlim(-0.95, 0.95)
+            ax_b.set_ylim(-1.5, 2.5)
+            ax_b.set_xlabel(r"Orientation State $c = \mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$ [-]", fontsize=13, labelpad=8)
+            ax_b.set_ylabel(r"Effective Phase Velocity $F(c; \Lambda) = \frac{1}{4\kappa_2D_r^\mathrm{eff}} \dot{c}$ [-]", fontsize=13, labelpad=8)
+            ax_b.set_title(r"(B) Phase Flow Field $F(c; \Lambda)$", fontsize=14, fontweight='bold', pad=10)
+            ax_b.grid(True, linestyle=':', alpha=0.7)
+            ax_b.legend(loc='upper left', fontsize=9.2, framealpha=0.92)
+
+            # ==========================================
+            # Panel (C): 線形緩和率と臨界減速
+            # ==========================================
+            ax_c.plot(lam_arr, eig_stable, color='#1b7837', linestyle='-', linewidth=2.5,
+                      label=r'Stable Node $\lambda_{\min} / (4\kappa_2D_r^\mathrm{eff}) \leq 0$', zorder=3)
+            ax_c.axhline(0.0, color='gray', linestyle=':', linewidth=1.2, zorder=2)
+            ax_c.axvline(lam_c, color='crimson', linestyle=':', linewidth=1.5, zorder=2)
+
+            # 臨界減速の注記
+            ax_c.scatter(lam_c, 0.0, color='crimson', marker='*', s=180, edgecolors='black',
+                         linewidths=1.2, zorder=6, label=rf'Critical Slowing Down ($\lambda \to 0$)')
+            ax_c.annotate(r"Critical Slowing Down" + "\n" + r"($\lambda \to 0$ as $\Lambda \to \Lambda_c$)",
+                          xy=(lam_c, 0.0), xytext=(lam_c - 0.15, -0.35),
+                          ha='center', va='top', fontsize=9.5, color='crimson', fontweight='bold',
+                          arrowprops=dict(arrowstyle="->", color='crimson', lw=1.5))
+
+            # 実験データの固有値プロット
+            for _, r_p in df_atanh_ratios.iterrows():
+                bname = r_p['bead_name']
+                a_val = r_p['A']
+                k2_val = r_p['kappa_2']
+                lbl = r_p['label']
+                col = r_p['color']
+                mrk = r_p['marker']
+
+                if k2_val > 0.001:
+                    lam_exp = a_val / (4.0 * k2_val)
+                    if lam_exp <= lam_c:
+                        arg_e = np.clip(3.0 * np.sqrt(3.0) / 2.0 * lam_exp, -1.0, 1.0)
+                        c_e = float((2.0 / np.sqrt(3.0)) * np.sin((1.0 / 3.0) * np.arcsin(arg_e)))
+                        eig_e = - (1.0 - 3.0 * c_e**2) / (1.0 - c_e**2)
+                        if bname == 'beads20um':
+                            ax_c.scatter(0.0, -1.0, facecolors='white',
+                                         edgecolors=col, marker=mrk, s=110, linewidths=2.0, linestyle='--',
+                                         zorder=5, label=f"{lbl} ($\Lambda=0$, ref)")
+                        else:
+                            ax_c.scatter(lam_exp, eig_e, color=col, marker=mrk, s=100, edgecolors='black',
+                                         linewidths=1.2, zorder=5, label=f"{lbl} ($\lambda={eig_e:.2f}$)")
+
+            ax_c.set_xlim(-0.02, 0.45)
+            ax_c.set_ylim(-1.05, 0.15)
+            ax_c.set_xlabel(r"Control Parameter $\Lambda = \frac{\alpha}{4\kappa_2}$ [-]", fontsize=13, labelpad=8)
+            ax_c.set_ylabel(r"Dimensionless Relaxation Rate $\lambda / (4\kappa_2D_r^\mathrm{eff})$ [-]", fontsize=13, labelpad=8)
+            ax_c.set_title(r"(C) Linear Relaxation Rate & Critical Slowing", fontsize=14, fontweight='bold', pad=10)
+            ax_c.grid(True, linestyle=':', alpha=0.7)
+            ax_c.legend(loc='lower left', fontsize=9.0, framealpha=0.92)
+
+            fig_bif.suptitle(r'Nonlinear Orientation Dynamics & Saddle-Node Bifurcation Analysis',
+                             fontsize=16, y=0.99)
+            fig_bif.tight_layout(rect=[0, 0, 1, 0.95])
+            save_figure(fig_bif, "cos_i_saddle_node_bifurcation_phase_dynamics_3panels", OUT_DIRS)
+            plt.close(fig_bif)
+
+            # ---------------------------------------------------------
+            # 8i. 1次+2次打ち切りモデル vs ハイブリッドモデルの分岐トポロジー直接比較
+            #     - 打ち切りモデル: \tilde{U}(c) = -\kappa_1 c + 2\kappa_2 c^2 -> c* = \Lambda (分岐なし・非有界)
+            #     - ハイブリッドモデル: \tilde{U}(c) = -\alpha \operatorname{arctanh}(c) + 2\kappa_2 c^2
+            #                         -> c*(1 - c*^2) = \Lambda (サドルノード分岐 \Lambda_c \approx 0.385, 有界 |c|<1)
+            # ---------------------------------------------------------
+            fig_comp, axes_comp = plt.subplots(1, 3, figsize=(18.0, 5.5))
+            ax_cp1, ax_cp2, ax_cp3 = axes_comp
+
+            # Panel 1: 分岐ダイアグラムの直接比較 (c* vs \Lambda)
+            lam_full = np.linspace(0.0, 1.2, 500)
+            # 打ち切りモデル: c* = \Lambda (線形、分岐なし、物理的境界 c=1 を突き破る)
+            ax_cp1.plot(lam_full, lam_full, color='#444444', linestyle=':', linewidth=2.2,
+                        label=r'Truncated Linear: $c^* = \Lambda$ (No Bifurcation, Unbounded)', zorder=2)
+            # 物理的上限 c = 1
+            ax_cp1.axhline(1.0, color='gray', linestyle='--', linewidth=1.2, alpha=0.8,
+                           label=r'Physical Boundary $c = 1$')
+
+            # ハイブリッドモデル: 安定枝 & 不安定枝
+            ax_cp1.plot(lam_arr, c_star_stable, color='#1b7837', linestyle='-', linewidth=2.5,
+                        label=r'Hybrid: Stable Node $c_{\min}^*$ ($\Lambda \leq \Lambda_c$)', zorder=3)
+            ax_cp1.plot(lam_arr, c_star_unstable, color='#d95f02', linestyle='--', linewidth=2.2,
+                        label=r'Hybrid: Unstable Saddle $c_{\max}^*$', zorder=3)
+            ax_cp1.scatter(lam_c, c_crit, color='crimson', marker='*', s=160, edgecolors='black',
+                           linewidths=1.2, zorder=6, label=rf'Saddle-Node Point ($\Lambda_c \approx {lam_c:.3f}$)')
+
+            ax_cp1.axvline(lam_c, color='crimson', linestyle=':', linewidth=1.5, zorder=1)
+            ax_cp1.axvspan(lam_c, 1.25, color='#7570b3', alpha=0.08, zorder=1)
+            ax_cp1.text(0.75, 0.45, "Ballistic Phase\n(No Fixed Points\nin Hybrid Model)",
+                        fontsize=10.5, color='#7570b3', fontweight='bold', ha='center', va='center')
+
+            # 実験データの配置
+            for _, r_p in df_atanh_ratios.iterrows():
+                bname = r_p['bead_name']
+                a_val = r_p['A']
+                k2_val = r_p['kappa_2']
+                lbl = r_p['label']
+                col = r_p['color']
+                mrk = r_p['marker']
+                if k2_val > 0.001:
+                    lam_exp = a_val / (4.0 * k2_val)
+                    if lam_exp <= lam_c:
+                        arg_e = np.clip(3.0 * np.sqrt(3.0) / 2.0 * lam_exp, -1.0, 1.0)
+                        c_e = float((2.0 / np.sqrt(3.0)) * np.sin((1.0 / 3.0) * np.arcsin(arg_e)))
+                        if bname == 'beads20um':
+                            ax_cp1.scatter(0.0, 0.0, facecolors='white', edgecolors=col, marker=mrk,
+                                           s=110, linewidths=2.0, linestyle='--', zorder=5, label=f"{lbl} ($\Lambda=0$, ref)")
+                        else:
+                            ax_cp1.scatter(lam_exp, c_e, color=col, marker=mrk, s=100, edgecolors='black',
+                                           linewidths=1.2, zorder=5, label=f"{lbl} ($\Lambda={lam_exp:.2f}$)")
+                    else:
+                        ax_cp1.scatter(min(lam_exp, 1.15), 0.95, color=col, marker='>', s=110, edgecolors='black',
+                                       linewidths=1.2, zorder=5, label=f"{lbl} ($\Lambda={lam_exp:.2f} > \Lambda_c$)")
+                else:
+                    ax_cp1.scatter(1.15, 0.95, color=col, marker='>', s=110, edgecolors='black',
+                                   linewidths=1.2, zorder=5, label=f"{lbl} ($\Lambda \\to \\infty$)")
+
+            ax_cp1.set_xlim(-0.02, 1.2)
+            ax_cp1.set_ylim(-0.05, 1.25)
+            ax_cp1.set_xlabel(r"Control Parameter $\Lambda = \frac{\alpha}{4\kappa_2}$ [-]", fontsize=13, labelpad=8)
+            ax_cp1.set_ylabel(r"Fixed Point $c^*$ [-]", fontsize=13, labelpad=8)
+            ax_cp1.set_title(r"(A) Bifurcation Topology Comparison", fontsize=14, fontweight='bold', pad=10)
+            ax_cp1.grid(True, linestyle=':', alpha=0.7)
+            ax_cp1.legend(loc='upper left', fontsize=8.2, framealpha=0.92)
+
+            # Panel 2: 有効ポテンシャル形状の比較 (\Lambda = 0.2 の場合)
+            c_pot = np.linspace(-0.95, 0.95, 400)
+            lam_sample = 0.2
+            # 規格化ポテンシャル (4 \kappa_2 で除算した形状)
+            # 打ち切り: \tilde{U}_trunc / (4\kappa_2) = - \Lambda * c + 0.5 * c^2
+            # ハイブリッド: \tilde{U}_hybrid / (4\kappa_2) = - \Lambda * arctanh(c) + 0.5 * c^2
+            u_trunc_sample = - lam_sample * c_pot + 0.5 * (c_pot**2)
+            u_hyb_sample = - lam_sample * np.arctanh(c_pot) + 0.5 * (c_pot**2)
+
+            ax_cp2.plot(c_pot, u_trunc_sample, color='#444444', linestyle=':', linewidth=2.2,
+                        label=r'Truncated: $-\Lambda c + \frac{1}{2} c^2$ (Parabolic Well)', zorder=2)
+            ax_cp2.plot(c_pot, u_hyb_sample, color='#1b7837', linestyle='-', linewidth=2.5,
+                        label=r'Hybrid: $-\Lambda \operatorname{arctanh}(c) + \frac{1}{2} c^2$', zorder=3)
+
+            # 極小・極大のマーカー
+            c_min_trunc = lam_sample
+            u_min_trunc = - lam_sample * c_min_trunc + 0.5 * (c_min_trunc**2)
+            ax_cp2.scatter(c_min_trunc, u_min_trunc, color='#444444', marker='s', s=80, edgecolors='black',
+                           zorder=5, label=rf'Truncated Min ($c^*={c_min_trunc:.2f}$)')
+
+            arg_s = 3.0 * np.sqrt(3.0) / 2.0 * lam_sample
+            c_min_h = (2.0 / np.sqrt(3.0)) * np.sin((1.0 / 3.0) * np.arcsin(arg_s))
+            u_min_h = - lam_sample * np.arctanh(c_min_h) + 0.5 * (c_min_h**2)
+            ax_cp2.scatter(c_min_h, u_min_h, color='#1b7837', marker='o', s=80, edgecolors='black',
+                           zorder=5, label=r'Hybrid Stable Well ($c_{\mathrm{min}}^*=' + f'{c_min_h:.2f}' + r'$)')
+
+            c_max_h = (2.0 / np.sqrt(3.0)) * np.sin((np.pi / 3.0) - (1.0 / 3.0) * np.arcsin(arg_s))
+            u_max_h = - lam_sample * np.arctanh(c_max_h) + 0.5 * (c_max_h**2)
+            ax_cp2.scatter(c_max_h, u_max_h, color='#d95f02', marker='^', s=80, edgecolors='black',
+                           zorder=5, label=r'Hybrid Barrier Peak ($c_{\mathrm{max}}^*=' + f'{c_max_h:.2f}' + r'$)')
+
+            ax_cp2.set_xlim(-1.0, 1.0)
+            ax_cp2.set_ylim(-0.45, 0.75)
+            ax_cp2.set_xlabel(r"Orientation State $c = \mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$ [-]", fontsize=13, labelpad=8)
+            ax_cp2.set_ylabel(r"Reduced Potential $\tilde{U}(c) / (4\kappa_2)$ [-]", fontsize=13, labelpad=8)
+            ax_cp2.set_title(rf"(B) Potential Landscape at $\Lambda = {lam_sample}$", fontsize=14, fontweight='bold', pad=10)
+            ax_cp2.grid(True, linestyle=':', alpha=0.7)
+            ax_cp2.legend(loc='upper center', fontsize=8.8, framealpha=0.92)
+
+            # Panel 3: 位相速度 F(c) の比較 (\Lambda = 0.2 & \Lambda = 0.5)
+            denom_cp = 1.0 - c_pot**2
+            ax_cp3.axhline(0.0, color='#666666', linestyle='-', linewidth=1.2, zorder=2)
+            # \Lambda = 0.2
+            f_trunc_02 = lam_sample - c_pot
+            f_hyb_02 = (lam_sample / denom_cp) - c_pot
+            ax_cp3.plot(c_pot, f_trunc_02, color='#444444', linestyle=':', linewidth=2.0,
+                        label=r'Truncated ($\Lambda = 0.2$): $\Lambda - c$', zorder=2)
+            ax_cp3.plot(c_pot, f_hyb_02, color='#1b7837', linestyle='-', linewidth=2.2,
+                        label=r'Hybrid ($\Lambda = 0.2$): $\frac{\Lambda}{1-c^2} - c$', zorder=3)
+
+            # \Lambda = 0.5 > \Lambda_c (弾道輸送領域)
+            lam_high = 0.5
+            f_trunc_05 = lam_high - c_pot
+            f_hyb_05 = (lam_high / denom_cp) - c_pot
+            ax_cp3.plot(c_pot, f_trunc_05, color='#888888', linestyle=':', linewidth=1.8,
+                        label=r'Truncated ($\Lambda = 0.5$): Fixed point at $c=0.5$', zorder=2)
+            ax_cp3.plot(c_pot, f_hyb_05, color='#7570b3', linestyle='--', linewidth=2.2,
+                        label=r'Hybrid ($\Lambda = 0.5$): No Fixed Point (All $\dot{c} > 0$)', zorder=3)
+
+            ax_cp3.set_xlim(-0.95, 0.95)
+            ax_cp3.set_ylim(-1.5, 2.5)
+            ax_cp3.set_xlabel(r"Orientation State $c = \mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$ [-]", fontsize=13, labelpad=8)
+            ax_cp3.set_ylabel(r"Phase Velocity $F(c; \Lambda) = \frac{1}{4\kappa_2D_r^\mathrm{eff}} \dot{c}$ [-]", fontsize=13, labelpad=8)
+            ax_cp3.set_title(r"(C) Phase Velocity: Caging vs Ballistic Escape", fontsize=14, fontweight='bold', pad=10)
+            ax_cp3.grid(True, linestyle=':', alpha=0.7)
+            ax_cp3.legend(loc='upper left', fontsize=8.5, framealpha=0.92)
+
+            fig_comp.suptitle(r'Bifurcation Topology: Truncated Linear-Quadratic vs Hybrid Arctanh Model',
+                              fontsize=16, y=0.99)
+            fig_comp.tight_layout(rect=[0, 0, 1, 0.95])
+            save_figure(fig_comp, "cos_i_model_topology_comparison_truncated_vs_hybrid_3panels", OUT_DIRS)
+            plt.close(fig_comp)
+
     # -------------------------------------------------------------
     # 9. 貨物粒子単位の歪度 \gamma_{1, i} およびその平均 <\gamma_1> の算出と可視化
     #    1. 貨物 i の全ピクセルデータ（各フレーム）から通常の平均 mu_i, 標準偏差 sigma_i, 歪度 \gamma_{1, i} を計算
