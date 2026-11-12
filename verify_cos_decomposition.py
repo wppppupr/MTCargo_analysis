@@ -2218,7 +2218,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             ax.set_title(rf"{lbl}", fontsize=14, fontweight='bold')
             ax.set_xlabel(r"Directional Coupling $c = \mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=13)
             if idx % 3 == 0:
-                ax.set_ylabel(r"Effective Potential $\tilde{U}_{\mathrm{eff}}(c)$ [$\zeta_r D_r^{\mathrm{eff}}$]", fontsize=13)
+                ax.set_ylabel(r"Effective Potential $\tilde{U}_{\mathrm{eff}}(c)$", fontsize=13)
             ax.grid(True, linestyle=':', alpha=0.6)
             ax.legend(loc='upper center', fontsize=9.2, framealpha=0.92)
 
@@ -2251,7 +2251,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
         ax.set_xlim(-1.02, 1.02)
         ax.set_ylim(-2.5, 3.5)
         ax.set_xlabel(r"Directional Coupling $c = \mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=14, labelpad=8)
-        ax.set_ylabel(r"Effective Potential $\tilde{U}_{\mathrm{eff}}(c)$ [$\zeta_r D_r^{\mathrm{eff}}$]", fontsize=14, labelpad=8)
+        ax.set_ylabel(r"Effective Potential $\tilde{U}_{\mathrm{eff}}(c)$", fontsize=14, labelpad=8)
         ax.set_title(r"Effective Orientation Potential $\tilde{U}_{\mathrm{eff}}(c)$ across Cargo Sizes",
                      fontsize=15, fontweight='bold', pad=12)
         ax.grid(True, linestyle=':', alpha=0.7)
@@ -2326,7 +2326,7 @@ def analyze_and_plot(df_instant: pd.DataFrame, df_window: pd.DataFrame, xi_dict:
             ax.set_title(rf"{lbl}", fontsize=14, fontweight='bold')
             ax.set_xlabel(r"Directional Coupling $c = \mathbf{\hat{v}} \cdot \mathbf{\hat{u}}$", fontsize=13)
             if idx % 3 == 0:
-                ax.set_ylabel(r"Effective Potential $\tilde{U}_{\mathrm{eff}}(c)$ [$\zeta_r D_r^{\mathrm{eff}}$]", fontsize=13)
+                ax.set_ylabel(r"Effective Potential $\tilde{U}_{\mathrm{eff}}(c)$", fontsize=13)
             ax.grid(True, linestyle=':', alpha=0.6)
             ax.legend(loc='upper center', fontsize=9.2, framealpha=0.92)
 
