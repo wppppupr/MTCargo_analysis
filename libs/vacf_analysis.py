@@ -49,6 +49,83 @@ BEADS_INFO = [
     {"name": "beads20um", "diameter_um": 20.0, "marker": "s", "label": "20.0 μm", "color": style_colors[5]},
 ]
 
+MODE_SHORT_LABELS = {
+    'velocity': 'VACF',
+    'orientation': 'OACF',
+    'speed': 'SACF',
+    'velocity_fluctuation': 'Vel. fluc.',
+    'speed_fluctuation': 'Speed fluc.',
+    'angle_change': 'Angle change',
+    'angle_change_fluctuation': 'Angle fluc.',
+}
+
+MODE_MARKERS = ['o', '^', 's', 'd', 'v', 'P', 'X']
+
+
+def _get_ylim(mode_str, normalize, yscale, log_ymin=1e-1):
+    """Return y-axis limits consistent with mode, normalization, and yscale."""
+    is_bounded = normalize or mode_str == 'orientation'
+    if yscale == 'linear':
+        return (-0.3, 1.05) if is_bounded else None
+    if yscale == 'log' and is_bounded:
+        return (log_ymin, 1.05)
+    return None
+
+
+def _save_figure_pair(fig, out_dir, stem):
+    """Save figure as both SVG and 300-dpi PNG, then close it."""
+    save_svg = out_dir / f"{stem}.svg"
+    save_png = out_dir / f"{stem}.png"
+    fig.savefig(save_svg, bbox_inches='tight')
+    fig.savefig(save_png, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    return save_svg, save_png
+
+
+DEFAULT_UINF_CACHE = parent_dir / 'scratch' / 'u_inf_per_frame_cache.pkl'
+
+
+def load_u_inf_map(uinf_cache_path=None, root_dir=None):
+    """
+    各実験ディレクトリ名 (exp_dir) をキーとして、フレームごとの遠方流速 u_inf(t) [μm/s]
+    (DataFrame['frame', 'u_inf_t'] または定数 float) を格納した辞書を返す。
+    """
+    candidates = []
+    if uinf_cache_path is not None:
+        candidates.append(Path(uinf_cache_path))
+    else:
+        candidates.append(DEFAULT_UINF_CACHE)
+        if root_dir is not None:
+            candidates.append(Path(root_dir) / 'scratch' / 'u_inf_per_frame_cache.pkl')
+
+    for p in candidates:
+        if p.exists():
+            df_u = pd.read_pickle(p)
+            if {'exp_dir', 'frame', 'u_inf_t'}.issubset(df_u.columns):
+                u_map = {
+                    str(exp_name): grp[['frame', 'u_inf_t']].sort_values('frame').reset_index(drop=True)
+                    for exp_name, grp in df_u.groupby('exp_dir')
+                }
+                return u_map, p
+
+    # フォールバック: cargo_flow_profile_extended_cache.pkl の動画平均 u_inf
+    ext_candidates = [parent_dir / 'scratch' / 'cargo_flow_profile_extended_cache.pkl']
+    if root_dir is not None:
+        ext_candidates.append(Path(root_dir) / 'scratch' / 'cargo_flow_profile_extended_cache.pkl')
+    for p in ext_candidates:
+        if p.exists():
+            df_ext = pd.read_pickle(p)
+            if {'exp_dir', 'u_inf'}.issubset(df_ext.columns):
+                u_map = {}
+                for _, row in df_ext.iterrows():
+                    val = float(row['u_inf'])
+                    if np.isfinite(val) and val > 0:
+                        u_map[Path(str(row['exp_dir'])).name] = val
+                if u_map:
+                    return u_map, p
+
+    return {}, None
+
 POSSIBLE_ROOTS = [
     Path('/Volumes/data-1/Sasaki/MTsingleBeads'),
     Path('/Volumes/data-1/sasaki/MTsingleBeads'),
@@ -71,20 +148,18 @@ def find_default_root():
     return POSSIBLE_ROOTS[0]
 
 
-def exp_decay_model(t, A, tau, C=0.0, t0=4.0):
+def exp_decay_model(t, A_slow, tau_slow):
     """
-    自己相関関数の正のテール領域フィッティングモデル（オフセット定数 C 付き）:
-    f(Δt) = A * exp(-(Δt - t0) / tau) + C  (Δt >= t0)
-    Δt = t0 (実測第1フレーム、デフォルト 4.0s) で f(t0) = A + C となる。
+    自己相関関数の遅い緩和テール領域フィッティングモデル:
+    C(τ) = A_slow * exp(-τ / tau_slow)  (τ >= 8 s)
     """
-    return A * np.exp(-(t - t0) / tau) + C
+    return A_slow * np.exp(-t / tau_slow)
 
 
-def fit_acf_curve(x_data, y_data, y_err=None, t0=4.0, p0=None, bounds=((-2.0, 1e-4, 0.0), (5.0, 10000.0, 2.0))):
+def fit_acf_curve(x_data, y_data, y_err=None, t0=8.0, p0=None, bounds=((0.0, 1e-4), (5.0, 10000.0))):
     """
-    自己相関関数の正のテール領域 (Δt >= t0) に対して
-    f(Δt) = A * exp(-(Δt - t0) / tau) + C をフィッティングする。
-    Δt = 0 の点を除外し、実測の第1フレーム (Δt >= t0) 以降の正のテール領域のみを対象とする。
+    自己相関関数の正のテール領域 (τ >= t0, 既定 8.0 s) に対して
+    C(τ) = A_slow * exp(-τ / tau_slow) をフィッティングする。
     """
     x = np.asarray(x_data, dtype=float)
     y = np.asarray(y_data, dtype=float)
@@ -95,7 +170,7 @@ def fit_acf_curve(x_data, y_data, y_err=None, t0=4.0, p0=None, bounds=((-2.0, 1e
     if len(x_cand) < 3:
         return None
 
-    # 実測第1フレーム(Δt >= t0)以降の正のテール領域（連続して正の値をとる範囲）を抽出
+    # τ >= t0 以降の正のテール領域（連続して正の値をとる範囲）を抽出
     pos_len = 0
     for v in y_cand:
         if v > 0:
@@ -116,26 +191,12 @@ def fit_acf_curve(x_data, y_data, y_err=None, t0=4.0, p0=None, bounds=((-2.0, 1e
             sigma = err
 
     try:
-        # 初期値の設定:
-        # C_init: 末尾の値（漸近オフセット推定）
-        # A_init: 先頭(Δt=t0)の値とC_initの差
-        # tau_init: 10.0s
-        C_init = float(np.clip(y_fit[-1], -0.5, 0.9))
-        A_init = float(y_fit[0] - C_init)
-        if abs(A_init) < 1e-3:
-            A_init = 1e-2
-        tau_init = 10.0
-
-        if p0 is not None:
-            p0_init = p0
-        else:
-            p0_init = [A_init, tau_init, C_init]
-
-        def _model(t, A, tau, C):
-            return exp_decay_model(t, A, tau, C=C, t0=t0)
+        tau_init = 20.0
+        A_init = float(np.clip(y_fit[0] * np.exp(x_fit[0] / tau_init), 1e-3, 5.0))
+        p0_init = p0 if p0 is not None else [A_init, tau_init]
 
         popt, pcov = curve_fit(
-            _model,
+            exp_decay_model,
             x_fit,
             y_fit,
             p0=p0_init,
@@ -143,18 +204,18 @@ def fit_acf_curve(x_data, y_data, y_err=None, t0=4.0, p0=None, bounds=((-2.0, 1e
             sigma=sigma,
             maxfev=10000
         )
-        A_fit, tau_fit, C_fit = popt
-        perr = np.sqrt(np.diag(pcov)) if pcov is not None else [0.0, 0.0, 0.0]
+        A_fit, tau_fit = popt
+        perr = np.sqrt(np.diag(pcov)) if pcov is not None else [0.0, 0.0]
 
         # 決定係数 R^2
-        y_pred = _model(x_fit, *popt)
+        y_pred = exp_decay_model(x_fit, *popt)
         ss_res = np.sum((y_fit - y_pred) ** 2)
         ss_tot = np.sum((y_fit - np.mean(y_fit)) ** 2)
         r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
 
         # プロット用評価点: t0 から x_fit の最大値まで
         x_fit_eval = np.linspace(t0, np.max(x_fit), 200)
-        y_fit_eval = _model(x_fit_eval, *popt)
+        y_fit_eval = exp_decay_model(x_fit_eval, *popt)
 
         # 積分相関時間 (Integral correlation time) の計算: Δt=0 から zero-crossing まで
         # x, y の有効データ全体を利用
@@ -185,13 +246,15 @@ def fit_acf_curve(x_data, y_data, y_err=None, t0=4.0, p0=None, bounds=((-2.0, 1e
         return {
             'A': float(A_fit),
             'A_err': float(perr[0]),
+            'A_slow': float(A_fit),
             'tau': float(tau_fit),
             'tau_err': float(perr[1]),
+            'tau_slow': float(tau_fit),
             'tau_int': float(tau_int),
-            'C': float(C_fit),
-            'C_err': float(perr[2]),
-            'offset': float(C_fit),     # 互換用エイリアス
-            'offset_err': float(perr[2]),
+            'C': 0.0,
+            'C_err': 0.0,
+            'offset': 0.0,              # 互換用エイリアス
+            'offset_err': 0.0,
             'xi': float(tau_fit),       # 互換用エイリアス
             'xi_err': float(perr[1]),   # 互換用エイリアス
             't0': float(t0),
@@ -206,9 +269,10 @@ def fit_acf_curve(x_data, y_data, y_err=None, t0=4.0, p0=None, bounds=((-2.0, 1e
 
 
 def vacf_plot(track_path, max_timeshift_frames=50, frame_interval=4.0, scale=0.11,
-              mode='velocity', normalize=True, display=False, ax=None):
+              mode='velocity', normalize=True, display=False, ax=None, u_inf=None):
     """
     1つの実験データ(beads_tracks.csv)から自己相関関数を計算する。
+    u_inf が指定された場合は v_hat(t) = v(t) / u_inf(t) として計算する。
     """
     track_df = pd.read_csv(track_path)
 
@@ -220,7 +284,8 @@ def vacf_plot(track_path, max_timeshift_frames=50, frame_interval=4.0, scale=0.1
         mode=mode,
         normalize=normalize,
         display=display,
-        ax=ax
+        ax=ax,
+        u_inf=u_inf
     )
 
     EVACF, EVACF_err = vacf.evacf(
@@ -228,14 +293,15 @@ def vacf_plot(track_path, max_timeshift_frames=50, frame_interval=4.0, scale=0.1
         mode=mode,
         normalize=normalize,
         display=False,
-        ax=ax
+        ax=ax,
+        u_inf_normalized=(u_inf is not None)
     )
 
     return IVACF, EVACF, EVACF_err
 
 
 def vacf_dir(directory, max_timeshift_frames=50, frame_interval=4.0, scale=0.11,
-             mode='velocity', normalize=True):
+             mode='velocity', normalize=True, u_inf_map=None):
     """
     指定ビーズディレクトリ以下の全実験データについて自己相関を計算し、
     実験ごとの結果を結合したDataFrameを返す。
@@ -252,6 +318,11 @@ def vacf_dir(directory, max_timeshift_frames=50, frame_interval=4.0, scale=0.11,
 
     for i, input_dir in enumerate(exp_dirs):
         track_path = input_dir / "beads_tracks.csv"
+        u_inf_exp = None
+        if u_inf_map is not None:
+            u_inf_exp = u_inf_map.get(input_dir.name)
+            if u_inf_exp is None:
+                print(f"  [WARNING] u_inf(t) が見つかりません ({input_dir.name}); 非規格化速度を使用します。", flush=True)
         try:
             ivacf, evacf_s, evacf_err = vacf_plot(
                 track_path,
@@ -260,7 +331,8 @@ def vacf_dir(directory, max_timeshift_frames=50, frame_interval=4.0, scale=0.11,
                 scale=scale,
                 mode=mode,
                 normalize=normalize,
-                display=False
+                display=False,
+                u_inf=u_inf_exp
             )
             df = pd.DataFrame({
                 "exp": i,
@@ -281,7 +353,7 @@ def vacf_dir(directory, max_timeshift_frames=50, frame_interval=4.0, scale=0.11,
 
 def run_all_beads_analysis(root_dir, out_dir=None, modes=None, max_timeshift_frames=50,
                            frame_interval=4.0, scale=0.11, normalize=True, xlim=(0, 30),
-                           yscale='linear', fit=False):
+                           yscale='linear', fit=False, use_u_inf=True, uinf_cache=None):
     """
     全ビーズサイズ・全モードについて自己相関関数を一括計算し、個別図・比較図・CSVを出力する。
     """
@@ -312,6 +384,16 @@ def run_all_beads_analysis(root_dir, out_dir=None, modes=None, max_timeshift_fra
         out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
+    u_inf_map = None
+    u_inf_source = None
+    if use_u_inf:
+        loaded_map, u_inf_source = load_u_inf_map(uinf_cache_path=uinf_cache, root_dir=root)
+        if loaded_map:
+            u_inf_map = loaded_map
+        else:
+            print("[WARNING] u_inf(t) キャッシュが見つからないため、生の速度 v(t) を使用します。")
+    u_inf_normalized = (u_inf_map is not None)
+
     all_mode_results = {}
     all_fit_results = []
 
@@ -320,9 +402,13 @@ def run_all_beads_analysis(root_dir, out_dir=None, modes=None, max_timeshift_fra
     print(f"ルートディレクトリ: {root}")
     print(f"出力先ディレクトリ: {out}")
     print(f"解析モード: {modes}")
+    if u_inf_normalized:
+        print(f"速度正規化: v_hat(t) = v(t) / u_inf(t) (参照元: {u_inf_source})")
+    else:
+        print(f"速度正規化: なし (生の速度 v(t) [um/s])")
     print(f"パラメータ: max_lag={max_timeshift_frames} frames, interval={frame_interval}s, scale={scale} um/px, yscale={yscale}, fit={fit}")
     if fit:
-        print(f"フィッティングモデル: f(Δt) = A * exp(-(Δt - {frame_interval}) / tau) + C  (Δt >= {frame_interval}s)")
+        print(f"フィッティングモデル: C(τ) = A_slow * exp(-τ / τ_slow)  (τ >= 8.0s)")
     print(f"{'='*70}\n")
 
     for mode in modes:
@@ -347,7 +433,8 @@ def run_all_beads_analysis(root_dir, out_dir=None, modes=None, max_timeshift_fra
                 frame_interval=frame_interval,
                 scale=scale,
                 mode=mode_str,
-                normalize=normalize
+                normalize=normalize,
+                u_inf_map=u_inf_map
             )
 
             if evacf_df.empty:
@@ -359,30 +446,28 @@ def run_all_beads_analysis(root_dir, out_dir=None, modes=None, max_timeshift_fra
             evacf_std = evacf_df.groupby('lag time')['VACF'].std().fillna(0.0)
             n_exps = evacf_df['exp'].nunique()
 
-            # 指数減衰フィッティング (Δt >= frame_interval の正のテール領域)
+            # 指数減衰フィッティング (τ >= 8.0s の正のテール領域)
             fit_res = None
             if fit and normalize:
                 fit_res = fit_acf_curve(
                     evacf_mean.index.to_numpy(),
                     evacf_mean.values,
                     y_err=evacf_std.values,
-                    t0=frame_interval
+                    t0=8.0
                 )
                 if fit_res is not None:
                     all_fit_results.append({
                         'mode': mode_str,
                         'bead_name': b_name,
                         'diameter_um': item["diameter_um"],
-                        'A': fit_res['A'],
-                        'A_err': fit_res['A_err'],
-                        'tau_s': fit_res['tau'],
-                        'tau_err_s': fit_res['tau_err'],
-                        'C': fit_res['C'],
-                        'C_err': fit_res['C_err'],
+                        'A_slow': fit_res['A'],
+                        'A_slow_err': fit_res['A_err'],
+                        'tau_slow_s': fit_res['tau'],
+                        'tau_slow_err_s': fit_res['tau_err'],
                         'r_squared': fit_res['r_squared'],
                         'n_experiments': n_exps
                     })
-                    print(f"    -> フィッティング結果 (Δt >= {frame_interval}s): A = {fit_res['A']:.3f}, tau = {fit_res['tau']:.2f} s, C = {fit_res['C']:.3f}, R^2 = {fit_res['r_squared']:.3f}")
+                    print(f"    -> フィッティング結果 (τ >= 8.0s): A_slow = {fit_res['A']:.3f}, tau_slow = {fit_res['tau']:.2f} s, R^2 = {fit_res['r_squared']:.3f}")
 
             mode_results[b_name] = {
                 "mean": evacf_mean,
@@ -407,7 +492,7 @@ def run_all_beads_analysis(root_dir, out_dir=None, modes=None, max_timeshift_fra
             # 単体プロットへの描画
             label_text = f'{item["label"]}'
             if fit_res is not None:
-                label_text += f' ($A={fit_res["A"]:.2f}, \\tau={fit_res["tau"]:.1f}\\mathrm{{s}}, C={fit_res["C"]:.2f}, R^2={fit_res["r_squared"]:.2f}$)'
+                label_text += f' ($A_{{\\mathrm{{slow}}}}={fit_res["A"]:.2f}, \\tau_{{\\mathrm{{slow}}}}={fit_res["tau"]:.1f}\\mathrm{{s}}, R^2={fit_res["r_squared"]:.2f}$)'
             else:
                 label_text += f' ($N={n_exps}$)'
 
@@ -441,10 +526,12 @@ def run_all_beads_analysis(root_dir, out_dir=None, modes=None, max_timeshift_fra
         if yscale == 'linear':
             ax.hlines(0, 0, max_x, colors='#333333', linestyles='dashed', alpha=0.6, zorder=-1)
 
-        ylabel, title = vacf._get_ylabel_and_title(mode_str, normalize, is_ensemble=True)
+        ylabel, title = vacf._get_ylabel_and_title(
+            mode_str, normalize, is_ensemble=True, u_inf_normalized=u_inf_normalized
+        )
         ax.set(
             xlim=xlim if xlim is not None else (0, max_x),
-            ylim=(-0.3, 1.05) if mode_str == 'orientation' else ((-0.3, 1.05) if normalize else None) if yscale == 'linear' else (1e-1, 1.05) if normalize and yscale == 'log' else None,
+            ylim=_get_ylim(mode_str, normalize, yscale, log_ymin=1e-1),
             yscale=yscale,
             xlabel=r'lag time $\Delta t$ [s]',
             ylabel=ylabel,
@@ -452,12 +539,16 @@ def run_all_beads_analysis(root_dir, out_dir=None, modes=None, max_timeshift_fra
         ax.grid(True, linestyle='--', alpha=0.4)
 
         plt.tight_layout()
-        save_svg = out / f"{mode_str.upper()}_ACF.svg"
-        save_png = out / f"{mode_str.upper()}_ACF.png"
-        fig.savefig(save_svg, bbox_inches='tight')
-        fig.savefig(save_png, dpi=300, bbox_inches='tight')
-        plt.close(fig)
+        save_svg, _ = _save_figure_pair(fig, out, f"{mode_str.upper()}_ACF")
         print(f"  [保存完了] {save_svg}")
+
+        # 各貨物サイズごとの 6 パネル図
+        if mode_results:
+            _plot_mode_6panels(
+                mode_str, mode_results, out, normalize, xlim,
+                frame_interval, max_timeshift_frames, yscale, fit,
+                u_inf_normalized=u_inf_normalized
+            )
 
         # CSVの保存
         if summary_rows:
@@ -475,9 +566,18 @@ def run_all_beads_analysis(root_dir, out_dir=None, modes=None, max_timeshift_fra
         df_fits.to_csv(fit_csv_path, index=False)
         print(f"  [保存完了] フィッティング結果サマリー: {fit_csv_path}")
 
-    # 複数モードが存在する場合、横並び比較図も生成
+    # 複数モードが存在する場合、横並び比較図および貨物サイズ別6パネル比較図を生成
     if len(all_mode_results) > 1:
-        _plot_combined_comparison(all_mode_results, out, normalize, xlim, frame_interval, max_timeshift_frames, yscale, fit)
+        _plot_combined_comparison(
+            all_mode_results, out, normalize, xlim,
+            frame_interval, max_timeshift_frames, yscale, fit,
+            u_inf_normalized=u_inf_normalized
+        )
+        _plot_combined_comparison_6panels(
+            all_mode_results, out, normalize, xlim,
+            frame_interval, max_timeshift_frames, yscale, fit,
+            u_inf_normalized=u_inf_normalized
+        )
 
     print(f"\n{'='*70}")
     print(f"全ビーズの自己相関解析が完了しました。出力先: {out}")
@@ -485,7 +585,184 @@ def run_all_beads_analysis(root_dir, out_dir=None, modes=None, max_timeshift_fra
     return all_mode_results
 
 
-def _plot_combined_comparison(all_mode_results, out_dir, normalize, xlim, frame_interval, max_timeshift_frames, yscale, fit=False):
+def _plot_mode_6panels(mode_str, mode_results, out_dir, normalize, xlim, frame_interval, max_timeshift_frames, yscale, fit=False, u_inf_normalized=False):
+    """
+    指定モードについて、各貨物サイズごとの 2x3 (6パネル) 図を作成・保存する。
+    各パネルには個別実験の曲線とアンサンブル平均±標準偏差（およびフィット曲線）を描画する。
+    """
+    fig, axes = plt.subplots(2, 3, figsize=(16.5, 9.5), sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+    max_x = xlim[1] if xlim is not None else max_timeshift_frames * frame_interval
+    x_lim = xlim if xlim is not None else (0, max_x)
+    ylabel, title = vacf._get_ylabel_and_title(
+        mode_str, normalize, is_ensemble=True, u_inf_normalized=u_inf_normalized
+    )
+    y_lim = _get_ylim(mode_str, normalize, yscale, log_ymin=1e-1)
+
+    for idx, item in enumerate(BEADS_INFO):
+        ax = axes_flat[idx]
+        b_name = item["name"]
+        if b_name not in mode_results:
+            ax.set_visible(False)
+            continue
+
+        res = mode_results[b_name]
+        mean_s = res["mean"]
+        std_s = res["std"]
+        n_exps = res["n_exps"]
+        raw_df = res.get("raw_df")
+        fit_res = res.get("fit_res")
+
+        # 個別実験曲線（再現性確認用）
+        if raw_df is not None and not raw_df.empty:
+            for exp_idx, (_, exp_grp) in enumerate(raw_df.groupby("exp")):
+                exp_sorted = exp_grp.sort_values("lag time")
+                ax.plot(
+                    exp_sorted["lag time"],
+                    exp_sorted["VACF"],
+                    color=item["color"],
+                    alpha=0.28,
+                    linewidth=1.1,
+                    zorder=1,
+                    label="Individual exp." if exp_idx == 0 else None,
+                )
+
+        # アンサンブル平均 ± 標準偏差
+        ax.errorbar(
+            mean_s.index,
+            mean_s.values,
+            yerr=std_s.values,
+            marker=item["marker"],
+            color=item["color"],
+            capsize=3,
+            elinewidth=1.0,
+            markersize=5.5,
+            alpha=0.95,
+            linestyle='none' if (fit and fit_res is not None) else '-',
+            zorder=3,
+            label=f"Mean ± SD ($N={n_exps}$)",
+        )
+
+        if fit and fit_res is not None:
+            ax.plot(
+                fit_res['fit_x'],
+                fit_res['fit_y'],
+                linestyle='--',
+                color='#222222',
+                alpha=0.9,
+                linewidth=1.8,
+                zorder=4,
+                label=f"Fit ($A_{{\\mathrm{{slow}}}}={fit_res['A']:.2f}, \\tau_{{\\mathrm{{slow}}}}={fit_res['tau']:.1f}\\mathrm{{s}}$)",
+            )
+
+        if yscale == 'linear':
+            ax.hlines(0, x_lim[0], x_lim[1], colors='#333333', linestyles='dashed', alpha=0.6, linewidth=1.2, zorder=0)
+
+        ax.set_title(f"{item['label']} ($N={n_exps}$)", fontsize=15, fontweight='bold')
+        ax.set(xlim=x_lim, ylim=y_lim, yscale=yscale)
+        ax.grid(True, linestyle='--', alpha=0.4)
+        ax.legend(frameon=True, fontsize=9.5, loc='upper right')
+
+        if idx >= 3:
+            ax.set_xlabel(r'lag time $\Delta t$ [s]', fontsize=16)
+        if idx % 3 == 0:
+            ax.set_ylabel(ylabel, fontsize=15)
+
+    fig.suptitle(title, fontsize=17, fontweight='bold', y=0.99)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    save_svg, _ = _save_figure_pair(fig, out_dir, f"{mode_str.upper()}_ACF_6panels")
+    print(f"  [保存完了] 6パネル図: {save_svg}")
+
+
+def _plot_combined_comparison_6panels(all_mode_results, out_dir, normalize, xlim, frame_interval, max_timeshift_frames, yscale, fit=False, u_inf_normalized=False):
+    """
+    複数モードを貨物サイズごとの 2x3 (6パネル) に並べた比較プロットを作成・保存する。
+    """
+    mode_keys = list(all_mode_results.keys())
+    if len(mode_keys) < 2:
+        return
+
+    fig, axes = plt.subplots(2, 3, figsize=(16.5, 9.5), sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+    max_x = xlim[1] if xlim is not None else max_timeshift_frames * frame_interval
+    x_lim = xlim if xlim is not None else (0, max_x)
+    y_lim = _get_ylim(mode_keys[0], normalize, yscale, log_ymin=1e-3)
+
+    for idx, item in enumerate(BEADS_INFO):
+        ax = axes_flat[idx]
+        b_name = item["name"]
+        has_any = any(b_name in all_mode_results[m] for m in mode_keys)
+        if not has_any:
+            ax.set_visible(False)
+            continue
+
+        n_exps_panel = None
+        for m_idx, m_key in enumerate(mode_keys):
+            mode_data = all_mode_results[m_key]
+            if b_name not in mode_data:
+                continue
+
+            res = mode_data[b_name]
+            mean_s = res["mean"]
+            std_s = res["std"]
+            n_exps_panel = res["n_exps"]
+            fit_res = res.get("fit_res")
+
+            m_color = style_colors[m_idx % len(style_colors)]
+            m_marker = MODE_MARKERS[m_idx % len(MODE_MARKERS)]
+            label_text = MODE_SHORT_LABELS.get(m_key, m_key)
+            if fit and fit_res is not None:
+                label_text += f" ($\\tau_{{\\mathrm{{slow}}}}={fit_res['tau']:.1f}\\mathrm{{s}}$)"
+
+            ax.errorbar(
+                mean_s.index,
+                mean_s.values,
+                yerr=std_s.values,
+                marker=m_marker,
+                color=m_color,
+                label=label_text,
+                capsize=2,
+                elinewidth=0.9,
+                markersize=5,
+                alpha=0.9,
+                linestyle='none' if (fit and fit_res is not None) else '-',
+            )
+
+            if fit and fit_res is not None:
+                ax.plot(
+                    fit_res['fit_x'],
+                    fit_res['fit_y'],
+                    linestyle='--',
+                    color=m_color,
+                    alpha=0.85,
+                    linewidth=1.5,
+                )
+
+        if yscale == 'linear':
+            ax.hlines(0, x_lim[0], x_lim[1], colors='#333333', linestyles='dashed', alpha=0.6, linewidth=1.2, zorder=0)
+
+        title_str = f"{item['label']}" + (f" ($N={n_exps_panel}$)" if n_exps_panel is not None else "")
+        ax.set_title(title_str, fontsize=15, fontweight='bold')
+        ax.set(xlim=x_lim, ylim=y_lim, yscale=yscale)
+        ax.grid(True, linestyle='--', alpha=0.4)
+        if fit or idx == 0:
+            ax.legend(frameon=True, fontsize=9.5, loc='upper right')
+
+        if idx >= 3:
+            ax.set_xlabel(r'lag time $\Delta t$ [s]', fontsize=16)
+        if idx % 3 == 0:
+            ax.set_ylabel('Normalized ACF' if normalize else 'Autocorrelation', fontsize=15)
+
+    suptitle_str = 'Autocorrelation Comparison by Cargo Size'
+    if u_inf_normalized:
+        suptitle_str += r' [$\hat{v}(t) = v(t)/u_\infty(t)$]'
+    fig.suptitle(suptitle_str, fontsize=17, fontweight='bold', y=0.99)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    save_svg, _ = _save_figure_pair(fig, out_dir, "all_ACF_comparison_6panels")
+    print(f"  [保存完了] 貨物サイズ別6パネル比較プロット: {save_svg}")
+
+
+def _plot_combined_comparison(all_mode_results, out_dir, normalize, xlim, frame_interval, max_timeshift_frames, yscale, fit=False, u_inf_normalized=False):
     """
     複数モードを並べた総合比較プロットを作成・保存する。
     """
@@ -514,7 +791,7 @@ def _plot_combined_comparison(all_mode_results, out_dir, normalize, xlim, frame_
 
             label_text = f"{item['label']}"
             if fit and fit_res is not None:
-                label_text += f" ($A={fit_res['A']:.2f}, \\tau={fit_res['tau']:.1f}\\mathrm{{s}}, C={fit_res['C']:.2f}$)"
+                label_text += f" ($A_{{\\mathrm{{slow}}}}={fit_res['A']:.2f}, \\tau_{{\\mathrm{{slow}}}}={fit_res['tau']:.1f}\\mathrm{{s}}$)"
 
             ax.errorbar(
                 mean_s.index,
@@ -543,10 +820,12 @@ def _plot_combined_comparison(all_mode_results, out_dir, normalize, xlim, frame_
         if yscale == 'linear':
             ax.hlines(0, 0, max_x, colors='#333333', linestyles='dashed', alpha=0.6, zorder=-1)
 
-        ylabel, title = vacf._get_ylabel_and_title(m_key, normalize, is_ensemble=True)
+        ylabel, title = vacf._get_ylabel_and_title(
+            m_key, normalize, is_ensemble=True, u_inf_normalized=u_inf_normalized
+        )
         ax.set(
             xlim=xlim if xlim is not None else (0, max_x),
-            ylim=(-0.3, 1.05) if normalize and yscale == 'linear' else (1e-3, 1.05) if normalize and yscale == 'log' else None,
+            ylim=_get_ylim(m_key, normalize, yscale, log_ymin=1e-3),
             xlabel=r'lag time $\Delta t$ [s]',
             ylabel=ylabel,
             yscale=yscale,
@@ -556,11 +835,7 @@ def _plot_combined_comparison(all_mode_results, out_dir, normalize, xlim, frame_
             ax.legend(frameon=True, fontsize=8)
 
     plt.tight_layout()
-    comb_svg = out_dir / "all_ACF_comparison.svg"
-    comb_png = out_dir / "all_ACF_comparison.png"
-    fig.savefig(comb_svg, bbox_inches='tight')
-    fig.savefig(comb_png, dpi=300, bbox_inches='tight')
-    plt.close(fig)
+    comb_svg, _ = _save_figure_pair(fig, out_dir, "all_ACF_comparison")
     print(f"  [保存完了] 比較プロット: {comb_svg}")
 
 
@@ -591,7 +866,11 @@ def main():
                         choices=['linear', 'log'],
                         help="Y-axis scale for plots (default: 'linear').")
     parser.add_argument('--fit', action='store_true', default=False,
-                        help="Fit autocorrelation curves in tail region (Δt >= frame_interval) with model f(Δt) = A * exp(-(Δt - 4) / tau) + C.")
+                        help="Fit autocorrelation curves in tail region (τ >= 8.0 s) with model C(τ) = A_slow * exp(-τ / τ_slow).")
+    parser.add_argument('--uinf_cache', type=str, default=None,
+                        help="Path to u_inf_per_frame_cache.pkl for normalizing velocity v_hat(t) = v(t) / u_inf(t).")
+    parser.add_argument('--no_uinf_norm', dest='use_u_inf', action='store_false', default=True,
+                        help="Disable normalizing velocity by far-field flow speed u_inf(t).")
     parser.add_argument('--green_kubo', action='store_true', default=False,
                         help="Also run Green-Kubo effective diffusion analysis and compare with HMM RTP theoretical model.")
 
@@ -619,7 +898,9 @@ def main():
         normalize=args.normalize,
         xlim=(0, args.xlim_max) if args.xlim_max > 0 else None,
         yscale=args.yscale,
-        fit=args.fit
+        fit=args.fit,
+        use_u_inf=args.use_u_inf,
+        uinf_cache=args.uinf_cache
     )
 
     if args.green_kubo:

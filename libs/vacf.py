@@ -2,36 +2,67 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def _get_ylabel_and_title(mode, normalize, is_ensemble=False):
+def _get_ylabel_and_title(mode, normalize, is_ensemble=False, u_inf_normalized=False):
     prefix = "Ensemble " if is_ensemble else "Individual "
     m = mode.lower()
     if m in ['velocity', 'vec']:
         title = f"{prefix}Velocity Autocorrelation Function (VACF)"
-        if normalize:
-            ylabel = r'$\langle \vec{v}(t) \cdot \vec{v}(t+\tau) \rangle / \langle |\vec{v}|^2 \rangle$'
+        if u_inf_normalized:
+            title += r" [$\hat{\mathbf{v}}(t) = \mathbf{v}(t)/u_\infty(t)$]"
+            if normalize:
+                ylabel = r'$\langle \hat{\mathbf{v}}(t) \cdot \hat{\mathbf{v}}(t+\tau) \rangle / \langle |\hat{\mathbf{v}}|^2 \rangle$'
+            else:
+                ylabel = r'$\langle \hat{\mathbf{v}}(t) \cdot \hat{\mathbf{v}}(t+\tau) \rangle$'
         else:
-            ylabel = r'$\langle \vec{v}(t) \cdot \vec{v}(t+\tau) \rangle$'
+            if normalize:
+                ylabel = r'$\langle \vec{v}(t) \cdot \vec{v}(t+\tau) \rangle / \langle |\vec{v}|^2 \rangle$'
+            else:
+                ylabel = r'$\langle \vec{v}(t) \cdot \vec{v}(t+\tau) \rangle$'
     elif m in ['orientation', 'direction', 'unit']:
         title = f"{prefix}Orientation Autocorrelation Function (OACF)"
-        ylabel = r'$\langle \hat{v}(t) \cdot \hat{v}(t+\tau) \rangle$'
+        if u_inf_normalized:
+            ylabel = r'$\langle \mathbf{e}(t) \cdot \mathbf{e}(t+\tau) \rangle$'
+        else:
+            ylabel = r'$\langle \hat{v}(t) \cdot \hat{v}(t+\tau) \rangle$'
     elif m in ['speed', 'scalar']:
         title = f"{prefix}Speed Autocorrelation Function (SACF)"
-        if normalize:
-            ylabel = r'$\langle v(t) v(t+\tau) \rangle / \langle v^2 \rangle$'
+        if u_inf_normalized:
+            title += r" [$\hat{v}(t) = v(t)/u_\infty(t)$]"
+            if normalize:
+                ylabel = r'$\langle \hat{v}(t) \hat{v}(t+\tau) \rangle / \langle \hat{v}^2 \rangle$'
+            else:
+                ylabel = r'$\langle \hat{v}(t) \hat{v}(t+\tau) \rangle$'
         else:
-            ylabel = r'$\langle v(t) v(t+\tau) \rangle$'
+            if normalize:
+                ylabel = r'$\langle v(t) v(t+\tau) \rangle / \langle v^2 \rangle$'
+            else:
+                ylabel = r'$\langle v(t) v(t+\tau) \rangle$'
     elif m in ['velocity_fluctuation', 'vel_fluc', 'v_fluc', 'velocity_fluc']:
         title = f"{prefix}Velocity Fluctuation Autocorrelation Function"
-        if normalize:
-            ylabel = r'$\langle \delta\vec{v}(t) \cdot \delta\vec{v}(t+\tau) \rangle / \langle |\delta\vec{v}|^2 \rangle$'
+        if u_inf_normalized:
+            title += r" [$\hat{\mathbf{v}}(t) = \mathbf{v}(t)/u_\infty(t)$]"
+            if normalize:
+                ylabel = r'$\langle \delta\hat{\mathbf{v}}(t) \cdot \delta\hat{\mathbf{v}}(t+\tau) \rangle / \langle |\delta\hat{\mathbf{v}}|^2 \rangle$'
+            else:
+                ylabel = r'$\langle \delta\hat{\mathbf{v}}(t) \cdot \delta\hat{\mathbf{v}}(t+\tau) \rangle$'
         else:
-            ylabel = r'$\langle \delta\vec{v}(t) \cdot \delta\vec{v}(t+\tau) \rangle$'
+            if normalize:
+                ylabel = r'$\langle \delta\vec{v}(t) \cdot \delta\vec{v}(t+\tau) \rangle / \langle |\delta\vec{v}|^2 \rangle$'
+            else:
+                ylabel = r'$\langle \delta\vec{v}(t) \cdot \delta\vec{v}(t+\tau) \rangle$'
     elif m in ['speed_fluctuation', 'speed_fluc', 's_fluc', 'scalar_fluc']:
         title = f"{prefix}Speed Fluctuation Autocorrelation Function"
-        if normalize:
-            ylabel = r'$\langle \delta v(t) \delta v(t+\tau) \rangle / \langle (\delta v)^2 \rangle$'
+        if u_inf_normalized:
+            title += r" [$\hat{v}(t) = v(t)/u_\infty(t)$]"
+            if normalize:
+                ylabel = r'$\langle \delta\hat{v}(t) \delta\hat{v}(t+\tau) \rangle / \langle (\delta\hat{v})^2 \rangle$'
+            else:
+                ylabel = r'$\langle \delta\hat{v}(t) \delta\hat{v}(t+\tau) \rangle$'
         else:
-            ylabel = r'$\langle \delta v(t) \delta v(t+\tau) \rangle$'
+            if normalize:
+                ylabel = r'$\langle \delta v(t) \delta v(t+\tau) \rangle / \langle (\delta v)^2 \rangle$'
+            else:
+                ylabel = r'$\langle \delta v(t) \delta v(t+\tau) \rangle$'
     elif m in ['angle_change', 'deltatheta', 'delta_theta', 'turning_angle', 'angular_change']:
         title = f"{prefix}Angular Change Autocorrelation Function"
         if normalize:
@@ -50,7 +81,60 @@ def _get_ylabel_and_title(mode, normalize, is_ensemble=False):
     return ylabel, title
 
 
-def calculate_vacf(df, max_timeshift_frames, frame_interval=1, scale=1, mode='velocity', normalize=True):
+def _compute_velocities(df, frame_interval, scale, u_inf=None):
+    """
+    Compute particle velocities (vx, vy) from tracking DataFrame and optionally
+    normalize by far-field microtubule flow speed u_inf(t): v_hat(t) = v(t) / u_inf(t).
+    """
+    df = df.sort_values(by=['particle', 'frame']).reset_index(drop=True)
+    diffs = df.groupby('particle')[['x', 'y']].diff(periods=1)
+    df['vx'] = (diffs['x'] * scale) / frame_interval
+    df['vy'] = (diffs['y'] * scale) / frame_interval
+    valid_df = df.dropna(subset=['vx', 'vy']).copy()
+
+    if u_inf is None or valid_df.empty:
+        return valid_df
+
+    if np.isscalar(u_inf):
+        u_val = float(u_inf)
+        if not np.isfinite(u_val) or u_val <= 0:
+            return valid_df.iloc[0:0].copy()
+        valid_df['vx'] = valid_df['vx'] / u_val
+        valid_df['vy'] = valid_df['vy'] / u_val
+        return valid_df
+
+    if isinstance(u_inf, pd.DataFrame):
+        u_col = 'u_inf_t' if 'u_inf_t' in u_inf.columns else 'u_inf'
+        u_df = u_inf[['frame', u_col]].dropna().sort_values('frame')
+        u_frames = u_df['frame'].to_numpy(dtype=float)
+        u_vals = u_df[u_col].to_numpy(dtype=float)
+    elif isinstance(u_inf, pd.Series):
+        u_s = u_inf.dropna().sort_index()
+        u_frames = u_s.index.to_numpy(dtype=float)
+        u_vals = u_s.to_numpy(dtype=float)
+    elif isinstance(u_inf, dict):
+        items = sorted((float(k), float(v)) for k, v in u_inf.items() if np.isfinite(v))
+        u_frames = np.array([k for k, _ in items], dtype=float)
+        u_vals = np.array([v for _, v in items], dtype=float)
+    else:
+        raise TypeError(f"Unsupported u_inf type: {type(u_inf)}")
+
+    pos_mask = np.isfinite(u_frames) & np.isfinite(u_vals) & (u_vals > 0)
+    u_frames = u_frames[pos_mask]
+    u_vals = u_vals[pos_mask]
+    if len(u_frames) == 0:
+        return valid_df.iloc[0:0].copy()
+
+    u_t = np.interp(valid_df['frame'].to_numpy(dtype=float), u_frames, u_vals)
+    valid_u = np.isfinite(u_t) & (u_t > 0)
+    valid_df = valid_df[valid_u].copy()
+    u_t = u_t[valid_u]
+    valid_df['vx'] = valid_df['vx'] / u_t
+    valid_df['vy'] = valid_df['vy'] / u_t
+    return valid_df
+
+
+def calculate_vacf(df, max_timeshift_frames, frame_interval=1, scale=1, mode='velocity', normalize=True, u_inf=None):
     """
     データフレームから自己相関関数を計算する関数。(アンサンブル平均)
     
@@ -68,19 +152,14 @@ def calculate_vacf(df, max_timeshift_frames, frame_interval=1, scale=1, mode='ve
             'angle_change': 進行方向の角度変化 Δθ = wrap(θ(t+1) - θ(t))
             'angle_change_fluctuation': 角度変化ゆらぎ Δθ - <Δθ>
         normalize (bool): τ=0 の値で正規化するかどうか
+        u_inf (DataFrame/Series/dict/float, optional): 各フレームにおける遠方流速 u_inf(t) [μm/s]。
+            指定した場合、v_hat(t) = v(t) / u_inf(t) として無次元化速度を計算する。
         
     Returns:
         pd.DataFrame: 'time_shift_frames', 'lag_time', 'vacf' を列に持つ結果のデータフレーム。
     """
-    df = df.sort_values(by=['particle', 'frame']).reset_index(drop=True)
     m = mode.lower()
-    
-    # 速度ベクトル (vx, vy) を計算
-    diffs = df.groupby('particle')[['x', 'y']].diff(periods=1)
-    df['vx'] = (diffs['x'] * scale) / frame_interval
-    df['vy'] = (diffs['y'] * scale) / frame_interval
-    
-    valid_df = df.dropna(subset=['vx', 'vy']).copy()
+    valid_df = _compute_velocities(df, frame_interval=frame_interval, scale=scale, u_inf=u_inf)
     
     if m in ['orientation', 'direction', 'unit']:
         speed = np.sqrt(valid_df['vx']**2 + valid_df['vy']**2)
@@ -186,7 +265,7 @@ def calculate_vacf(df, max_timeshift_frames, frame_interval=1, scale=1, mode='ve
 
 
 def ivacf(df, max_timeshift_frames, frame_interval=1, scale=1, mode='velocity', normalize=True,
-          display=False, ax=None, figsize=(10, 8), title=None):
+          display=False, ax=None, figsize=(10, 8), title=None, u_inf=None):
     """
     個別の粒子ごとに自己相関関数(VACF / OACF / SACF / Fluctuation / Angular Change)を計算する関数
     
@@ -208,22 +287,20 @@ def ivacf(df, max_timeshift_frames, frame_interval=1, scale=1, mode='velocity', 
         ax (matplotlib.axes.Axes, optional): プロット先のAxes
         figsize (tuple): 図のサイズ (axがNoneの場合に使用)
         title (str, optional): プロットのタイトル
+        u_inf (DataFrame/Series/dict/float, optional): 各フレームにおける遠方流速 u_inf(t) [μm/s]。
+            指定した場合、v_hat(t) = v(t) / u_inf(t) として無次元化速度を計算する。
         
     Returns:
         pd.DataFrame: 'particle', 'lag time', 'VACF' を列に持つデータフレーム
     """
-    df = df.sort_values(by=['particle', 'frame']).reset_index(drop=True)
     m = mode.lower()
-    
-    diffs = df.groupby('particle')[['x', 'y']].diff(periods=1)
-    df['vx'] = (diffs['x'] * scale) / frame_interval
-    df['vy'] = (diffs['y'] * scale) / frame_interval
-    
-    valid_df = df.dropna(subset=['vx', 'vy']).copy()
+    valid_df = _compute_velocities(df, frame_interval=frame_interval, scale=scale, u_inf=u_inf)
     
     data_list = []
     
-    ylabel, default_title = _get_ylabel_and_title(mode, normalize, is_ensemble=False)
+    ylabel, default_title = _get_ylabel_and_title(
+        mode, normalize, is_ensemble=False, u_inf_normalized=(u_inf is not None)
+    )
     if title is None:
         title = default_title
 
@@ -404,7 +481,7 @@ def ivacf(df, max_timeshift_frames, frame_interval=1, scale=1, mode='velocity', 
     return vacf_df
 
 
-def evacf(ivacf_list, display=False, ax=None, figsize=(10, 8), title=None, mode='velocity', normalize=True):
+def evacf(ivacf_list, display=False, ax=None, figsize=(10, 8), title=None, mode='velocity', normalize=True, u_inf_normalized=False):
     """
     アンサンブル平均VACFを計算する関数
     """
@@ -416,7 +493,7 @@ def evacf(ivacf_list, display=False, ax=None, figsize=(10, 8), title=None, mode=
         if ax is None:
             fig, ax = plt.subplots(figsize=figsize)
         times = evacf_val.index
-        ylabel, default_title = _get_ylabel_and_title(mode, normalize, is_ensemble=True)
+        ylabel, default_title = _get_ylabel_and_title(mode, normalize, is_ensemble=True, u_inf_normalized=u_inf_normalized)
         if title is None:
             title = default_title
             

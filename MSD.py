@@ -195,9 +195,10 @@ def calc_bootstrap_ci(
 
 
 def calc_pooled_MSD_stats(df_pool: pd.DataFrame, min_particles: int = 1,
-                          n_bootstraps: int = 1000, ci: float = 0.95) -> pd.DataFrame:
+                          n_bootstraps: int = 1000, ci: float = 0.95,
+                          lag_col: str = 'lag time', val_col: str = 'MSD') -> pd.DataFrame:
     """
-    プールされた全粒子MSDから、lag timeごとのアンサンブル平均値 (mean)、
+    プールされた全粒子MSD（または無次元MSD）から、lag timeごとのアンサンブル平均値 (mean)、
     ブートストラップ法による標準誤差 (boot_sem) および信頼区間 (boot_ci_low, boot_ci_high)、
     四分位範囲 IQR (25%, 75%タイル)、10%, 90%タイル、標準偏差、粒子数を算出する。
     """
@@ -206,7 +207,7 @@ def calc_pooled_MSD_stats(df_pool: pd.DataFrame, min_particles: int = 1,
             'mean', 'boot_sem', 'boot_ci_low', 'boot_ci_high',
             'q25', 'q75', 'q10', 'q90', 'median', 'std', 'count'
         ])
-    grouped = df_pool.groupby('lag time')['MSD']
+    grouped = df_pool.groupby(lag_col)[val_col]
     stats_df = pd.DataFrame({
         'mean': grouped.mean(),
         'q25': grouped.quantile(0.25),
@@ -236,6 +237,195 @@ def calc_pooled_MSD_stats(df_pool: pd.DataFrame, min_particles: int = 1,
     if min_particles > 1:
         stats_df = stats_df[stats_df['count'] >= min_particles]
     return stats_df
+
+
+def _sampled_frames_for_exp(exp_dir: Path, n_u: int) -> Optional[np.ndarray]:
+    """
+    cargo_flow_profile_extended_cache.pkl の u_inf_frames が取得されたフレーム番号を再構成する。
+    """
+    import h5py
+    csv_path = exp_dir / "beads_tracks.csv"
+    h5_path = exp_dir / "GFP_flows.h5"
+    if not (csv_path.exists() and h5_path.exists()):
+        return None
+    with h5py.File(str(h5_path), 'r') as hf:
+        num_frames = hf[list(hf.keys())[0]].shape[0]
+    frames = pd.read_csv(csv_path, usecols=['frame'])['frame'].unique()
+    available = np.array([f for f in sorted(frames) if f < num_frames])
+    if len(available) == 0:
+        return None
+    idx = np.linspace(0, len(available) - 1, min(len(available), n_u), dtype=int)
+    return available[idx]
+
+
+def load_time_varying_u_inf_and_xi(workspace_dir: Path) -> Dict[str, dict]:
+    """
+    各動画における時間変化する遠方流速 u_inf(t) [um/s] および
+    空間相関長 xi(t) [um] の時系列データを読み込む。
+    """
+    flow_map: Dict[str, dict] = {}
+    cache_ext = workspace_dir / "scratch" / "cargo_flow_profile_extended_cache.pkl"
+    xi_win_csv = workspace_dir / "figure" / "xi_time_window" / "xi_t_windows_w200.csv"
+
+    if cache_ext.exists():
+        df_ext = pd.read_pickle(cache_ext)
+        for _, r in df_ext.iterrows():
+            exp_name = Path(str(r['exp_dir'])).name
+            uf = np.asarray(r['u_inf_frames'], dtype=float) if 'u_inf_frames' in r and r['u_inf_frames'] is not None else np.array([], dtype=float)
+            flow_map[exp_name] = {
+                'u_inf_movie': float(r['u_inf']),
+                'u_inf_frames': uf,
+                'xi_win_mid': np.array([], dtype=float),
+                'xi_win_vals': np.array([], dtype=float),
+            }
+
+    if xi_win_csv.exists():
+        df_xi = pd.read_csv(xi_win_csv)
+        for exp_name, grp in df_xi.groupby('exp_dir'):
+            grp = grp.sort_values('win_start')
+            win_mid = 0.5 * (grp['win_start'].to_numpy(dtype=float) + grp['win_end'].to_numpy(dtype=float))
+            xi_vals = grp['xi_um'].to_numpy(dtype=float)
+            if exp_name not in flow_map:
+                flow_map[exp_name] = {
+                    'u_inf_movie': np.nan,
+                    'u_inf_frames': np.array([], dtype=float),
+                }
+            flow_map[exp_name]['xi_win_mid'] = win_mid
+            flow_map[exp_name]['xi_win_vals'] = xi_vals
+
+    return flow_map
+
+
+def concat_pooled_particles_dimensionless_MSD(
+    folder: Path,
+    interval_list: List[float],
+    flow_map: Dict[str, dict],
+    scale: float = 0.11,
+    apply_cutoff: bool = True,
+    strict_particles: Optional[set] = None,
+    t_tilde_bins: Optional[np.ndarray] = None
+) -> pd.DataFrame:
+    """
+    時間経過に伴う u_inf(t) と xi(t) の変化を考慮して、
+    無次元時間 t_tilde = int (u_inf(t)/xi(t)) dt、無次元変位 dr / xi_bar(t) を算出し、
+    対数ビンごとに各粒子の無次元 MSD (MSD(t) / xi^2) を集計する。
+    """
+    if t_tilde_bins is None:
+        t_tilde_bins = np.geomspace(0.05, 80.0, 46)
+    bin_centers = np.sqrt(t_tilde_bins[:-1] * t_tilde_bins[1:])
+    n_bins = len(bin_centers)
+
+    records = []
+    file_list = sorted(glob.glob(str(Path(folder) / "*" / "*" / "beads_tracks.csv")))
+    for vid_idx, file_path in enumerate(file_list):
+        exp_dir = Path(file_path).parent
+        exp_dir_name = exp_dir.name
+        interval = interval_list[vid_idx] if vid_idx < len(interval_list) else interval_list[-1]
+
+        if exp_dir_name not in flow_map:
+            continue
+        f_info = flow_map[exp_dir_name]
+        uf = f_info.get('u_inf_frames', np.array([], dtype=float))
+        u_movie = f_info.get('u_inf_movie', np.nan)
+        xi_mid = f_info.get('xi_win_mid', np.array([], dtype=float))
+        xi_vals = f_info.get('xi_win_vals', np.array([], dtype=float))
+        if len(xi_vals) == 0:
+            continue
+
+        fr_s = _sampled_frames_for_exp(exp_dir, len(uf)) if len(uf) > 0 else None
+
+        raw_df = pd.read_csv(file_path)
+        if apply_cutoff:
+            cut = get_cutoff_frame(exp_dir_name)
+            if cut is not None and 'frame' in raw_df.columns:
+                raw_df = raw_df[raw_df['frame'] <= cut].copy()
+                if len(raw_df) == 0:
+                    continue
+
+        if strict_particles is not None and 'particle' in raw_df.columns:
+            valid_pids = [pid for pid in raw_df['particle'].unique() if (exp_dir_name, int(pid)) in strict_particles]
+            raw_df = raw_df[raw_df['particle'].isin(valid_pids)].copy()
+            if len(raw_df) == 0:
+                continue
+
+        for pid, grp in raw_df.groupby('particle'):
+            grp = grp.sort_values('frame')
+            frames = grp['frame'].to_numpy(dtype=float)
+            x = grp['x'].to_numpy(dtype=float) * scale
+            y = grp['y'].to_numpy(dtype=float) * scale
+            n_pts = len(frames)
+            if n_pts < 3:
+                continue
+
+            # 各フレームにおける u_inf(t) と xi(t) を補間
+            if fr_s is not None and len(fr_s) == len(uf):
+                u_f = np.interp(frames, fr_s, uf)
+            elif np.isfinite(u_movie):
+                u_f = np.full(n_pts, u_movie, dtype=float)
+            else:
+                continue
+            xi_f = np.interp(frames, xi_mid, xi_vals)
+
+            u_f = np.clip(u_f, 1e-6, None)
+            xi_f = np.clip(xi_f, 1e-6, None)
+
+            t_sec = frames * interval
+            dt_sec = np.diff(t_sec)
+            valid_step = dt_sec > 0
+            if not np.all(valid_step):
+                continue
+
+            # 無次元時刻の累積積分: t_tilde(t) = int (u_inf(t') / xi(t')) dt'
+            gamma = u_f / xi_f
+            t_tilde = np.concatenate([[0.0], np.cumsum(0.5 * (gamma[:-1] + gamma[1:]) * dt_sec)])
+            # 相関長の累積時間積分: int xi(t') dt'
+            cum_xi = np.concatenate([[0.0], np.cumsum(0.5 * (xi_f[:-1] + xi_f[1:]) * dt_sec)])
+
+            p_t_tilde = []
+            p_msd_tilde = []
+
+            for tau in range(1, n_pts):
+                dt_pair = t_sec[tau:] - t_sec[:-tau]
+                dt_tilde_pair = t_tilde[tau:] - t_tilde[:-tau]
+                xi_bar_pair = (cum_xi[tau:] - cum_xi[:-tau]) / dt_pair
+                dr2_pair = (x[tau:] - x[:-tau]) ** 2 + (y[tau:] - y[:-tau]) ** 2
+                msd_tilde_pair = dr2_pair / (xi_bar_pair ** 2)
+
+                valid_p = np.isfinite(dt_tilde_pair) & np.isfinite(msd_tilde_pair) & (dt_tilde_pair > 0) & (msd_tilde_pair > 0)
+                if np.any(valid_p):
+                    p_t_tilde.append(float(np.mean(dt_tilde_pair[valid_p])))
+                    p_msd_tilde.append(float(np.mean(msd_tilde_pair[valid_p])))
+
+            if len(p_t_tilde) < 2:
+                continue
+
+            p_t_arr = np.asarray(p_t_tilde, dtype=float)
+            p_m_arr = np.asarray(p_msd_tilde, dtype=float)
+            order = np.argsort(p_t_arr)
+            p_t_arr = p_t_arr[order]
+            p_m_arr = p_m_arr[order]
+
+            # 共通の無次元時刻グリッドへ対数空間で線形補間（外挿なし）
+            in_domain = (bin_centers >= p_t_arr[0]) & (bin_centers <= p_t_arr[-1])
+            if not np.any(in_domain):
+                continue
+            t_q = bin_centers[in_domain]
+            log_m_q = np.interp(np.log10(t_q), np.log10(p_t_arr), np.log10(p_m_arr))
+            m_q = 10.0 ** log_m_q
+
+            unique_pid = f"{exp_dir_name}_{int(pid)}"
+            for t_val, m_val in zip(t_q, m_q):
+                records.append({
+                    'unique_particle_id': unique_pid,
+                    'exp_name': exp_dir_name,
+                    'particle': int(pid),
+                    't_tilde': float(t_val),
+                    'MSD_tilde': float(m_val)
+                })
+
+    if len(records) == 0:
+        return pd.DataFrame(columns=['unique_particle_id', 'exp_name', 'particle', 't_tilde', 'MSD_tilde'])
+    return pd.DataFrame(records)
 
 
 def extract_msd_at_lag(df_pool: pd.DataFrame, target_t: float = 300.0, tol: float = 12.0,
@@ -711,6 +901,159 @@ def main():
                      fontsize=12, fontweight='bold', pad=10)
 
     save_figure_to_all(fig2, "msd300_and_slope_vs_diameter", out_dirs)
+
+    # ---------------------------------------------------------
+    # 4. 時間変化する u_inf(t), xi(t) を考慮した無次元化 MSD の算出とプロット
+    #    t_tilde = int (u_inf(t)/xi(t)) dt,  MSD_tilde = MSD(t) / xi^2
+    # ---------------------------------------------------------
+    print("\n--- 4. Computing & Plotting Dimensionless MSD (time-varying u_inf(t), xi(t)) ---")
+    flow_map = load_time_varying_u_inf_and_xi(workspace_dir)
+    if len(flow_map) == 0:
+        print("  [Warning] No u_inf(t) / xi(t) data found; skipping dimensionless MSD.")
+    else:
+        t_tilde_bins = np.geomspace(0.05, 80.0, 46)
+        dim_configs = [
+            ("beads06um", [4, 4, 4, 4]),
+            ("beads1um",  [4, 4, 4, 4]),
+            ("beads3um",  [4, 4, 4, 4]),
+            ("beads5um",  [4, 4, 4, 4]),
+            ("beads7um",  [4, 4, 4]),
+            ("beads20um", [4, 4, 4]),
+        ]
+        dim_rows = []
+        fig_dim, ax_dim = plt.subplots(figsize=(8.5, 6.2))
+
+        for item, (b_name, intervals) in zip(beads_data, dim_configs):
+            d_um = item["d_um"]
+            color = item["color"]
+            marker = item["marker"]
+
+            df_dim_pool = concat_pooled_particles_dimensionless_MSD(
+                root_dir / b_name,
+                intervals,
+                flow_map=flow_map,
+                scale=0.11,
+                apply_cutoff=True,
+                strict_particles=strict_set,
+                t_tilde_bins=t_tilde_bins
+            )
+            if df_dim_pool.empty:
+                continue
+
+            st_dim = calc_pooled_MSD_stats(
+                df_dim_pool, min_particles=2, n_bootstraps=1000, ci=0.95,
+                lag_col='t_tilde', val_col='MSD_tilde'
+            )
+            if st_dim.empty:
+                continue
+
+            n_part_dim = df_dim_pool['unique_particle_id'].nunique()
+            for t_val, row in st_dim.iterrows():
+                dim_rows.append({
+                    "bead_name": b_name,
+                    "diameter_um": d_um,
+                    "t_tilde": float(t_val),
+                    "mean_msd_tilde": float(row['mean']),
+                    "boot_sem_msd_tilde": float(row['boot_sem']),
+                    "boot_ci_low_msd_tilde": float(row['boot_ci_low']),
+                    "boot_ci_high_msd_tilde": float(row['boot_ci_high']),
+                    "median_msd_tilde": float(row['median']),
+                    "q25_msd_tilde": float(row['q25']),
+                    "q75_msd_tilde": float(row['q75']),
+                    "n_active_particles": int(row['count']),
+                })
+
+            t_vals = st_dim.index.to_numpy(dtype=float)
+            mean_v = st_dim['mean'].to_numpy(dtype=float)
+            ci_low = st_dim['boot_ci_low'].to_numpy(dtype=float)
+            ci_high = st_dim['boot_ci_high'].to_numpy(dtype=float)
+
+            # 1. ブートストラップ 95% 信頼区間帯
+            ax_dim.fill_between(
+                t_vals,
+                np.clip(ci_low, 1e-5, None),
+                ci_high,
+                color=color,
+                alpha=0.18,
+                edgecolor='none'
+            )
+
+            # 2. 代表点キャップ付き 95% CI エラーバー
+            n_pts = len(t_vals)
+            if n_pts > 20:
+                target_t = np.geomspace(t_vals[0], t_vals[-1], num=16)
+                sub_idx = np.unique([np.argmin(np.abs(t_vals - tg)) for tg in target_t])
+            else:
+                sub_idx = np.arange(n_pts)
+
+            yerr_rep = [
+                np.clip(mean_v[sub_idx] - ci_low[sub_idx], 0, None),
+                np.clip(ci_high[sub_idx] - mean_v[sub_idx], 0, None)
+            ]
+            ax_dim.errorbar(
+                t_vals[sub_idx],
+                mean_v[sub_idx],
+                yerr=yerr_rep,
+                fmt='none',
+                ecolor=color,
+                elinewidth=1.4,
+                capsize=3.5,
+                capthick=1.0,
+                alpha=0.85,
+                zorder=3
+            )
+
+            yerr_all = [
+                np.clip(mean_v - ci_low, 0, None),
+                np.clip(ci_high - mean_v, 0, None)
+            ]
+            ax_dim.errorbar(
+                t_vals,
+                mean_v,
+                yerr=yerr_all,
+                fmt='none',
+                ecolor=color,
+                elinewidth=0.7,
+                capsize=0,
+                alpha=0.35,
+                zorder=2
+            )
+
+            # 3. 主線
+            ax_dim.plot(
+                t_vals, mean_v, marker=marker, linestyle='-', linewidth=2.0, markersize=7.0,
+                label=f'{d_um:.2f} \u03bcm ($N={n_part_dim}$)', color=color, zorder=4
+            )
+
+        if dim_rows:
+            df_dim_summary = pd.DataFrame(dim_rows)
+            for d in out_dirs:
+                try:
+                    if d.exists():
+                        df_dim_summary.to_csv(d / "msd_dimensionless_summary.csv", index=False)
+                        print(f"  [SAVED] {d / 'msd_dimensionless_summary.csv'}")
+                except Exception as e:
+                    print(f"  [Error saving CSV] {e}")
+
+        # ガイド線 (無次元時間 t_tilde に対する 傾き 1.0, 2.0)
+        tg1, tg2 = 3.0, 15.0
+        ax_dim.plot([tg1, tg2], [0.06 * (tg1 / 3.0)**1.0, 0.06 * (tg2 / 3.0)**1.0], color='#333333', linestyle='--')
+        ax_dim.text(8.5, 0.09, r'$\propto \tilde{t}^{1.0}$', fontsize=12)
+        tg3, tg4 = 0.5, 2.5
+        ax_dim.plot([tg3, tg4], [0.30 * (tg3 / 0.5)**2.0, 0.30 * (tg4 / 0.5)**2.0], color='#333333', linestyle='--')
+        ax_dim.text(0.8, 2.2, r'$\propto \tilde{t}^{2.0}$', fontsize=12)
+
+        ax_dim.legend(fontsize=10.0, loc='upper left', framealpha=0.88, markerscale=0.8, handlelength=1.4, borderpad=0.35, labelspacing=0.28)
+        ax_dim.set(
+            xlim=(0.06, 60.0),
+            ylim=(1e-4, 3e2),
+            xscale='log',
+            yscale='log',
+            xlabel=r'Dimensionless lag time $\tilde{t} \equiv u_\infty t / \xi$',
+            ylabel=r'$\widetilde{\mathrm{MSD}}(\tilde{t}) \equiv \mathrm{MSD}(t) / \xi^2$'
+        )
+        ax_dim.set_title(r'Dimensionless Ensemble Mean MSD with Bootstrap 95% CI ($N=70$)', fontsize=13.5, pad=10)
+        save_figure_to_all(fig_dim, "MSD_dimensionless", out_dirs)
 
     print("\n--- Completed all fits and figure outputs successfully! ---")
 

@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.ticker as ticker
 from scipy.optimize import curve_fit
+from libs.experiment_cutoff import get_cutoff_frame, load_strict_active_particles
 
 # スタイルの適用 (MSD.py と完全に統一)
 style_path = Path(__file__).parent / 'libs' / 'my_style.mplstyle'
@@ -64,6 +65,36 @@ def find_default_root() -> Path:
     return POSSIBLE_ROOTS[0]
 
 
+def calc_bootstrap_ci(
+    data: np.ndarray,
+    n_bootstraps: int = 1000,
+    ci: float = 0.95,
+    random_state: int = 42
+) -> Tuple[float, float, float]:
+    """
+    ブートストラップ法 (復元抽出) により標本平均の標準誤差 (Bootstrap SEM) および信頼区間 (CI) を算出する。
+    """
+    arr = np.asarray(data, dtype=float)
+    arr = arr[~np.isnan(arr) & np.isfinite(arr)]
+    n = len(arr)
+    if n == 0:
+        return np.nan, np.nan, np.nan
+    if n == 1:
+        return 0.0, float(arr[0]), float(arr[0])
+
+    rng = np.random.default_rng(random_state)
+    alpha = (1.0 - ci) / 2.0
+
+    # 高速ベクトル化サンプリング
+    boot_idx = rng.integers(0, n, size=(n_bootstraps, n))
+    boot_means = np.mean(arr[boot_idx], axis=1)
+
+    boot_sem = float(np.std(boot_means, ddof=1))
+    ci_low = float(np.percentile(boot_means, 100.0 * alpha))
+    ci_high = float(np.percentile(boot_means, 100.0 * (1.0 - alpha)))
+    return boot_sem, ci_low, ci_high
+
+
 def calc_particle_alpha(sub_df: pd.DataFrame, min_t: float = 4.0, max_t: float = 300.0) -> float:
     """
     個別粒子MSD (iMSD) に対して対数空間でべき乗則 MSD ~ t^alpha をフィッティングし、
@@ -85,30 +116,35 @@ def concat_pooled_particles_MSAD(
     interval_list: List[float],
     scale: float = 0.11,
     alpha_threshold: float = 0.5,
-    max_tau_steps: int = 250
+    max_tau_steps: int = 250,
+    apply_cutoff: bool = True,
+    strict_particles: Optional[set] = None
 ) -> Tuple[pd.DataFrame, pd.DataFrame, int, int]:
     """
     指定ビーズフォルダ内の全動画から個別粒子の MSAD (iMSAD) を計算し、1つのプールに統合する。
-    各粒子について iMSD による異常拡散指数 alpha を算出し、
-    MSD.py と同様に alpha > alpha_threshold (デフォルト: 0.5) の粒子のみを抽出する。
-
-    Returns:
-    --------
-    df_filtered : pd.DataFrame
-        alpha > alpha_threshold でフィルタリングされた全粒子の iMSAD
-    df_pool : pd.DataFrame
-        フィルタリング前の全粒子 iMSAD
-    n_total : int
-        総粒子数
-    n_filtered : int
-        フィルタ通過粒子数
+    strict_particles (set of (exp_name, particle_id)) が指定された場合、
+    全解析共通の厳格な活性貨物粒子 (N=70) のみを採用する (MSD.py と完全に同一)。
     """
     file_list = sorted(glob.glob(str(Path(folder) / "*" / "*" / "beads_tracks.csv")))
     all_imsads = []
 
     for vid_idx, file_path in enumerate(file_list):
+        exp_dir_name = Path(file_path).parent.name
         interval = interval_list[vid_idx] if vid_idx < len(interval_list) else interval_list[-1]
         df_raw = pd.read_csv(file_path)
+
+        if apply_cutoff:
+            cut = get_cutoff_frame(exp_dir_name)
+            if cut is not None and 'frame' in df_raw.columns:
+                df_raw = df_raw[df_raw['frame'] <= cut].copy()
+                if len(df_raw) == 0:
+                    continue
+
+        if strict_particles is not None and 'particle' in df_raw.columns:
+            valid_pids = [pid for pid in df_raw['particle'].unique() if (exp_dir_name, int(pid)) in strict_particles]
+            df_raw = df_raw[df_raw['particle'].isin(valid_pids)].copy()
+            if len(df_raw) == 0:
+                continue
 
         for pid, grp in df_raw.groupby('particle'):
             grp = grp.sort_values(by='frame')
@@ -185,24 +221,35 @@ def concat_pooled_particles_MSAD(
     df_pool = df_pool.dropna(subset=['MSAD', 'lag time'])
 
     n_total = df_pool['unique_particle_id'].nunique()
-    df_filtered = df_pool[df_pool['alpha'] > alpha_threshold].copy()
+    if strict_particles is not None:
+        df_filtered = df_pool.copy()
+    else:
+        df_filtered = df_pool[df_pool['alpha'] > alpha_threshold].copy()
     n_filtered = df_filtered['unique_particle_id'].nunique()
 
     return df_filtered, df_pool, n_total, n_filtered
 
 
-def calc_pooled_MSAD_stats(df_pool: pd.DataFrame, min_particles: int = 1) -> pd.DataFrame:
+def calc_pooled_MSAD_stats(df_pool: pd.DataFrame, min_particles: int = 1, n_bootstraps: int = 1000) -> pd.DataFrame:
     """
     プールされた全粒子MSADから、lag timeごとのアンサンブル平均値 (mean)、
-    四分位範囲 IQR (25%, 75%タイル)、10%, 90%タイル、標準偏差、粒子数を算出する (MSD.py準拠)。
+    四分位範囲 IQR (25%, 75%タイル)、10%, 90%タイル、標準偏差、
+    およびブートストラップ法による標準誤差 (boot_sem) と 95% 信頼区間 (boot_ci_low, boot_ci_high) を算出する。
     """
     if df_pool.empty:
-        return pd.DataFrame(columns=['mean', 'q25', 'q75', 'q10', 'q90', 'median', 'std', 'sem', 'count'])
+        return pd.DataFrame(columns=['mean', 'q25', 'q75', 'q10', 'q90', 'median', 'std', 'sem', 'boot_sem', 'boot_ci_low', 'boot_ci_high', 'count'])
     grouped = df_pool.groupby('lag time')['MSAD']
     mean_series = grouped.mean()
     std_series = grouped.std()
     count_series = grouped.count()
     sem_series = std_series / np.sqrt(count_series)
+
+    boot_sems, boot_ci_lows, boot_ci_highs = [], [], []
+    for _, grp in grouped:
+        b_sem, b_low, b_high = calc_bootstrap_ci(grp.to_numpy(dtype=float), n_bootstraps=n_bootstraps, ci=0.95)
+        boot_sems.append(b_sem)
+        boot_ci_lows.append(b_low)
+        boot_ci_highs.append(b_high)
 
     stats_df = pd.DataFrame({
         'mean': mean_series,
@@ -213,6 +260,9 @@ def calc_pooled_MSAD_stats(df_pool: pd.DataFrame, min_particles: int = 1) -> pd.
         'median': grouped.median(),
         'std': std_series,
         'sem': sem_series,
+        'boot_sem': boot_sems,
+        'boot_ci_low': boot_ci_lows,
+        'boot_ci_high': boot_ci_highs,
         'count': count_series
     })
     if min_particles > 1:
@@ -220,9 +270,9 @@ def calc_pooled_MSAD_stats(df_pool: pd.DataFrame, min_particles: int = 1) -> pd.
     return stats_df
 
 
-def extract_msad_at_lag(df_pool: pd.DataFrame, target_t: float = 300.0, tol: float = 12.0) -> dict:
+def extract_msad_at_lag(df_pool: pd.DataFrame, target_t: float = 300.0, tol: float = 12.0, n_bootstraps: int = 1000) -> dict:
     """
-    個別粒子データから target_t 近傍の MSAD 値を集計し、統計量を返す。
+    個別粒子データから target_t 近傍の MSAD 値を集計し、統計量（ブートストラップ誤差含む）を返す。
     """
     records = []
     for pid, grp in df_pool.groupby('unique_particle_id'):
@@ -235,23 +285,32 @@ def extract_msad_at_lag(df_pool: pd.DataFrame, target_t: float = 300.0, tol: flo
         mean_val = float(np.mean(arr))
         std_val = float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0
         sem_val = float(std_val / np.sqrt(len(arr))) if len(arr) > 1 else 0.0
+        b_sem, b_low, b_high = calc_bootstrap_ci(arr, n_bootstraps=n_bootstraps, ci=0.95)
         return {
             'mean': mean_val,
             'std': std_val,
             'sem': sem_val,
+            'boot_sem': b_sem,
+            'boot_ci_low': b_low,
+            'boot_ci_high': b_high,
             'median': float(np.median(arr)),
             'q25': float(np.percentile(arr, 25)),
             'q75': float(np.percentile(arr, 75)),
             'n': len(arr)
         }
-    return {'mean': np.nan, 'std': np.nan, 'sem': np.nan, 'median': np.nan, 'q25': np.nan, 'q75': np.nan, 'n': 0}
+    return {
+        'mean': np.nan, 'std': np.nan, 'sem': np.nan,
+        'boot_sem': np.nan, 'boot_ci_low': np.nan, 'boot_ci_high': np.nan,
+        'median': np.nan, 'q25': np.nan, 'q75': np.nan, 'n': 0
+    }
 
 
 def calc_msad_slope_range(
     df_pool: pd.DataFrame,
     min_t: float = 4.0,
     max_t: float = 300.0,
-    min_points: int = 3
+    min_points: int = 3,
+    n_bootstraps: int = 1000
 ) -> dict:
     """
     個別粒子それぞれの MSAD に対して指定ラグ時間範囲でのべき乗則傾き alpha_theta (MSAD ~ t^alpha_theta) を算出する。
@@ -273,10 +332,14 @@ def calc_msad_slope_range(
         mean_val = float(np.mean(arr))
         std_val = float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0
         sem_val = float(std_val / np.sqrt(len(arr))) if len(arr) > 1 else 0.0
+        b_sem, b_low, b_high = calc_bootstrap_ci(arr, n_bootstraps=n_bootstraps, ci=0.95)
         return {
             'mean': mean_val,
             'std': std_val,
             'sem': sem_val,
+            'boot_sem': b_sem,
+            'boot_ci_low': b_low,
+            'boot_ci_high': b_high,
             'median': float(np.median(arr)),
             'q25': float(np.percentile(arr, 25)),
             'q75': float(np.percentile(arr, 75)),
@@ -285,6 +348,7 @@ def calc_msad_slope_range(
         }
     return {
         'mean': np.nan, 'std': np.nan, 'sem': np.nan,
+        'boot_sem': np.nan, 'boot_ci_low': np.nan, 'boot_ci_high': np.nan,
         'median': np.nan, 'q25': np.nan, 'q75': np.nan,
         'n': 0, 'particle_ids': []
     }
@@ -379,12 +443,14 @@ def main():
         color = style_colors[idx % len(style_colors)]
         intervals = b_conf["intervals"]
 
+        strict_set = load_strict_active_particles()
         pool_df, raw_df, n_tot, n_filt = concat_pooled_particles_MSAD(
             root_dir / b_name,
             intervals,
             scale=0.11,
             alpha_threshold=alpha_thresh,
-            max_tau_steps=250
+            max_tau_steps=250,
+            strict_particles=strict_set
         )
         stats = calc_pooled_MSAD_stats(pool_df)
 
@@ -426,6 +492,9 @@ def main():
                 "median_msad_rad2": row['median'],
                 "std_msad_rad2": row['std'],
                 "sem_msad_rad2": row['sem'],
+                "boot_sem_msad_rad2": row['boot_sem'],
+                "boot_ci_low_msad_rad2": row['boot_ci_low'],
+                "boot_ci_high_msad_rad2": row['boot_ci_high'],
                 "n_active_particles": int(row['count']),
                 "n_filtered_particles": n_filt,
                 "n_total_particles": n_tot
@@ -434,8 +503,8 @@ def main():
     save_csv_to_all(df_pooled_summary, "msad_pooled_mean_iqr_summary.csv", out_dirs)
 
     # ---------------------------------------------------------
-    # 図1: MSAD プロット (代表値: Ensemble Mean, エラー帯: 25-75% IQR & 10-90%)
-    # MSD.py と完全に同一の美しい見た目 (カラー・マーカー・フォント・帯透明度)
+    # 図1: MSAD プロット (代表値: Ensemble Mean, エラーバー & 淡色帯: Bootstrap 95% CI)
+    # MSD.py と完全に同一の見た目
     # ---------------------------------------------------------
     print("\n--- 2. Generating MSAD Ensemble Plot (rad^2) ---")
     fig1, ax1 = plt.subplots(figsize=(8.5, 6.2))
@@ -447,20 +516,67 @@ def main():
         n_filt = item["n_filt"]
 
         valid = st['count'] >= 2
-        lags = st.index[valid]
-        mean_v = st['mean'][valid]
-        q25 = st['q25'][valid]
-        q75 = st['q75'][valid]
-        q10 = st['q10'][valid]
-        q90 = st['q90'][valid]
+        lags = st.index[valid].to_numpy(dtype=float)
+        mean_v = st['mean'][valid].to_numpy(dtype=float)
+        boot_ci_low = st['boot_ci_low'][valid].to_numpy(dtype=float)
+        boot_ci_high = st['boot_ci_high'][valid].to_numpy(dtype=float)
 
-        # 10% - 90% タイル帯 (淡色)
-        ax1.fill_between(lags, q10, q90, color=color, alpha=0.08, edgecolor='none')
-        # 25% - 75% 四分位範囲 (IQR) 帯 (中間色)
-        ax1.fill_between(lags, q25, q75, color=color, alpha=0.22, edgecolor='none')
-        # 主線: アンサンブル平均 Mean (実線 + マーカー)
+        # 1. ブートストラップ 95% 信頼区間帯 (Bootstrap 95% CI band)
+        ax1.fill_between(
+            lags,
+            np.clip(boot_ci_low, 1e-4, None),
+            boot_ci_high,
+            color=color,
+            alpha=0.18,
+            edgecolor='none'
+        )
+
+        # 2. ブートストラップ 95% 信頼区間によるエラーバー (Bootstrap 95% CI Error Bars)
+        n_pts = len(lags)
+        if n_pts > 20:
+            target_lags = np.geomspace(lags[0], lags[-1], num=18)
+            sub_idx = np.unique([np.argmin(np.abs(lags - tg)) for tg in target_lags])
+        else:
+            sub_idx = np.arange(n_pts)
+
+        yerr_ci_rep = [
+            np.clip(mean_v[sub_idx] - boot_ci_low[sub_idx], 0, None),
+            np.clip(boot_ci_high[sub_idx] - mean_v[sub_idx], 0, None)
+        ]
+
+        ax1.errorbar(
+            lags[sub_idx],
+            mean_v[sub_idx],
+            yerr=yerr_ci_rep,
+            fmt='none',
+            ecolor=color,
+            elinewidth=1.4,
+            capsize=3.5,
+            capthick=1.0,
+            alpha=0.85,
+            zorder=3
+        )
+
+        # 全点にも細いエラーバーを薄く付与
+        yerr_ci_all = [
+            np.clip(mean_v - boot_ci_low, 0, None),
+            np.clip(boot_ci_high - mean_v, 0, None)
+        ]
+        ax1.errorbar(
+            lags,
+            mean_v,
+            yerr=yerr_ci_all,
+            fmt='none',
+            ecolor=color,
+            elinewidth=0.7,
+            capsize=0,
+            alpha=0.35,
+            zorder=2
+        )
+
+        # 3. 主線: アンサンブル平均 Mean (実線 + マーカー)
         ax1.plot(lags, mean_v, marker=marker, linestyle='-', linewidth=2.0, markersize=7.5,
-                 label=f'{d_um:.2f} \u03bcm ($N={n_filt}$)', color=color)
+                 label=f'{d_um:.2f} \u03bcm ($N={n_filt}$)', color=color, zorder=4)
 
     # ガイド線: 拡散的傾き \propto \Delta t^{1.0}
     t_g1, t_g2 = 50.0, 200.0
@@ -475,7 +591,7 @@ def main():
         yscale='log',
         xlabel=r'Lag time $\Delta t$ [s]',
         ylabel=r'MSAD $\langle (\Delta \theta)^2 \rangle$ [$\mathrm{rad}^2$]',
-        title=r'Ensemble Mean MSAD $\pm$ IQR (Filtered: $\alpha > 0.5$)'
+        title=r'Ensemble Mean MSAD with Bootstrap 95% CI (Filtered: $\alpha > 0.5$)'
     )
     save_figure_to_all(fig1, "MSAD", out_dirs)
 
@@ -490,17 +606,63 @@ def main():
         n_filt = item["n_filt"]
 
         valid = st['count'] >= 2
-        lags = st.index[valid]
-        mean_v = st['mean'][valid] * rad2deg_sq
-        q25 = st['q25'][valid] * rad2deg_sq
-        q75 = st['q75'][valid] * rad2deg_sq
-        q10 = st['q10'][valid] * rad2deg_sq
-        q90 = st['q90'][valid] * rad2deg_sq
+        lags = st.index[valid].to_numpy(dtype=float)
+        mean_v = st['mean'][valid].to_numpy(dtype=float) * rad2deg_sq
+        boot_ci_low = st['boot_ci_low'][valid].to_numpy(dtype=float) * rad2deg_sq
+        boot_ci_high = st['boot_ci_high'][valid].to_numpy(dtype=float) * rad2deg_sq
 
-        ax1_deg.fill_between(lags, q10, q90, color=color, alpha=0.08, edgecolor='none')
-        ax1_deg.fill_between(lags, q25, q75, color=color, alpha=0.22, edgecolor='none')
+        ax1_deg.fill_between(
+            lags,
+            np.clip(boot_ci_low, 1e-4, None),
+            boot_ci_high,
+            color=color,
+            alpha=0.18,
+            edgecolor='none'
+        )
+
+        n_pts = len(lags)
+        if n_pts > 20:
+            target_lags = np.geomspace(lags[0], lags[-1], num=18)
+            sub_idx = np.unique([np.argmin(np.abs(lags - tg)) for tg in target_lags])
+        else:
+            sub_idx = np.arange(n_pts)
+
+        yerr_ci_rep = [
+            np.clip(mean_v[sub_idx] - boot_ci_low[sub_idx], 0, None),
+            np.clip(boot_ci_high[sub_idx] - mean_v[sub_idx], 0, None)
+        ]
+
+        ax1_deg.errorbar(
+            lags[sub_idx],
+            mean_v[sub_idx],
+            yerr=yerr_ci_rep,
+            fmt='none',
+            ecolor=color,
+            elinewidth=1.4,
+            capsize=3.5,
+            capthick=1.0,
+            alpha=0.85,
+            zorder=3
+        )
+
+        yerr_ci_all = [
+            np.clip(mean_v - boot_ci_low, 0, None),
+            np.clip(boot_ci_high - mean_v, 0, None)
+        ]
+        ax1_deg.errorbar(
+            lags,
+            mean_v,
+            yerr=yerr_ci_all,
+            fmt='none',
+            ecolor=color,
+            elinewidth=0.7,
+            capsize=0,
+            alpha=0.35,
+            zorder=2
+        )
+
         ax1_deg.plot(lags, mean_v, marker=marker, linestyle='-', linewidth=2.0, markersize=7.5,
-                     label=f'{d_um:.2f} \u03bcm ($N={n_filt}$)', color=color)
+                     label=f'{d_um:.2f} \u03bcm ($N={n_filt}$)', color=color, zorder=4)
 
     ax1_deg.plot([t_g1, t_g2], [30.0 * rad2deg_sq * (t_g1 / 60.0)**1.0, 30.0 * rad2deg_sq * (t_g2 / 60.0)**1.0],
                  color='#333333', linestyle='--', linewidth=1.5)
@@ -514,7 +676,7 @@ def main():
         yscale='log',
         xlabel=r'Lag time $\Delta t$ [s]',
         ylabel=r'MSAD $\langle (\Delta \theta)^2 \rangle$ [$\mathrm{deg}^2$]',
-        title=r'Ensemble Mean MSAD $\pm$ IQR (Filtered: $\alpha > 0.5$)'
+        title=r'Ensemble Mean MSAD with Bootstrap 95% CI (Filtered: $\alpha > 0.5$)'
     )
     save_figure_to_all(fig1_deg, "MSAD_deg2", out_dirs)
 
@@ -543,6 +705,9 @@ def main():
             # MSAD(300s) rad^2
             "msad_300s_mean_rad2": msad_300_res["mean"],
             "msad_300s_sem_rad2": msad_300_res["sem"],
+            "msad_300s_boot_sem_rad2": msad_300_res["boot_sem"],
+            "msad_300s_boot_ci_low_rad2": msad_300_res["boot_ci_low"],
+            "msad_300s_boot_ci_high_rad2": msad_300_res["boot_ci_high"],
             "msad_300s_std_rad2": msad_300_res["std"],
             "msad_300s_median_rad2": msad_300_res["median"],
             "msad_300s_q25_rad2": msad_300_res["q25"],
@@ -554,6 +719,9 @@ def main():
             # Slope alpha_theta (4s~300s)
             "alpha_theta_4_300s_mean": slope_res["mean"],
             "alpha_theta_4_300s_sem": slope_res["sem"],
+            "alpha_theta_4_300s_boot_sem": slope_res["boot_sem"],
+            "alpha_theta_4_300s_boot_ci_low": slope_res["boot_ci_low"],
+            "alpha_theta_4_300s_boot_ci_high": slope_res["boot_ci_high"],
             "alpha_theta_4_300s_std": slope_res["std"],
             "alpha_theta_4_300s_median": slope_res["median"],
             "alpha_theta_4_300s_q25": slope_res["q25"],
@@ -690,13 +858,18 @@ def main():
         n_filt = item["n_filt"]
 
         valid_40 = (st.index >= 4.0) & (st.index <= 40.0)
-        lags = st.index[valid_40]
-        means = st['mean'][valid_40]
-        sems = st['sem'][valid_40]
+        lags = st.index[valid_40].to_numpy(dtype=float)
+        means = st['mean'][valid_40].to_numpy(dtype=float)
+        ci_lows = st['boot_ci_low'][valid_40].to_numpy(dtype=float)
+        ci_highs = st['boot_ci_high'][valid_40].to_numpy(dtype=float)
+        yerr_ci = [
+            np.clip(means - ci_lows, 0, None),
+            np.clip(ci_highs - means, 0, None)
+        ]
 
         # データ点
         ax4_left.errorbar(
-            lags, means, yerr=sems,
+            lags, means, yerr=yerr_ci,
             fmt=marker, color=color, ecolor=color, markersize=7.0, capsize=3,
             label=f"$R_c={rc_um:.2f}\,\mu\mathrm{{m}}$ ($d={d_um:.2f}\,\mu\mathrm{{m}}$)",
             zorder=3
@@ -745,18 +918,29 @@ def main():
     fig2, ax2_left = plt.subplots(figsize=(7.5, 5.5))
     ax2_right = ax2_left.twinx()
 
-    d_arr = df_msad300_slope['diameter_um'].to_numpy()
-    msad_m = df_msad300_slope['msad_300s_mean_rad2'].to_numpy()
-    msad_sem = df_msad300_slope['msad_300s_sem_rad2'].to_numpy()
-    alp_m = df_msad300_slope['alpha_theta_4_300s_mean'].to_numpy()
-    alp_sem = df_msad300_slope['alpha_theta_4_300s_sem'].to_numpy()
+    d_arr = df_msad300_slope['diameter_um'].to_numpy(dtype=float)
+    msad_m = df_msad300_slope['msad_300s_mean_rad2'].to_numpy(dtype=float)
+    msad_ci_low = df_msad300_slope['msad_300s_boot_ci_low_rad2'].to_numpy(dtype=float)
+    msad_ci_high = df_msad300_slope['msad_300s_boot_ci_high_rad2'].to_numpy(dtype=float)
+    msad_yerr = [
+        np.clip(msad_m - msad_ci_low, 0, None),
+        np.clip(msad_ci_high - msad_m, 0, None)
+    ]
+
+    alp_m = df_msad300_slope['alpha_theta_4_300s_mean'].to_numpy(dtype=float)
+    alp_ci_low = df_msad300_slope['alpha_theta_4_300s_boot_ci_low'].to_numpy(dtype=float)
+    alp_ci_high = df_msad300_slope['alpha_theta_4_300s_boot_ci_high'].to_numpy(dtype=float)
+    alp_yerr = [
+        np.clip(alp_m - alp_ci_low, 0, None),
+        np.clip(alp_ci_high - alp_m, 0, None)
+    ]
 
     # 左軸: MSAD(300s)
     c_left = style_colors[0]
     ax2_left.errorbar(
-        d_arr, msad_m, yerr=msad_sem,
+        d_arr, msad_m, yerr=msad_yerr,
         fmt='o-', color=c_left, ecolor=c_left, capsize=4, markersize=8, linewidth=2.0,
-        label=r'MSAD($\Delta t = 300\,\mathrm{s}$)'
+        label=r'MSAD($\Delta t = 300\,\mathrm{s}$) (Bootstrap 95% CI)'
     )
     ax2_left.set_xlabel(r'Cargo Diameter $d$ [$\mu\mathrm{m}$]')
     ax2_left.set_ylabel(r'MSAD($300\,\mathrm{s}$) [$\mathrm{rad}^2$]', color=c_left)
@@ -767,9 +951,9 @@ def main():
     # 右軸: alpha_theta (傾き)
     c_right = style_colors[1]
     ax2_right.errorbar(
-        d_arr, alp_m, yerr=alp_sem,
+        d_arr, alp_m, yerr=alp_yerr,
         fmt='s--', color=c_right, ecolor=c_right, capsize=4, markersize=8, linewidth=2.0,
-        label=r'Slope $\alpha_\theta$ ($4 - 300\,\mathrm{s}$)'
+        label=r'Slope $\alpha_\theta$ ($4 - 300\,\mathrm{s}$, Bootstrap 95% CI)'
     )
     ax2_right.axhline(1.0, color='gray', linestyle=':', linewidth=1.2, label=r'Diffusive ($\alpha_\theta = 1$)')
     ax2_right.set_ylabel(r'Slope $\alpha_\theta$ (MSAD $\propto \Delta t^{\alpha_\theta}$)', color=c_right)
