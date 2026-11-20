@@ -12,13 +12,35 @@ libs/gmm_cargo.py
     - State 1: Run（高速状態）
 """
 
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import h5py
 import numpy as np
 import pandas as pd
+import xarray as xr
 from sklearn.mixture import GaussianMixture
 
 from libs import hmm_cargo as hc
+from libs import hmm_flow_correlation as hfc
+
+RAD_MAP: Dict[str, int] = {
+    "beads06um": 3,
+    "beads1um": 6,
+    "beads3um": 15,
+    "beads5um": 25,
+    "beads7um": 35,
+    "beads20um": 95,
+}
+
+BEST_MAP: Dict[str, int] = {
+    "beads06um": 5,
+    "beads1um": 10,
+    "beads3um": 20,
+    "beads5um": 30,
+    "beads7um": 40,
+    "beads20um": 100,
+}
 
 STATE_COLORS: Dict[int, str] = {
     0: "#d95f02",  # Tumble: オレンジ系
@@ -574,6 +596,601 @@ def calc_per_particle_summary(df_obs: pd.DataFrame, bead_name: str, diameter_um:
             "geom_mean_v_norm_tumble": float(np.exp(grp.loc[tumble_mask, "log_v_norm"].mean())) if np.any(tumble_mask) else np.nan,
         })
     return pd.DataFrame(records)
+
+
+def compute_masked_annulus_polar_order(
+    exp_dir: Path,
+    df_exp_obs: pd.DataFrame,
+    bead_name: str,
+    scale: float = 0.11,
+    frame_interval: float = 4.0,
+) -> pd.DataFrame:
+    """
+    GFP_flows.h5 から、貨物内部 (r <= RAD_MAP[bead_name]) をマスクした足印アニュラス
+        RAD_MAP[bead_name] < r <= BEST_MAP[bead_name]
+    における局所ポーラーオーダー Phi_t および関連指標を直接計算する。
+    (scratch/extract_footprint_heterogeneity.py と同一定義)
+    """
+    if bead_name not in RAD_MAP or bead_name not in BEST_MAP:
+        raise ValueError(f"Unknown bead_name for footprint mask: {bead_name}")
+    flow_p = Path(exp_dir) / "GFP_flows.h5"
+    if not flow_p.exists() or df_exp_obs.empty:
+        return pd.DataFrame()
+
+    p_rad = RAD_MAP[bead_name]
+    best_rad = BEST_MAP[bead_name]
+    r_ceil = best_rad
+    v_unit = scale / frame_interval
+    p_col = "orig_particle" if "orig_particle" in df_exp_obs.columns else "particle"
+
+    records = []
+    with h5py.File(str(flow_p), "r", rdcc_nbytes=128 * 1024 * 1024) as f:
+        flow = f[list(f.keys())[0]]
+        total_frms = flow.shape[0]
+        h, w = flow.shape[2], flow.shape[3]
+
+        for frm, grp in df_exp_obs.groupby("frame"):
+            frm_int = int(frm)
+            if frm_int >= total_frms:
+                continue
+            for _, r in grp.iterrows():
+                bx = int(round(float(r["x_um"]) / scale))
+                by = int(round(float(r["y_um"]) / scale))
+                dx_px = float(r["dx_um"]) / scale
+                dy_px = float(r["dy_um"]) / scale
+
+                y_min, y_max = max(0, by - r_ceil), min(h, by + r_ceil + 1)
+                x_min, x_max = max(0, bx - r_ceil), min(w, bx + r_ceil + 1)
+                if y_max <= y_min or x_max <= x_min:
+                    continue
+
+                patch = flow[frm_int, :, y_min:y_max, x_min:x_max]
+                u_box, v_box = patch[0], patch[1]
+                yg, xg = np.ogrid[y_min - by:y_max - by, x_min - bx:x_max - bx]
+                dsq = xg ** 2 + yg ** 2
+                m = (dsq <= best_rad ** 2) & (dsq > p_rad ** 2)
+                if not np.any(m):
+                    continue
+
+                u_in = u_box[m].astype(np.float32)
+                v_in = v_box[m].astype(np.float32)
+                norm_in = np.hypot(u_in, v_in)
+                valid = norm_in > 0
+                if not np.any(valid):
+                    continue
+
+                u_hat = u_in[valid] / norm_in[valid]
+                v_hat = v_in[valid] / norm_in[valid]
+                phi_t = float(np.hypot(np.mean(u_hat), np.mean(v_hat)))
+
+                u_bar = float(np.mean(u_in))
+                v_bar = float(np.mean(v_in))
+                u_fp_px = float(np.hypot(u_bar, v_bar))
+                if u_fp_px > 0:
+                    f_opp = float(np.mean((u_in * u_bar + v_in * v_bar) < 0))
+                    v_par_um = float((dx_px * (u_bar / u_fp_px) + dy_px * (v_bar / u_fp_px)) * v_unit)
+                else:
+                    f_opp = 0.0
+                    v_par_um = 0.0
+
+                records.append({
+                    "exp_dir": Path(exp_dir).name,
+                    p_col: int(r[p_col]),
+                    "frame": frm_int,
+                    "phi_t": phi_t,
+                    "f_opp": f_opp,
+                    "v_parallel": v_par_um,
+                    "u_fp": float(u_fp_px * v_unit),
+                    "u_local_scalar": float(np.mean(norm_in) * v_unit),
+                    "v_cargo": float(np.hypot(dx_px, dy_px) * v_unit),
+                })
+
+    return pd.DataFrame(records)
+
+
+def load_or_compute_masked_annulus_data(
+    df_obs: pd.DataFrame,
+    bead_name: str,
+    exp_dirs: List[Path],
+    cache_path: Optional[Path] = None,
+    recompute: bool = False,
+    scale: float = 0.11,
+    frame_interval: float = 4.0,
+) -> pd.DataFrame:
+    """
+    貨物マスク付き足印アニュラスのポーラーオーダー (phi_t 等) を取得し、df_obs と結合する。
+    cache_path (scratch/footprint_heterogeneity_cache.pkl) が存在し全フレームをカバーしていれば高速読込し、
+    未計算または recompute=True の場合は GFP_flows.h5 から直接算出する。
+    """
+    if df_obs.empty:
+        return pd.DataFrame()
+
+    p_col = "orig_particle" if "orig_particle" in df_obs.columns else "particle"
+    df_fp = pd.DataFrame()
+
+    if (not recompute) and cache_path is not None and Path(cache_path).exists():
+        cached = pd.read_pickle(cache_path)
+        sub = cached[cached["bead_name"] == bead_name].copy()
+        if not sub.empty:
+            sub[p_col] = sub["particle"].astype(int)
+            sub["frame"] = sub["frame"].astype(int)
+            df_fp = sub[["exp_dir", p_col, "frame", "phi_t", "f_opp", "v_parallel", "u_fp", "u_local_scalar", "v_cargo"]]
+
+    if df_fp.empty:
+        parts = []
+        exp_map = {d.name: d for d in exp_dirs}
+        for exp_name, grp in df_obs.groupby("exp_dir"):
+            if exp_name in exp_map:
+                res = compute_masked_annulus_polar_order(
+                    exp_map[exp_name], grp, bead_name=bead_name, scale=scale, frame_interval=frame_interval
+                )
+                if not res.empty:
+                    parts.append(res)
+        if not parts:
+            return pd.DataFrame()
+        df_fp = pd.concat(parts, ignore_index=True)
+
+    merged = df_obs.merge(df_fp.drop_duplicates(subset=["exp_dir", p_col, "frame"]), on=["exp_dir", p_col, "frame"], how="inner")
+    if merged.empty:
+        return merged
+
+    merged["u_fp_norm"] = merged["u_fp"] / merged["u_inf_t"]
+    merged["v_par_norm"] = merged["v_parallel"] / merged["u_inf_t"]
+    merged["eta"] = np.where(merged["u_fp"] > 0, merged["v_parallel"] / merged["u_fp"], np.nan)
+    merged["cos_psi"] = np.where(merged["v_cargo"] > 0, merged["v_parallel"] / merged["v_cargo"], np.nan)
+    return merged
+
+
+def extract_masked_radial_polar_order(
+    exp_dirs: List[Path],
+    df_obs: pd.DataFrame,
+    scale: float = 0.11,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    local_polar_w.zarr（particle_radius による貨物マスク済み）および local_polar_bg.zarr から、
+    Run / Tumble / All / Background ごとの窓半径依存ポーラーオーダー Phi(R) を抽出する。
+    """
+    if df_obs.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    p_col = "orig_particle" if "orig_particle" in df_obs.columns else "particle"
+    exp_map = {d.name: d for d in exp_dirs}
+
+    sample_records = []
+    bg_records = []
+
+    for exp_name, grp in df_obs.groupby("exp_dir"):
+        ed = exp_map.get(exp_name)
+        if ed is None:
+            continue
+        zp = ed / "local_polar_w.zarr"
+        if not zp.exists():
+            continue
+
+        ds_p = xr.open_zarr(str(zp), consolidated=False)
+        w_dim = "window size" if "window size" in ds_p.dims else "window_size"
+        windows_px = ds_p.coords[w_dim].values.astype(int)
+        p_mask_rad = int(ds_p.attrs.get("particle_radius", 0))
+        valid_w_mask = windows_px > p_mask_rad
+        windows_px = windows_px[valid_w_mask]
+        windows_um = windows_px * scale
+
+        frames = ds_p.coords["frame"].values.astype(int)
+        particles = ds_p.coords["particle"].values.astype(int)
+        f_to_idx = {f: i for i, f in enumerate(frames)}
+        p_to_idx = {p: i for i, p in enumerate(particles)}
+
+        arr_p = ds_p["polar_order"].transpose(w_dim, "frame", "particle").values[valid_w_mask]
+
+        used_frames = set()
+        for _, r in grp.iterrows():
+            f_val = int(r["frame"])
+            p_val = int(r[p_col])
+            st = int(r["pred_state"])
+            fi = f_to_idx.get(f_val)
+            pi = p_to_idx.get(p_val)
+            if fi is None or pi is None:
+                continue
+            used_frames.add(f_val)
+            vals = arr_p[:, fi, pi]
+            if not np.any(np.isfinite(vals)):
+                continue
+            for w_px, w_um, phi_v in zip(windows_px, windows_um, vals):
+                if np.isfinite(phi_v):
+                    sample_records.append({
+                        "exp_dir": exp_name,
+                        "orig_particle": p_val,
+                        "frame": f_val,
+                        "pred_state": st,
+                        "window_px": int(w_px),
+                        "window_um": float(w_um),
+                        "phi": float(phi_v),
+                    })
+
+        bg_zp = ed / "local_polar_bg.zarr"
+        if bg_zp.exists() and used_frames:
+            ds_bg = xr.open_zarr(str(bg_zp), consolidated=False)
+            if "polar_order" in ds_bg:
+                bg_w_dim = "window size" if "window size" in ds_bg.dims else "window_size"
+                bg_w_px = ds_bg.coords[bg_w_dim].values.astype(int)
+                bg_frames = ds_bg.coords["frame"].values.astype(int)
+                bg_f_to_idx = {f: i for i, f in enumerate(bg_frames)}
+                bg_w_to_idx = {w: i for i, w in enumerate(bg_w_px)}
+                bg_arr = ds_bg["polar_order"].transpose(bg_w_dim, "frame").values
+
+                f_indices = [bg_f_to_idx[f] for f in sorted(used_frames) if f in bg_f_to_idx]
+                if f_indices:
+                    for w_px, w_um in zip(windows_px, windows_um):
+                        wi = bg_w_to_idx.get(int(w_px))
+                        if wi is None:
+                            continue
+                        vals_bg = bg_arr[wi, f_indices]
+                        vals_bg = vals_bg[np.isfinite(vals_bg)]
+                        if len(vals_bg) > 0:
+                            bg_records.append({
+                                "exp_dir": exp_name,
+                                "window_px": int(w_px),
+                                "window_um": float(w_um),
+                                "phi_mean": float(np.mean(vals_bg)),
+                                "n_frames": int(len(vals_bg)),
+                            })
+
+    return pd.DataFrame(sample_records), pd.DataFrame(bg_records)
+
+
+def hierarchical_bootstrap_ci(
+    df: pd.DataFrame,
+    value_col: str,
+    n_boot: int = 2000,
+    seed: int = 42,
+) -> Dict[str, float]:
+    """
+    実験動画 -> 貨物粒子の2段階階層ブートストラップにより、平均値・SEM・95% CI を算出する。
+    """
+    sub = df[df[value_col].notna() & np.isfinite(df[value_col])]
+    if sub.empty:
+        return {"mean": np.nan, "median": np.nan, "std": np.nan, "sem": np.nan, "ci_lo": np.nan, "ci_hi": np.nan, "n_obs": 0, "n_cargos": 0, "n_movies": 0}
+
+    p_col = "orig_particle" if "orig_particle" in sub.columns else "particle"
+    obs_mean = float(sub[value_col].mean())
+    obs_med = float(sub[value_col].median())
+    obs_std = float(sub[value_col].std(ddof=1)) if len(sub) > 1 else 0.0
+    n_cargos = int(sub.groupby(["exp_dir", p_col]).ngroups)
+    n_movies = int(sub["exp_dir"].nunique())
+
+    if n_movies == 0 or n_cargos <= 1:
+        return {"mean": obs_mean, "median": obs_med, "std": obs_std, "sem": 0.0, "ci_lo": obs_mean, "ci_hi": obs_mean, "n_obs": len(sub), "n_cargos": n_cargos, "n_movies": n_movies}
+
+    mov = {}
+    for ex, grp in sub.groupby("exp_dir"):
+        sums = grp.groupby(p_col)[value_col].sum().to_numpy(dtype=float)
+        cnts = grp.groupby(p_col)[value_col].count().to_numpy(dtype=float)
+        mov[ex] = (sums, cnts)
+
+    keys = list(mov.keys())
+    n_m = len(keys)
+    rng = np.random.default_rng(seed)
+    boots = np.empty(n_boot, dtype=float)
+    for b in range(n_boot):
+        tot_s, tot_c = 0.0, 0.0
+        for k in rng.choice(keys, size=n_m, replace=True):
+            s_arr, c_arr = mov[k]
+            idx = rng.integers(0, len(s_arr), size=len(s_arr))
+            tot_s += s_arr[idx].sum()
+            tot_c += c_arr[idx].sum()
+        boots[b] = tot_s / tot_c if tot_c > 0 else np.nan
+
+    return {
+        "mean": obs_mean,
+        "median": obs_med,
+        "std": obs_std,
+        "sem": float(np.nanstd(boots, ddof=1)),
+        "ci_lo": float(np.nanpercentile(boots, 2.5)),
+        "ci_hi": float(np.nanpercentile(boots, 97.5)),
+        "n_obs": int(len(sub)),
+        "n_cargos": n_cargos,
+        "n_movies": n_movies,
+    }
+
+
+def extract_spatial_correlation_curves(
+    exp_dirs: List[Path],
+    df_obs: pd.DataFrame,
+    scale: float = 0.11,
+) -> Tuple[np.ndarray, Dict[int, Dict[str, List[Tuple[np.ndarray, np.ndarray]]]], pd.DataFrame]:
+    """
+    angular_correlation_w.zarr（distance_px > particle_radius）および angular_correlation_bg.zarr から、
+    状態別（0: Tumble, 1: Run, -1: All）の貨物別相関曲線データと背景相関データを抽出する。
+
+    Returns
+    -------
+    d_um : np.ndarray
+        有効距離配列 [um]
+    cargo_curves_by_state : dict
+        {state: {exp_dir: [(mean_curve_for_cargo, count_for_cargo), ...]}}
+    df_bg_curves : pd.DataFrame
+        背景相関曲線 DataFrame
+    """
+    if df_obs.empty:
+        return np.array([]), {}, pd.DataFrame()
+
+    p_col = "orig_particle" if "orig_particle" in df_obs.columns else "particle"
+    exp_map = {d.name: d for d in exp_dirs}
+
+    d_um_ref = None
+    cargo_curves_by_state: Dict[int, Dict[str, List[Tuple[np.ndarray, np.ndarray]]]] = {0: {}, 1: {}, -1: {}}
+    bg_sums = None
+    bg_cnts = None
+
+    for exp_name, grp in df_obs.groupby("exp_dir"):
+        ed = exp_map.get(exp_name)
+        if ed is None:
+            continue
+        zp = ed / "angular_correlation_w.zarr"
+        if not zp.exists():
+            continue
+
+        ds = xr.open_zarr(str(zp), consolidated=False)
+        d_px = ds.coords["distance"].values.astype(int)
+        p_mask_rad = int(ds.attrs.get("particle_radius", 0))
+        valid_d = d_px > p_mask_rad
+        d_um = d_px[valid_d].astype(float) * scale
+        if d_um_ref is None:
+            d_um_ref = d_um
+
+        frames = ds.coords["frame"].values.astype(int)
+        particles = ds.coords["particle"].values.astype(int)
+        f_to_idx = {f: i for i, f in enumerate(frames)}
+        p_to_idx = {p: i for i, p in enumerate(particles)}
+        arr = ds["angular_correlation"].transpose("distance", "frame", "particle").values[valid_d]
+
+        used_frames = set()
+        for pid, p_grp in grp.groupby(p_col, sort=False):
+            pi = p_to_idx.get(int(pid))
+            if pi is None:
+                continue
+            for st in (0, 1, -1):
+                st_grp = p_grp if st == -1 else p_grp[p_grp["pred_state"] == st]
+                if st_grp.empty:
+                    continue
+                f_indices = [f_to_idx[int(f)] for f in st_grp["frame"].to_numpy() if int(f) in f_to_idx]
+                if not f_indices:
+                    continue
+                if st == -1:
+                    used_frames.update(int(f) for f in st_grp["frame"].to_numpy() if int(f) in f_to_idx)
+                mat = arr[:, f_indices, pi]
+                cnt = np.sum(np.isfinite(mat), axis=1).astype(float)
+                if np.any(cnt > 0):
+                    c_mean = np.nanmean(mat, axis=1)
+                    cargo_curves_by_state[st].setdefault(exp_name, []).append((c_mean, cnt))
+
+        bg_zp = ed / "angular_correlation_bg.zarr"
+        if bg_zp.exists() and used_frames:
+            ds_bg = xr.open_zarr(str(bg_zp), consolidated=False)
+            if "angular_correlation" in ds_bg:
+                bg_d_px = ds_bg.coords["distance"].values.astype(int)
+                bg_d_map = {int(dp): idx for idx, dp in enumerate(bg_d_px)}
+                sel_d_idx = [bg_d_map[int(dp)] for dp in d_px[valid_d] if int(dp) in bg_d_map]
+                bg_frames = ds_bg.coords["frame"].values.astype(int)
+                bg_f_map = {f: i for i, f in enumerate(bg_frames)}
+                sel_f_idx = [bg_f_map[f] for f in sorted(used_frames) if f in bg_f_map]
+                if len(sel_d_idx) == len(d_um) and sel_f_idx:
+                    bg_da = ds_bg["angular_correlation"]
+                    other_dims = [dim for dim in bg_da.dims if dim not in ("distance", "frame")]
+                    bg_arr = bg_da.transpose("distance", "frame", *other_dims).values[sel_d_idx][:, sel_f_idx]
+                    bg_flat = bg_arr.reshape(len(d_um), -1)
+                    if bg_sums is None:
+                        bg_sums = np.zeros(len(d_um), dtype=float)
+                        bg_cnts = np.zeros(len(d_um), dtype=float)
+                        bg_sq_sums = np.zeros(len(d_um), dtype=float)
+                    finite_m = np.isfinite(bg_flat)
+                    bg_sums += np.where(finite_m, bg_flat, 0.0).sum(axis=1)
+                    bg_sq_sums += np.where(finite_m, bg_flat ** 2, 0.0).sum(axis=1)
+                    bg_cnts += finite_m.sum(axis=1)
+
+    df_bg = pd.DataFrame()
+    if d_um_ref is not None and bg_sums is not None:
+        valid_b = bg_cnts > 1
+        mean_b = np.where(valid_b, bg_sums / np.maximum(bg_cnts, 1.0), np.nan)
+        var_b = np.where(valid_b, np.maximum(0.0, (bg_sq_sums / np.maximum(bg_cnts, 1.0)) - mean_b ** 2), 0.0)
+        sem_b = np.where(valid_b, np.sqrt(var_b / np.maximum(bg_cnts, 1.0)), np.nan)
+        df_bg = pd.DataFrame({
+            "distance_um": d_um_ref[valid_b],
+            "mean_correlation": mean_b[valid_b],
+            "sem_correlation": sem_b[valid_b],
+            "n_samples": bg_cnts[valid_b].astype(int),
+        })
+
+    return (d_um_ref if d_um_ref is not None else np.array([])), cargo_curves_by_state, df_bg
+
+
+def extract_masked_footprint_spatial_correlation(
+    exp_dirs: List[Path],
+    df_obs: pd.DataFrame,
+    bead_name: str,
+    scale: float = 0.11,
+    r_max_um: float = 20.5,
+) -> Tuple[np.ndarray, Dict[int, Dict[str, List[Tuple[np.ndarray, np.ndarray]]]]]:
+    """
+    貨物マスク済み足印アニュラス (RAD_MAP < r <= BEST_MAP) の平均配向 u_hat_fp を基準とし、
+    外側のリング (r > BEST_MAP) の流れとの空間配向相関 C_fp(r) = < u_hat_fp . u_hat(r_c + r) >
+    を GFP_flows.h5 から直接算出する（貨物中心ピクセルを完全に除外したクロスチェック用）。
+    """
+    if df_obs.empty:
+        return np.array([]), {}
+
+    r_in_fp, r_out_fp = RAD_MAP[bead_name], BEST_MAP[bead_name]
+    r_px_list = np.arange(r_out_fp + 1, int(np.ceil(r_max_um / scale)) + 1, 2)
+    r_um_list = r_px_list.astype(float) * scale
+    p_col = "orig_particle" if "orig_particle" in df_obs.columns else "particle"
+    exp_map = {d.name: d for d in exp_dirs}
+
+    cargo_curves_by_state: Dict[int, Dict[str, List[Tuple[np.ndarray, np.ndarray]]]] = {0: {}, 1: {}, -1: {}}
+    r_max_ceil = int(r_px_list[-1]) + 2
+
+    for exp_name, grp in df_obs.groupby("exp_dir"):
+        ed = exp_map.get(exp_name)
+        if ed is None or not (ed / "GFP_flows.h5").exists():
+            continue
+
+        # Accumulate per (orig_particle, pred_state)
+        acc: Dict[Tuple[int, int], List[np.ndarray]] = {}
+        with h5py.File(str(ed / "GFP_flows.h5"), "r", rdcc_nbytes=128 * 1024 * 1024) as f:
+            fl = f[list(f.keys())[0]]
+            total_frms, H, W = fl.shape[0], fl.shape[2], fl.shape[3]
+            for frm, f_grp in grp.groupby("frame"):
+                fi = int(frm)
+                if fi >= total_frms:
+                    continue
+                uv = fl[fi]
+                u_all, v_all = uv[0].astype(np.float32), uv[1].astype(np.float32)
+                for _, r in f_grp.iterrows():
+                    bx = int(round(float(r["x_um"]) / scale))
+                    by = int(round(float(r["y_um"]) / scale))
+                    y0, y1 = max(0, by - r_max_ceil), min(H, by + r_max_ceil + 1)
+                    x0, x1 = max(0, bx - r_max_ceil), min(W, bx + r_max_ceil + 1)
+                    ub, vb = u_all[y0:y1, x0:x1], v_all[y0:y1, x0:x1]
+                    nrm = np.hypot(ub, vb)
+                    ok = nrm > 0
+                    yg, xg = np.ogrid[y0 - by:y1 - by, x0 - bx:x1 - bx]
+                    dist = np.hypot(xg, yg)
+                    m_fp = (dist > r_in_fp) & (dist <= r_out_fp) & ok
+                    if not np.any(m_fp):
+                        continue
+                    uh_fp = float(np.mean(ub[m_fp] / nrm[m_fp]))
+                    vh_fp = float(np.mean(vb[m_fp] / nrm[m_fp]))
+                    n_fp = float(np.hypot(uh_fp, vh_fp))
+                    if n_fp <= 0:
+                        continue
+                    uh_fp /= n_fp
+                    vh_fp /= n_fp
+
+                    vec = np.full(len(r_px_list), np.nan, dtype=float)
+                    ux_n = np.where(ok, ub / np.where(ok, nrm, 1.0), 0.0)
+                    uy_n = np.where(ok, vb / np.where(ok, nrm, 1.0), 0.0)
+                    for i_r, rp in enumerate(r_px_list):
+                        mr = (dist >= rp - 1.0) & (dist <= rp + 1.0) & ok
+                        if np.any(mr):
+                            vec[i_r] = float(np.mean(ux_n[mr] * uh_fp + uy_n[mr] * vh_fp))
+
+                    pid = int(r[p_col])
+                    st = int(r["pred_state"])
+                    acc.setdefault((pid, st), []).append(vec)
+                    acc.setdefault((pid, -1), []).append(vec)
+
+        for (pid, st), vecs in acc.items():
+            mat = np.asarray(vecs, dtype=float)
+            cnt = np.sum(np.isfinite(mat), axis=0).astype(float)
+            if np.any(cnt > 0):
+                cargo_curves_by_state[st].setdefault(exp_name, []).append((np.nanmean(mat, axis=0), cnt))
+
+    return r_um_list, cargo_curves_by_state
+
+
+def fit_xi_with_hierarchical_bootstrap(
+    cargo_curves_by_movie: Dict[str, List[Tuple[np.ndarray, np.ndarray]]],
+    d_um: np.ndarray,
+    radius_um: float,
+    min_fit_dist: float = 0.0,
+    max_fit_dist: float = 20.0,
+    min_corr_threshold: float = 0.01,
+    cutoff_ratio: Optional[float] = 1.0 / np.e,
+    n_boot: int = 1000,
+    seed: int = 42,
+) -> Tuple[pd.DataFrame, dict]:
+    """
+    貨物別の相関曲線から重み付きプール相関曲線 C(r) を構築して xi をフィッティングし、
+    さらに実験動画 -> 貨物粒子の2段階階層ブートストラップで xi および R_c / xi の 95% CI を算出する。
+    """
+    if not cargo_curves_by_movie or len(d_um) < 3:
+        return pd.DataFrame(), {"xi_um": np.nan, "rc_over_xi": np.nan}
+
+    def _aggregate_curve(items: List[Tuple[np.ndarray, np.ndarray]]) -> pd.DataFrame:
+        num = np.zeros(len(d_um), dtype=float)
+        den = np.zeros(len(d_um), dtype=float)
+        sq = np.zeros(len(d_um), dtype=float)
+        for c_mean, cnt in items:
+            valid = np.isfinite(c_mean) & (cnt > 0)
+            num[valid] += c_mean[valid] * cnt[valid]
+            sq[valid] += (c_mean[valid] ** 2) * cnt[valid]
+            den[valid] += cnt[valid]
+        ok = den >= 3
+        mean_c = np.where(ok, num / np.maximum(den, 1.0), np.nan)
+        var_c = np.where(ok, np.maximum(0.0, sq / np.maximum(den, 1.0) - mean_c ** 2), 0.0)
+        sem_c = np.where(ok, np.sqrt(var_c / np.maximum(den, 1.0)), np.nan)
+        return pd.DataFrame({
+            "distance_um": d_um[ok],
+            "mean_correlation": mean_c[ok],
+            "sem_correlation": sem_c[ok],
+            "n_samples": den[ok].astype(int),
+        })
+
+    all_items = [item for items in cargo_curves_by_movie.values() for item in items]
+    df_curve = _aggregate_curve(all_items)
+    fit_res = hfc.fit_flow_correlation_length(
+        df_curve,
+        min_fit_dist=min_fit_dist,
+        max_fit_dist=max_fit_dist,
+        min_corr_threshold=min_corr_threshold,
+        cutoff_ratio=cutoff_ratio,
+    )
+    xi_obs = float(fit_res.get("xi_um", np.nan))
+    rc_xi_obs = float(radius_um / xi_obs) if (np.isfinite(xi_obs) and xi_obs > 0) else np.nan
+
+    keys = [k for k, v in cargo_curves_by_movie.items() if len(v) > 0]
+    n_m = len(keys)
+    n_c = len(all_items)
+
+    xi_boots = []
+    if n_m >= 1 and n_c >= 2:
+        rng = np.random.default_rng(seed)
+        for _ in range(n_boot):
+            sampled = []
+            for mk in rng.choice(keys, size=n_m, replace=True):
+                items = cargo_curves_by_movie[mk]
+                idx = rng.integers(0, len(items), size=len(items))
+                for i in idx:
+                    sampled.append(items[int(i)])
+            df_b = _aggregate_curve(sampled)
+            rb = hfc.fit_flow_correlation_length(
+                df_b,
+                min_fit_dist=min_fit_dist,
+                max_fit_dist=max_fit_dist,
+                min_corr_threshold=min_corr_threshold,
+                cutoff_ratio=cutoff_ratio,
+            )
+            xb = float(rb.get("xi_um", np.nan))
+            if np.isfinite(xb) and xb > 0:
+                xi_boots.append(xb)
+
+    if len(xi_boots) >= 10:
+        xi_arr = np.asarray(xi_boots, dtype=float)
+        rc_xi_arr = radius_um / xi_arr
+        xi_lo, xi_hi = float(np.percentile(xi_arr, 2.5)), float(np.percentile(xi_arr, 97.5))
+        rc_lo, rc_hi = float(np.percentile(rc_xi_arr, 2.5)), float(np.percentile(rc_xi_arr, 97.5))
+    else:
+        xi_lo = xi_hi = xi_obs
+        rc_lo = rc_hi = rc_xi_obs
+
+    summary = {
+        "xi_um": xi_obs,
+        "xi_fit_err_um": float(fit_res.get("xi_err_um", np.nan)),
+        "xi_ci_lo": xi_lo,
+        "xi_ci_hi": xi_hi,
+        "rc_over_xi": rc_xi_obs,
+        "rc_xi_ci_lo": rc_lo,
+        "rc_xi_ci_hi": rc_hi,
+        "r2_log": float(fit_res.get("r2_log", np.nan)),
+        "r2": float(fit_res.get("r2", np.nan)),
+        "amplitude": float(fit_res.get("amplitude", np.nan)),
+        "r_fit_min_um": float(fit_res.get("r_fit_min_um", np.nan)),
+        "r_fit_max_um": float(fit_res.get("r_fit_max_um", np.nan)),
+        "n_cargos": n_c,
+        "n_movies": n_m,
+        "fit_r": fit_res.get("fit_r", np.array([])),
+        "fit_c": fit_res.get("fit_c", np.array([])),
+    }
+    return df_curve, summary
 
 
 # 再利用する解析関数（hmm_cargo.py とロジックを重複させない）

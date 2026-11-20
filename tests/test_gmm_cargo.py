@@ -1,6 +1,10 @@
 """Unit tests for libs/gmm_cargo.py."""
 
+import tempfile
 import unittest
+from pathlib import Path
+
+import h5py
 import numpy as np
 import pandas as pd
 
@@ -75,6 +79,54 @@ class TestGmmCargo(unittest.TestCase):
         oacf = ac[1]["oacf"]
         lag1_corr = float(oacf.loc[oacf["lag_frames"] == 1, "corr"].iloc[0])
         self.assertAlmostEqual(lag1_corr, 1.0, places=9)
+
+    def test_compute_masked_annulus_polar_order_excludes_cargo_interior(self):
+        # Flow field: uniform rightward (+x) everywhere EXCEPT inside cargo radius (r <= 3 px)
+        # where an artifact points downward/leftward. Cargo mask must ignore r <= 3 px.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exp_dir = Path(tmpdir) / "expTest"
+            exp_dir.mkdir(parents=True, exist_ok=True)
+            H, W = 31, 31
+            bx, by = 15, 15
+            flow = np.zeros((2, 2, H, W), dtype=np.float32)
+            flow[:, 0, :, :] = 1.0  # +x uniform
+            yy, xx = np.ogrid[:H, :W]
+            inner = ((xx - bx) ** 2 + (yy - by) ** 2) <= 3 ** 2
+            flow[:, 0, inner] = -5.0  # strong cargo-interior artifact
+            flow[:, 1, inner] = 5.0
+            with h5py.File(exp_dir / "GFP_flows.h5", "w") as hf:
+                hf.create_dataset("flows", data=flow)
+
+            df_obs = pd.DataFrame({
+                "exp_dir": ["expTest"],
+                "orig_particle": [7],
+                "frame": [0],
+                "x_um": [bx * 0.11],
+                "y_um": [by * 0.11],
+                "dx_um": [0.11],
+                "dy_um": [0.0],
+            })
+            res = gc.compute_masked_annulus_polar_order(exp_dir, df_obs, bead_name="beads06um")
+            self.assertEqual(len(res), 1)
+            self.assertAlmostEqual(float(res["phi_t"].iloc[0]), 1.0, places=6)
+            self.assertAlmostEqual(float(res["f_opp"].iloc[0]), 0.0, places=6)
+
+    def test_fit_xi_with_hierarchical_bootstrap_recovers_exponential_xi(self):
+        d_um = np.linspace(0.5, 20.0, 40)
+        xi_true = 4.0
+        radius_um = 0.5
+        c_curve = np.exp(-d_um / xi_true)
+        cnt = np.full_like(d_um, 100.0)
+        cargo_by_movie = {
+            "m1": [(c_curve, cnt), (c_curve * 0.98, cnt)],
+            "m2": [(c_curve * 1.02, cnt), (c_curve, cnt)],
+        }
+        df_curve, summ = gc.fit_xi_with_hierarchical_bootstrap(
+            cargo_by_movie, d_um=d_um, radius_um=radius_um, n_boot=50, seed=7
+        )
+        self.assertFalse(df_curve.empty)
+        self.assertAlmostEqual(summ["xi_um"], xi_true, places=2)
+        self.assertAlmostEqual(summ["rc_over_xi"], radius_um / xi_true, places=3)
 
 
 if __name__ == "__main__":
