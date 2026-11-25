@@ -89,7 +89,7 @@ if str(CURRENT_DIR) not in sys.path:
 from libs.calc_bg_angular_correlation import load_nematic_thetas, parse_distances
 from libs.fft_convolution import FFTConvolver
 from libs.hmm_flow_correlation import fit_flow_correlation_length
-from libs.experiment_cutoff import get_cutoff_frame, DEFAULT_EXPERIMENT_CUTOFFS
+from libs.experiment_cutoff import get_cutoff_frame, DEFAULT_EXPERIMENT_CUTOFFS, is_excluded_experiment
 
 # スタイル適用
 _style_path = CURRENT_DIR / 'libs' / 'my_style.mplstyle'
@@ -223,7 +223,7 @@ def find_experiment_dirs(root_dir: Path, bead_name: str, dir_name: Optional[str]
         return []
 
     def _valid(p: Path) -> bool:
-        return p.is_dir() and (p / FLOW_NAME).exists()
+        return p.is_dir() and (p / FLOW_NAME).exists() and not is_excluded_experiment(p.name)
 
     exp_dirs = [p for p in sorted(base.glob('*/*')) if _valid(p)]
     if not exp_dirs:

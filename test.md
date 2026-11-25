@@ -544,3 +544,63 @@ $\Delta D_{\ge 3}$ の中身を、円周フーリエ係数 $m_n = \langle \cos(n
 このため、**同じ $R_c/\xi_{\mathrm{state}} \approx 0.13\text{--}0.14$ 上に並んだ `0.63 um Tumble` と `1.18 um Run`** は、横軸の数値は同じでも「環境欠陥に捕まって脱離している状態」と「依然としてレールに乗って推進している状態」を比較していることになり、上下に 2 本のブランチとして分岐します。
 - **検証アイデア**: $\xi_{\mathrm{state}}$（状態中に貨物が経験した平均の相関長）ではなく、貨物を除いた背景動画側の位置ごとの局所指標（微小管の局所ネマチック秩序度 $S_{\mathrm{local}}(\mathbf{r}, t)$、極性秩序度 $\Phi_{\mathrm{local}}(\mathbf{r}, t)$、フィラメント交差密度）を抽出し、**「Tumble $\to$ Run / Run $\to$ Tumble の遷移が起きる場所の背景特徴」**と**「同じ背景秩序 $S_{\mathrm{local}}$ にいるときの Run vs Tumble の違い」**を条件付きで比較すると、環境のせいか貨物・モーター状態のせいかをかなり明確に分離できます。
 
+結論から言うと、今回の KL ダイバージェンス $D_{\mathrm{KL}}(P \parallel P_{\mathrm{iso}})$ は、有効ポテンシャル $\tilde{U}_{\mathrm{eff}}$ の基準と同じく「実効的な回転ノイズエネルギー $\zeta_r D_r^{\mathrm{eff}}$（＝有効温度に換算した $k_B T_{\mathrm{eff}}$）」で割った過剰有効自由エネルギーとして考えられます。
+
+---
+
+### 1. ランジュバン・フォッカープランク方程式からの直接的な導出
+
+貨物の相対角 $\theta_{\mathrm{pt}}$ の時間発展を記述する過減衰ランジュバン方程式
+
+
+$$\frac{d\theta_{\mathrm{pt}}}{dt} = -\frac{1}{\zeta_r}\frac{\partial U_{\mathrm{phys}}(\theta_{\mathrm{pt}})}{\partial \theta_{\mathrm{pt}}} + \sqrt{2D_r^{\mathrm{eff}}}\,\eta(t)$$
+
+
+の定常解は、有効ノイズエネルギー $E_{\mathrm{noise}} \equiv \zeta_r D_r^{\mathrm{eff}}$（アインシュタイン関係式のアナログで $k_B T_{\mathrm{eff}} \equiv \zeta_r D_r^{\mathrm{eff}}$）を用いてボルツマン分布と同じ形に書けます。
+
+$$P(\theta_{\mathrm{pt}}) = \frac{1}{Z}\exp\!\left(-\frac{U_{\mathrm{phys}}(\theta_{\mathrm{pt}})}{\zeta_r D_r^{\mathrm{eff}}}\right)$$
+
+ここで、有効エネルギー項 $\langle U_{\mathrm{phys}} \rangle_P$ とシャノンエントロピー $S[P] = -\int_{-\pi}^{\pi} P(\theta_{\mathrm{pt}})\ln P(\theta_{\mathrm{pt}})\,d\theta_{\mathrm{pt}}$ からなる有効自由エネルギー汎関数
+
+
+$$\mathcal{F}_{\mathrm{eff}}[P] \equiv \langle U_{\mathrm{phys}} \rangle_P - \left(\zeta_r D_r^{\mathrm{eff}}\right) S[P]$$
+
+
+を定義すると、整列ポテンシャルがゼロの完全等方状態（$P_{\mathrm{iso}} = \frac{1}{2\pi}$）に対する過剰有効自由エネルギー $\Delta\mathcal{F}_{\mathrm{eff}} \equiv \mathcal{F}_{\mathrm{eff}}[P] - \mathcal{F}_{\mathrm{eff}}[P_{\mathrm{iso}}]$ は厳密に次式になります。
+
+$$D_{\mathrm{KL}}(P \parallel P_{\mathrm{iso}}) = \frac{\Delta\mathcal{F}_{\mathrm{eff}}}{\zeta_r D_r^{\mathrm{eff}}} = \frac{\langle \Delta U_{\mathrm{phys}} \rangle_P}{\zeta_r D_r^{\mathrm{eff}}} - \Delta S[P]$$
+
+つまり、分母にきているのは「周囲の熱揺らぎ＋キネシンの確率的な結合解離＋ネットワークの乱れが作る『配向をかき乱す実効ノイズエネルギー $\zeta_r D_r^{\mathrm{eff}}$』」です。
+
+---
+
+### 2. 2つの物理的見方の整理
+
+今回の系では、着目するエネルギー項の取り方によって $D_{\mathrm{KL}}$ を次の 2 通りに解釈できます。
+
+| 基準となる分母 | 分子の自由エネルギー | 物理的な意味 |
+| --- | --- | --- |
+| **実効回転ノイズエネルギー**<br>
+
+<br>$\zeta_r D_r^{\mathrm{eff}}$（$= k_B T_{\mathrm{eff}}$） | **有効整列自由エネルギー**<br>
+
+<br>$\Delta\mathcal{F}_{\mathrm{eff}} = \langle \Delta U_{\mathrm{phys}} \rangle - \zeta_r D_r^{\mathrm{eff}} \Delta S$ | 貨物をレール向きに揃える力学的エネルギー（第1項）と、向きをバラバラにする実効ノイズ（第2項）の差し引き。<br>
+
+<br>→ **整列の SN 比（実質的な拘束の強さ）** |
+| **熱浴の熱エネルギー**<br>
+
+<br>$k_B T$ | **過剰非平衡自由エネルギー**<br>
+
+<br>$\Delta\mathcal{F}_{\mathrm{neq}} = -k_B T\,\Delta S$ | ATP 加水分解のエネルギーを消費して、無駆動の等方平衡状態からどれだけ低いエントロピー（高い配向秩序）を維持しているか。<br>
+
+<br>→ **情報熱力学的なアベイラビリティ** |
+
+---
+
+### 3. 分子ロボEXのポスターで説明する際の言い換え
+
+ポスター発表の場では、$\zeta_r D_r^{\mathrm{eff}}$ や有効温度といった記号は出さず、この式の意味をそのまま言葉にして、
+
+> **「向きをランダムにかき乱す揺らぎ（ノイズ）のエネルギーを $1$ としたときに、貨物がどれだけ整列のエネルギー（配向秩序）を保てているかを表す指標」**
+
+と説明するのが最もシンプルで、物理系・非物理系のどちらにも誤解なく伝わります。

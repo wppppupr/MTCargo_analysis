@@ -23,7 +23,12 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.ticker as ticker
 from scipy.optimize import curve_fit
-from libs.experiment_cutoff import get_cutoff_frame, load_strict_active_particles
+from libs.experiment_cutoff import (
+    get_cutoff_frame,
+    load_strict_active_particles,
+    is_excluded_experiment,
+    is_excluded_particle,
+)
 
 # スタイルの適用 (MSD.py と完全に統一)
 style_path = Path(__file__).parent / 'libs' / 'my_style.mplstyle'
@@ -130,6 +135,8 @@ def concat_pooled_particles_MSAD(
 
     for vid_idx, file_path in enumerate(file_list):
         exp_dir_name = Path(file_path).parent.name
+        if is_excluded_experiment(exp_dir_name):
+            continue
         interval = interval_list[vid_idx] if vid_idx < len(interval_list) else interval_list[-1]
         df_raw = pd.read_csv(file_path)
 
@@ -140,8 +147,12 @@ def concat_pooled_particles_MSAD(
                 if len(df_raw) == 0:
                     continue
 
-        if strict_particles is not None and 'particle' in df_raw.columns:
-            valid_pids = [pid for pid in df_raw['particle'].unique() if (exp_dir_name, int(pid)) in strict_particles]
+        if 'particle' in df_raw.columns:
+            valid_pids = [
+                pid for pid in df_raw['particle'].unique()
+                if not is_excluded_particle(exp_dir_name, pid)
+                and (strict_particles is None or (exp_dir_name, int(pid)) in strict_particles)
+            ]
             df_raw = df_raw[df_raw['particle'].isin(valid_pids)].copy()
             if len(df_raw) == 0:
                 continue

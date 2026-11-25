@@ -31,8 +31,9 @@ import numpy as np
 import pandas as pd
 import scipy.fft as sfft
 
-# スタイルの適用
 current_dir = Path(__file__).parent.resolve()
+sys.path.insert(0, str(current_dir))
+from libs.experiment_cutoff import is_excluded_experiment
 style_path = current_dir / 'libs' / 'my_style.mplstyle'
 if style_path.exists():
     plt.style.use(str(style_path))
@@ -222,7 +223,8 @@ def main():
         b_dir = root_dir / b_name
         h5_list = sorted(list(b_dir.glob("*/*/GFP_flows.h5")))
         for h5_p in h5_list:
-            movie_tasks.append((b_name, b_idx, str(h5_p)))
+            if not is_excluded_experiment(h5_p.parent.name):
+                movie_tasks.append((b_name, b_idx, str(h5_p)))
 
     print(f"Found {len(movie_tasks)} movies across {len(BEADS_INFO)} bead conditions.")
 

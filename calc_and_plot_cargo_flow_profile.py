@@ -26,6 +26,10 @@ import matplotlib.ticker as ticker
 
 # ワークスペースおよび保存先設定
 CURRENT_DIR = Path(__file__).resolve().parent
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
+from libs.experiment_cutoff import is_excluded_experiment, is_excluded_particle
+
 ROOT_DIR = Path("/mnt/NAS-Ebanaru/sasaki/MTsingleBeads")
 if not ROOT_DIR.exists():
     ROOT_DIR = CURRENT_DIR
@@ -82,6 +86,7 @@ TARGET_DIRS = [
     "/mnt/NAS-Ebanaru/sasaki/MTsingleBeads/beads20um/20260723/beads20um002",
     "/mnt/NAS-Ebanaru/sasaki/MTsingleBeads/beads20um/20260723/beads20um_crop"
 ]
+TARGET_DIRS = [d for d in TARGET_DIRS if not is_excluded_experiment(Path(d).name)]
 
 SCALE_UM_PER_PX = 0.11
 DT_SEC = 4.0
@@ -153,6 +158,11 @@ def process_single_experiment(exp_dir_str: str, b_info: dict, max_r_edge_um: flo
     df_tracks = pd.read_csv(csv_path)
     if 'particle' not in df_tracks.columns:
         df_tracks['particle'] = 0
+    df_tracks = df_tracks[
+        ~df_tracks['particle'].apply(lambda p: is_excluded_particle(exp_dir.name, p))
+    ].copy()
+    if df_tracks.empty:
+        return None
         
     Rc_px = b_info['rc_px']
     max_r_edge_px = max_r_edge_um / SCALE_UM_PER_PX
@@ -276,6 +286,9 @@ def main():
     if cache_file.exists() and not args.force_recompute:
         print(f"Loading extended cached flow profiles from {cache_file}...")
         df_all = pd.read_pickle(cache_file)
+        df_all = df_all[
+            ~df_all['exp_dir'].astype(str).apply(lambda s: is_excluded_experiment(Path(s).name))
+        ].reset_index(drop=True)
         if 'dist_um' not in df_all.columns:
             df_all['dist_um'] = df_all.apply(lambda row: row['r_edge_um'] + row['radius_um'], axis=1)
         if args.u_inf_mode == 'frame' and 'norm_speed_frame' not in df_all.columns:

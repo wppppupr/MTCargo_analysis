@@ -151,7 +151,8 @@ def plot_spatial_corr_and_fits(
         ax_bot.set_xlabel(r"Distance $r$ from Cargo Center [$\mu\mathrm{m}$]", fontsize=10.5)
         ax_bot.set_title(rf"$d={dia:.2f}\,\mu\mathrm{{m}}$: Cargo-Masked Footprint $C_{{\mathrm{{fp}}}}(r)$", fontsize=11, fontweight="bold")
         ax_bot.grid(True, which="both", ls="--", alpha=0.35)
-        ax_bot.legend(loc="lower left", fontsize=8.3, framealpha=0.9)
+        if f_data:
+            ax_bot.legend(loc="lower left", fontsize=8.3, framealpha=0.9)
 
     axes[0, 0].set_ylabel(r"Spatial Orientation Correlation $C(r)$", fontsize=10.5)
     axes[1, 0].set_ylabel(r"Masked Footprint Correlation $C_{\mathrm{fp}}(r)$", fontsize=10.5)
@@ -254,6 +255,7 @@ def main():
     parser.add_argument("--beads", nargs="+", default=["beads06um", "beads1um"])
     parser.add_argument("--max_fit_dist", type=float, default=20.0)
     parser.add_argument("--n_boot", type=int, default=1000)
+    parser.add_argument("--skip_fp", action="store_true", help="Skip slow GFP_flows.h5 C_fp(r) computation")
     args = parser.parse_args()
 
     root_dir = Path(args.root_dir) if args.root_dir else find_default_root()
@@ -401,39 +403,40 @@ def main():
             print(f"  [zarr] {'Background':10s}: xi = {xi_bg:.3f}±{xi_bg_err:.3f} um (R2_log={summ_bg['r2_log']:.3f}) | R_c/xi = {rc_bg:.4f}")
 
         # 2. Cross-check: pure cargo-masked footprint-referenced C_fp(r) from GFP_flows.h5
-        r_fp_um, fp_by_st = gc.extract_masked_footprint_spatial_correlation(edirs, df_obs, bead_name=bname, r_max_um=args.max_fit_dist + 0.5)
         fp_curves_for_plot[bname] = {}
-        for st, mode_lbl in [(0, "Tumble"), (1, "Run"), (-1, "All")]:
-            dfc_fp, summ_fp = gc.fit_xi_with_hierarchical_bootstrap(
-                fp_by_st.get(st, {}),
-                d_um=r_fp_um,
-                radius_um=rc_um,
-                min_fit_dist=0.0,
-                max_fit_dist=args.max_fit_dist,
-                min_corr_threshold=0.01,
-                cutoff_ratio=1.0 / np.e,
-                n_boot=args.n_boot,
-                seed=42,
-            )
-            fp_curves_for_plot[bname][mode_lbl] = (dfc_fp, summ_fp)
-            if not dfc_fp.empty:
-                tmp = dfc_fp.copy()
-                tmp["bead_name"] = bname
-                tmp["diameter_um"] = dia
-                tmp["mode"] = mode_lbl
-                fp_curve_rows.append(tmp)
-            summary_rows.append({
-                "source": "masked_footprint_C_fp",
-                "bead_name": bname,
-                "diameter_um": dia,
-                "radius_um": rc_um,
-                "mode": mode_lbl,
-                **{k: v for k, v in summ_fp.items() if k not in ("fit_r", "fit_c")},
-            })
-            print(
-                f"  [C_fp] {mode_lbl:10s}: xi = {summ_fp['xi_um']:.3f} [{summ_fp['xi_ci_lo']:.3f}, {summ_fp['xi_ci_hi']:.3f}] um "
-                f"(R2_log={summ_fp['r2_log']:.3f}) | R_c/xi = {summ_fp['rc_over_xi']:.4f} [{summ_fp['rc_xi_ci_lo']:.4f}, {summ_fp['rc_xi_ci_hi']:.4f}]"
-            )
+        if not args.skip_fp:
+            r_fp_um, fp_by_st = gc.extract_masked_footprint_spatial_correlation(edirs, df_obs, bead_name=bname, r_max_um=args.max_fit_dist + 0.5)
+            for st, mode_lbl in [(0, "Tumble"), (1, "Run"), (-1, "All")]:
+                dfc_fp, summ_fp = gc.fit_xi_with_hierarchical_bootstrap(
+                    fp_by_st.get(st, {}),
+                    d_um=r_fp_um,
+                    radius_um=rc_um,
+                    min_fit_dist=0.0,
+                    max_fit_dist=args.max_fit_dist,
+                    min_corr_threshold=0.01,
+                    cutoff_ratio=1.0 / np.e,
+                    n_boot=args.n_boot,
+                    seed=42,
+                )
+                fp_curves_for_plot[bname][mode_lbl] = (dfc_fp, summ_fp)
+                if not dfc_fp.empty:
+                    tmp = dfc_fp.copy()
+                    tmp["bead_name"] = bname
+                    tmp["diameter_um"] = dia
+                    tmp["mode"] = mode_lbl
+                    fp_curve_rows.append(tmp)
+                summary_rows.append({
+                    "source": "masked_footprint_C_fp",
+                    "bead_name": bname,
+                    "diameter_um": dia,
+                    "radius_um": rc_um,
+                    "mode": mode_lbl,
+                    **{k: v for k, v in summ_fp.items() if k not in ("fit_r", "fit_c")},
+                })
+                print(
+                    f"  [C_fp] {mode_lbl:10s}: xi = {summ_fp['xi_um']:.3f} [{summ_fp['xi_ci_lo']:.3f}, {summ_fp['xi_ci_hi']:.3f}] um "
+                    f"(R2_log={summ_fp['r2_log']:.3f}) | R_c/xi = {summ_fp['rc_over_xi']:.4f} [{summ_fp['rc_xi_ci_lo']:.4f}, {summ_fp['rc_xi_ci_hi']:.4f}]"
+                )
 
     df_sum = pd.DataFrame(summary_rows)
     df_pe = pd.DataFrame(per_exp_rows)

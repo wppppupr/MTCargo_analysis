@@ -25,7 +25,13 @@ from scipy.optimize import curve_fit
 from libs import fit_model as fm
 from libs import displacement as dpm
 from libs import cal_vel as cv
-from libs.experiment_cutoff import get_cutoff_frame, DEFAULT_EXPERIMENT_CUTOFFS, load_strict_active_particles
+from libs.experiment_cutoff import (
+    get_cutoff_frame,
+    DEFAULT_EXPERIMENT_CUTOFFS,
+    load_strict_active_particles,
+    is_excluded_experiment,
+    is_excluded_particle,
+)
 
 # スタイルの適用
 style_path = Path(__file__).parent / 'libs' / 'my_style.mplstyle'
@@ -96,6 +102,8 @@ def concat_pooled_particles_MSD(folder, interval_list, scale = 0.11, alpha_thres
     file_list = sorted(glob.glob(str(Path(folder) / "*" / "*" / "beads_tracks.csv")))
     for vid_idx, file_path in enumerate(file_list):
         exp_dir_name = Path(file_path).parent.name
+        if is_excluded_experiment(exp_dir_name):
+            continue
         interval = interval_list[vid_idx] if vid_idx < len(interval_list) else interval_list[-1]
         raw_df = pd.read_csv(file_path)
         if apply_cutoff:
@@ -105,8 +113,12 @@ def concat_pooled_particles_MSD(folder, interval_list, scale = 0.11, alpha_thres
                 if len(raw_df) == 0:
                     continue
 
-        if strict_particles is not None and 'particle' in raw_df.columns:
-            valid_pids = [pid for pid in raw_df['particle'].unique() if (exp_dir_name, int(pid)) in strict_particles]
+        if 'particle' in raw_df.columns:
+            valid_pids = [
+                pid for pid in raw_df['particle'].unique()
+                if not is_excluded_particle(exp_dir_name, pid)
+                and (strict_particles is None or (exp_dir_name, int(pid)) in strict_particles)
+            ]
             raw_df = raw_df[raw_df['particle'].isin(valid_pids)].copy()
             if len(raw_df) == 0:
                 continue
@@ -320,6 +332,8 @@ def concat_pooled_particles_dimensionless_MSD(
     for vid_idx, file_path in enumerate(file_list):
         exp_dir = Path(file_path).parent
         exp_dir_name = exp_dir.name
+        if is_excluded_experiment(exp_dir_name):
+            continue
         interval = interval_list[vid_idx] if vid_idx < len(interval_list) else interval_list[-1]
 
         if exp_dir_name not in flow_map:
@@ -342,8 +356,12 @@ def concat_pooled_particles_dimensionless_MSD(
                 if len(raw_df) == 0:
                     continue
 
-        if strict_particles is not None and 'particle' in raw_df.columns:
-            valid_pids = [pid for pid in raw_df['particle'].unique() if (exp_dir_name, int(pid)) in strict_particles]
+        if 'particle' in raw_df.columns:
+            valid_pids = [
+                pid for pid in raw_df['particle'].unique()
+                if not is_excluded_particle(exp_dir_name, pid)
+                and (strict_particles is None or (exp_dir_name, int(pid)) in strict_particles)
+            ]
             raw_df = raw_df[raw_df['particle'].isin(valid_pids)].copy()
             if len(raw_df) == 0:
                 continue

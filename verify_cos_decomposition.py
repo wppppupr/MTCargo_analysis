@@ -30,9 +30,19 @@ ROOT_DIR_CANDIDATES = [
 ROOT_DIR = next((p for p in ROOT_DIR_CANDIDATES if p.exists()), CURRENT_DIR)
 
 try:
-    from libs.experiment_cutoff import get_cutoff_frame, filter_by_cutoff
+    from libs.experiment_cutoff import (
+        get_cutoff_frame,
+        filter_by_cutoff,
+        is_excluded_experiment,
+        is_excluded_particle,
+    )
 except ImportError:
-    from experiment_cutoff import get_cutoff_frame, filter_by_cutoff
+    from experiment_cutoff import (
+        get_cutoff_frame,
+        filter_by_cutoff,
+        is_excluded_experiment,
+        is_excluded_particle,
+    )
 
 OUT_DIRS = [
     CURRENT_DIR / "figure" / "cos_decomposition",
@@ -111,11 +121,11 @@ def find_experiment_dirs(root_dir: Path, bead_name: str) -> List[Path]:
         return (p / "beads_flow_interaction.csv").exists() or (p / "beads_flow_interaction_gaussian.csv").exists()
 
     for p in sorted(base.glob("*/*")):
-        if p.is_dir() and _has_interaction(p):
+        if p.is_dir() and _has_interaction(p) and not is_excluded_experiment(p.name):
             exp_dirs.append(p)
     if not exp_dirs:
         for p in sorted(base.glob("*")):
-            if p.is_dir() and _has_interaction(p):
+            if p.is_dir() and _has_interaction(p) and not is_excluded_experiment(p.name):
                 exp_dirs.append(p)
     return exp_dirs
 
@@ -133,7 +143,8 @@ def load_active_particles(workspace_dir: Path) -> set:
                 for _, row in df.iterrows():
                     exp = str(row['exp_dir']).strip()
                     pid = int(row['particle'])
-                    active_set.add((exp, pid))
+                    if not is_excluded_particle(exp, pid):
+                        active_set.add((exp, pid))
                 print(f"Loaded {len(active_set)} active particles from {p.name}")
                 return active_set
             except Exception as e:

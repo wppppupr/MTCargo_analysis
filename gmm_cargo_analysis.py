@@ -37,7 +37,7 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 from libs import gmm_cargo as gc
-from libs.experiment_cutoff import filter_by_cutoff, load_strict_active_particles
+from libs.experiment_cutoff import filter_by_cutoff, load_strict_active_particles, is_excluded_experiment
 
 ROOT_CANDIDATES = [
     Path("/mnt/NAS-Ebanaru/sasaki/MTsingleBeads"),
@@ -73,9 +73,9 @@ def find_experiment_dirs(root_dir: Path, bead_name: str) -> List[Path]:
     base = Path(root_dir) / bead_name
     if not base.exists():
         return []
-    exp_dirs = [p for p in sorted(base.glob("*/*")) if p.is_dir() and (p / "beads_tracks.csv").exists()]
+    exp_dirs = [p for p in sorted(base.glob("*/*")) if p.is_dir() and (p / "beads_tracks.csv").exists() and not is_excluded_experiment(p.name)]
     if not exp_dirs:
-        exp_dirs = [p for p in sorted(base.glob("*")) if p.is_dir() and (p / "beads_tracks.csv").exists()]
+        exp_dirs = [p for p in sorted(base.glob("*")) if p.is_dir() and (p / "beads_tracks.csv").exists() and not is_excluded_experiment(p.name)]
     return exp_dirs
 
 
