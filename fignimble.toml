@@ -1,0 +1,6 @@
+# A Fignimble project: publication figures written in Python (https://github.com/pachterlab/Fignimble).
+# Each top-level .py file is a figure or a table, panels/ holds the code that draws their panels, and
+# style.py the look they share. Open this folder in Fignimble, or run `fignimble check` in it.
+
+[project]
+fignimble = "0.5.0"    # the Fignimble version the project was made with
