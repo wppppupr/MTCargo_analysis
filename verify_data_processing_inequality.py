@@ -24,6 +24,7 @@ verify_data_processing_inequality.py
 
 import time
 import pickle
+import argparse
 import warnings
 from pathlib import Path
 from multiprocessing import Pool
@@ -33,6 +34,7 @@ import xarray as xr
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 from scipy.optimize import brentq
 from scipy.special import i0, i1
 
@@ -47,6 +49,7 @@ OUT_DIRS = [
     ROOT_DIR / "figure" / "per_point_v_dot_u",
 ]
 KL_CSV = CURRENT_DIR / "figure" / "per_point_v_dot_u" / "kl_divergence_decomposition_summary.csv"
+GMM_KL_CSV = CURRENT_DIR / "figure" / "gmm_1d" / "gmm_run_tumble_gvm_kl_summary.csv"
 PT_CACHE = CURRENT_DIR / "scratch" / "per_point_v_dot_u_hist_cache.pkl"
 MT_B36_CACHE = CURRENT_DIR / "scratch" / "mt_disk_angle_hist_B36_cache.pkl"
 
@@ -177,6 +180,8 @@ def _extract_mt_b36_for_bead(b_item: dict):
         "hist_mt": h_tot,
         "exp_dmt": exp_dmt,
         "exp_phi_zarr": exp_phi_zarr,
+        "exp_names": [ed.name for ed in dirs],
+        "n_exp": len(exp_dmt),
     }
 
 
@@ -219,18 +224,25 @@ def circular_convolve_b36(p0: np.ndarray, p_mt: np.ndarray) -> np.ndarray:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Verify Data Processing Inequality and compute eta = D_KL / D_MT.")
+    parser.add_argument("--force", action="store_true", help="Force recomputation of mt_disk_angle_hist_B36_cache.pkl")
+    args = parser.parse_args()
+
     vcd.setup_matplotlib()
     for d in OUT_DIRS:
         d.mkdir(parents=True, exist_ok=True)
 
     df_kl = pd.read_csv(KL_CSV)
-    mt_dict = load_or_extract_mt_b36(force=False)
+    mt_dict = load_or_extract_mt_b36(force=args.force)
 
     # 0.63 um 粒子の P_0(theta_pt) (B=36)
     with open(PT_CACHE, "rb") as f:
         df_pt = pd.DataFrame(pickle.load(f))
     h0_pt = np.vstack(df_pt[df_pt["bead_name"] == "beads06um"]["hist_th"].values).sum(axis=0).astype(float)
     p0_pt = h0_pt / (h0_pt.sum() * DTH)
+
+    B_BOOT = 1000
+    rng = np.random.default_rng(42)
 
     rows = []
     for _, r in df_kl.iterrows():
@@ -259,14 +271,45 @@ def main():
         d_mt_theory_1 = vm_kl_from_m1(phi_th)
 
         d_kl_obs = float(r["D_KL_corr"])
+        d_kl_raw = float(r["D_KL_raw"])
+        d_shuf = float(r["D_KL_shuf"])
+        d_kl_1_obs = float(r["D_KL_1_corr"])
+
         eta_info = float(d_kl_obs / d_mt_tot) if d_mt_tot > 0 else np.nan
-        eta_conv = float(d_kl_obs / d_conv) if d_conv > 0 else np.nan
+        eta_raw = float(d_kl_raw / d_mt_tot) if d_mt_tot > 0 else np.nan
+        eta_polar_1st = float(d_kl_1_obs / d_mt_1) if d_mt_1 > 0 else np.nan
+        eta_geom = float(d_conv / d_mt_tot) if d_mt_tot > 0 else np.nan
+        eta_mech = float(d_kl_obs / d_conv) if d_conv > 0 else np.nan
+        eta_conv = eta_mech
+
+        # Particle-cluster & experiment bootstrap (95% CI)
+        sub_pt = df_pt[df_pt["bead_name"] == b]
+        n_p = len(sub_pt)
+        ht_arr = np.vstack(sub_pt["hist_th"].values).astype(float)
+        boot_dkl, boot_eta, boot_eta_geom, boot_eta_mech = [], [], [], []
+        n_exp_mt = len(exp_dmt)
+        d_mt_mean_exp = float(np.mean(exp_dmt)) if n_exp_mt > 0 else d_mt_tot
+        exp_scale = d_mt_tot / d_mt_mean_exp if (n_exp_mt > 0 and d_mt_mean_exp > 0) else 1.0
+        for _ in range(B_BOOT):
+            p_idx = rng.integers(0, n_p, size=n_p)
+            d_b = max(0.0, kl_from_hist(ht_arr[p_idx].sum(axis=0)) - d_shuf)
+            if n_exp_mt > 1:
+                e_idx = rng.integers(0, n_exp_mt, size=n_exp_mt)
+                d_mt_b = max(1e-9, float(np.mean(exp_dmt[e_idx])) * exp_scale)
+            else:
+                d_mt_b = d_mt_tot
+            boot_dkl.append(d_b)
+            boot_eta.append(d_b / d_mt_b)
+            boot_eta_geom.append(d_conv / d_mt_b)
+            boot_eta_mech.append(d_b / d_conv if d_conv > 0 else np.nan)
 
         rows.append({
             "bead_name": b,
             "diameter_um": float(r["diameter_um"]),
             "rc_over_xi": float(r["rc_over_xi"]),
             "rc_over_xi_sem": float(r["rc_over_xi_sem"]),
+            "n_particles": int(n_p),
+            "n_exp_mt": int(m_info.get("n_exp", n_exp_mt)),
             "Phi_MT_disk": phi_mt_disk,
             "Phi_bg_zarr": phi_zarr_mean,
             "Phi_theory_exp": phi_th,
@@ -276,11 +319,24 @@ def main():
             "D_MT_1_zarr": d_mt_zarr_1,
             "D_MT_1_theory": d_mt_theory_1,
             "D_KL_conv_bound": d_conv,
+            "D_KL_raw": d_kl_raw,
             "D_KL_obs": d_kl_obs,
-            "D_KL_1_obs": float(r["D_KL_1_corr"]),
+            "D_KL_obs_ci_low": float(np.percentile(boot_dkl, 2.5)),
+            "D_KL_obs_ci_high": float(np.percentile(boot_dkl, 97.5)),
+            "D_KL_1_obs": d_kl_1_obs,
             "Delta_D_high_obs": float(r["Delta_D_high_corr"]),
             "DPI_satisfied": bool(d_kl_obs <= d_mt_tot),
             "info_efficiency_D_KL_over_D_MT": eta_info,
+            "eta_info_ci_low": float(np.percentile(boot_eta, 2.5)),
+            "eta_info_ci_high": float(np.percentile(boot_eta, 97.5)),
+            "eta_geom": eta_geom,
+            "eta_geom_ci_low": float(np.percentile(boot_eta_geom, 2.5)),
+            "eta_geom_ci_high": float(np.percentile(boot_eta_geom, 97.5)),
+            "eta_mech": eta_mech,
+            "eta_mech_ci_low": float(np.percentile(boot_eta_mech, 2.5)),
+            "eta_mech_ci_high": float(np.percentile(boot_eta_mech, 97.5)),
+            "info_efficiency_raw": eta_raw,
+            "info_efficiency_polar_1st": eta_polar_1st,
             "conv_efficiency_D_KL_over_D_conv": eta_conv,
         })
 
@@ -288,12 +344,50 @@ def main():
     for d in OUT_DIRS:
         df_dpi.to_csv(d / "data_processing_inequality_summary.csv", index=False)
 
-    print("\n=== Data Processing Inequality Verification (D_KL <= D_MT) ===")
+    print("\n=== Data Processing Inequality & Information Efficiency (eta = D_KL / D_MT) ===")
     cols = [
-        "bead_name", "diameter_um", "rc_over_xi", "Phi_MT_disk", "Phi_bg_zarr",
-        "D_MT_total", "D_MT_1_zarr", "D_KL_conv_bound", "D_KL_obs", "DPI_satisfied", "info_efficiency_D_KL_over_D_MT"
+        "bead_name", "diameter_um", "n_particles", "n_exp_mt", "rc_over_xi",
+        "D_MT_total", "D_KL_obs", "DPI_satisfied",
+        "info_efficiency_D_KL_over_D_MT", "eta_info_ci_low", "eta_info_ci_high", "info_efficiency_polar_1st"
     ]
     print(df_dpi[cols].to_string(index=False))
+
+    # GMM Run / Tumble state-resolved eta = D_KL^state / D_MT
+    df_state = pd.DataFrame()
+    if GMM_KL_CSV.exists():
+        df_gmm_kl = pd.read_csv(GMM_KL_CSV)
+        dmt_lookup = df_dpi.set_index("bead_name")[["D_MT_total", "D_MT_total_sem", "D_MT_1_disk", "rc_over_xi"]].to_dict("index")
+        srows = []
+        for _, gr in df_gmm_kl.iterrows():
+            b = gr["bead_name"]
+            if b not in dmt_lookup:
+                continue
+            dmt = dmt_lookup[b]["D_MT_total"]
+            dmt1 = dmt_lookup[b]["D_MT_1_disk"]
+            dkl_s = float(gr["D_KL_total"])
+            dkl_lo = float(gr["D_KL_total_ci_low"])
+            dkl_hi = float(gr["D_KL_total_ci_high"])
+            srows.append({
+                "bead_name": b,
+                "diameter_um": float(gr["diameter_um"]),
+                "state_label": str(gr["state_label"]),
+                "rc_over_xi": float(gr["rc_over_xi"]),
+                "n_particles": int(gr["n_particles"]),
+                "n_frames": int(gr["n_frames"]),
+                "D_MT_total": dmt,
+                "D_KL_state": dkl_s,
+                "D_KL_state_ci_low": dkl_lo,
+                "D_KL_state_ci_high": dkl_hi,
+                "eta_info": dkl_s / dmt,
+                "eta_info_ci_low": dkl_lo / dmt,
+                "eta_info_ci_high": dkl_hi / dmt,
+                "eta_polar_1st": float(gr["D_KL_1_polar"]) / dmt1 if dmt1 > 0 else np.nan,
+            })
+        df_state = pd.DataFrame(srows)
+        for d in OUT_DIRS:
+            df_state.to_csv(d / "data_processing_inequality_gmm_states.csv", index=False)
+        print("\n=== GMM State-Resolved Information Efficiency (eta = D_KL^state / D_MT) ===")
+        print(df_state.to_string(index=False))
 
     # 理論連続曲線 (C_bg(r) = exp(-r/xi) -> Phi_theory -> D_MT^(1))
     rc_grid = np.logspace(np.log10(0.04), np.log10(3.2), 120)
@@ -315,8 +409,16 @@ def main():
         s_r = (log_dmt_obs[-1] - log_dmt_obs[-2]) / (log_rc_obs[-1] - log_rc_obs[-2])
         d_mt_upper_curve[right_mask] = 10.0 ** (log_dmt_obs[-1] + s_r * (log_rc_grid[right_mask] - log_rc_obs[-1]))
 
+    def fmt_diam(d: float) -> str:
+        val = float(d)
+        if abs(val - 5.0) < 0.05:
+            return "5.0"
+        if abs(val - 20.0) < 0.5:
+            return "20"
+        return f"{val:.2f}"
+
     # --- Figure: 2パネル Data Processing Inequality ---
-    fig, (axL, axR) = plt.subplots(1, 2, figsize=(14.0, 5.8))
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(14.4, 5.8))
 
     # (A) Log-Log DPI Hierarchy: D_KL(obs) <= D_KL^conv <= D_MT(total)
     axL.fill_between(rc_grid, d_mt_upper_curve, 10.0, color="#ffcccc", alpha=0.22,
@@ -327,78 +429,162 @@ def main():
                  label=r"$D_{\mathrm{MT}}$ (Total MT footprint KL, $B=36$)", zorder=4)
     axL.plot(df_dpi["rc_over_xi"], df_dpi["D_MT_1_zarr"], "^--", color="#44AA99", linewidth=2.0, markersize=7.8,
              markeredgecolor="k", markeredgewidth=0.6,
-             label=r"$D_{\mathrm{MT}}^{(1)}$ (from background MT polar order $\Phi_{\mathrm{bg}}$)", zorder=3)
+             label=r"$D_{\mathrm{MT}}^{(1)}$ (from background polar order $\Phi_{\mathrm{bg}}$)", zorder=3)
     axL.plot(rc_grid, d_mt_theory_curve, color="#117733", linestyle=":", linewidth=1.7, alpha=0.85,
              label=r"Theory $D_{\mathrm{MT}}^{(1)}$ from $C_{\mathrm{bg}}(r)=e^{-r/\xi}$", zorder=2)
 
-    # 0.63 um を基準核 P_0 とし、R_c > 0.63 um (1.2 um 以降) に対するチャネル上限予測線を描画
+    # 0.63 um を基準核 P_0 とし、R_c > 0.63 um (1.18 um 以降) に対するチャネル上限予測線を描画
     df_conv_pred = df_dpi.iloc[1:]
     axL.plot(df_conv_pred["rc_over_xi"], df_conv_pred["D_KL_conv_bound"], "D-.", color="#555555", linewidth=2.0, markersize=7.0,
-             label=r"Channel bound $D_{\mathrm{KL}}(P_0 * P_{\mathrm{MT}})$ ($R_c > 0.63\,\mu\mathrm{m}$)", zorder=4)
+             label=r"$D_{\mathrm{KL}}^{\mathrm{conv}} = D_{\mathrm{KL}}(P_0 * P_{\mathrm{MT}})$ ($R_c > 0.63\,\mu\mathrm{m}$)", zorder=4)
 
     axL.plot(df_dpi["rc_over_xi"], df_dpi["D_KL_obs"], "s-", color="#882255", linewidth=2.5, markersize=8.8,
              markeredgecolor="k", markeredgewidth=0.8,
-             label=r"Observed cargo $D_{\mathrm{KL}}(R_c/\xi)$", zorder=6)
+             label=r"$D_{\mathrm{KL}}$ (Observed cargo, All frames)", zorder=6)
 
     for _, r in df_dpi.iterrows():
-        axL.annotate(f"{r['diameter_um']:.2g} $\\mu\\mathrm{{m}}$",
+        axL.annotate(f"{fmt_diam(r['diameter_um'])} $\\mu\\mathrm{{m}}$",
                      xy=(r["rc_over_xi"], r["D_KL_obs"]),
-                     xytext=(0, -14), textcoords="offset points", ha="center", fontsize=8.8, color="#882255", fontweight="bold")
+                     xytext=(0, -14), textcoords="offset points", ha="center", fontsize=8.6, color="#882255", fontweight="bold")
 
-    axL.axvline(1.0, color="black", linestyle="-.", linewidth=1.2, alpha=0.65, label=r"$R_c = \xi$")
+    axL.axvline(1.0, color="0.25", linestyle="-.", linewidth=1.2, alpha=0.7, label=r"$x = 1\;(R_c = \xi)$")
     axL.set_xscale("log")
     axL.set_yscale("log")
-    axL.set_xlim(0.04, 3.2)
+    axL.set_xlim(0.04, 3.3)
     axL.set_ylim(1e-3, 6.0)
-    axL.set_xlabel(r"Dimensionless Cargo Radius $R_c / \xi$", fontsize=13)
+    axL.set_xlabel(r"Dimensionless Cargo Radius $x = R_c / \xi$", fontsize=12.5)
     axL.set_ylabel(r"Orientation Information / KL Divergence [nats]", fontsize=12.5)
     axL.set_title(r"(A) Data Processing Inequality: $D_{\mathrm{KL}} \leq D_{\mathrm{KL}}^{\mathrm{conv}} \leq D_{\mathrm{MT}}$",
-                  fontsize=13, fontweight="bold")
+                  fontsize=12.8, fontweight="bold")
     axL.grid(True, which="both", linestyle=":", alpha=0.5)
     axL.legend(loc="lower left", fontsize=8.2, framealpha=0.92)
 
-    # (B) Information Transmission Efficiency: D_KL / D_MT & D_KL / D_conv
-    # 0.63 um を基準点 (100%) として扱う
-    conv_eff_pct = df_dpi["conv_efficiency_D_KL_over_D_conv"].values * 100.0
-    conv_eff_pct_ref = conv_eff_pct.copy()
-    conv_eff_pct_ref[0] = 100.0
+    def plot_efficiency_decomposition(ax, title_str: str):
+        x_vals = df_dpi["rc_over_xi"].values
+        ax.errorbar(
+            x_vals, df_dpi["info_efficiency_D_KL_over_D_MT"].values,
+            yerr=[
+                np.maximum(0.0, df_dpi["info_efficiency_D_KL_over_D_MT"].values - df_dpi["eta_info_ci_low"].values),
+                np.maximum(0.0, df_dpi["eta_info_ci_high"].values - df_dpi["info_efficiency_D_KL_over_D_MT"].values),
+            ],
+            xerr=df_dpi["rc_over_xi_sem"].values,
+            fmt="s-", color="#882255", linewidth=2.4, markersize=8.5, markeredgecolor="k", markeredgewidth=0.7, capsize=3.5,
+            label=r"$\eta = D_{\mathrm{KL}} / D_{\mathrm{MT}}$ (All)", zorder=5
+        )
+        ax.errorbar(
+            x_vals, df_dpi["eta_geom"].values,
+            yerr=[
+                np.maximum(0.0, df_dpi["eta_geom"].values - df_dpi["eta_geom_ci_low"].values),
+                np.maximum(0.0, df_dpi["eta_geom_ci_high"].values - df_dpi["eta_geom"].values),
+            ],
+            fmt="D-.", color="#117733", linewidth=2.1, markersize=7.2, markeredgecolor="k", markeredgewidth=0.6, capsize=3.0,
+            label=r"$\eta_{\mathrm{geom}} = D_{\mathrm{KL}}^{\mathrm{conv}} / D_{\mathrm{MT}}$", zorder=4
+        )
+        ax.errorbar(
+            x_vals, df_dpi["eta_mech"].values,
+            yerr=[
+                np.maximum(0.0, df_dpi["eta_mech"].values - df_dpi["eta_mech_ci_low"].values),
+                np.maximum(0.0, df_dpi["eta_mech_ci_high"].values - df_dpi["eta_mech"].values),
+            ],
+            fmt="o--", color="#1f77b4", linewidth=2.2, markersize=7.6, markeredgecolor="k", markeredgewidth=0.6, capsize=3.0,
+            label=r"$\eta_{\mathrm{mech}} = D_{\mathrm{KL}} / D_{\mathrm{KL}}^{\mathrm{conv}}$", zorder=4
+        )
+        annot_off = {
+            0.63: (-6, -15, "right"),
+            1.18: (-8, -14, "right"),
+            3.37: (-9, -12, "right"),
+            7.24: (-9, -12, "right"),
+            5.00: (-9, -12, "right"),
+            20.0: (-12, -16, "right"),
+        }
+        for _, r in df_dpi.iterrows():
+            ox, oy, ha_s = annot_off.get(round(float(r["diameter_um"]), 2), (-8, -12, "right"))
+            ax.annotate(
+                f"{fmt_diam(r['diameter_um'])} $\\mu$m",
+                xy=(r["rc_over_xi"], r["info_efficiency_D_KL_over_D_MT"]),
+                xytext=(ox, oy), textcoords="offset points", ha=ha_s,
+                fontsize=8.3, color="#882255", fontweight="bold"
+            )
+        ax.axhline(1.0, color="0.45", linestyle=":", linewidth=1.1, zorder=1)
+        ax.axvline(1.0, color="0.25", linestyle="-.", linewidth=1.2, alpha=0.7, label=r"$x = 1\;(R_c = \xi)$", zorder=2)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlim(0.04, 3.3)
+        ax.set_ylim(2.0e-3, 3.0)
+        ax.set_xlabel(r"Dimensionless Cargo Radius $x = R_c / \xi$", fontsize=12.5)
+        ax.set_ylabel(r"Information Transfer Efficiency $\eta$ (Ratio)", fontsize=12.0)
+        ax.set_title(title_str, fontsize=12.8, fontweight="bold")
+        ax.grid(True, which="both", linestyle=":", alpha=0.5)
+        leg = ax.legend(
+            loc="lower left", fontsize=8.4, framealpha=0.94,
+            title=r"Factorization: $\eta = \eta_{\mathrm{geom}} \cdot \eta_{\mathrm{mech}}$",
+            title_fontsize=8.6,
+        )
+        leg.get_title().set_fontweight("bold")
 
-    axR.plot(df_dpi["rc_over_xi"], df_dpi["info_efficiency_D_KL_over_D_MT"] * 100.0, "s-", color="#882255",
-             linewidth=2.3, markersize=8.5, markeredgecolor="k", markeredgewidth=0.7,
-             label=r"Raw transfer efficiency $D_{\mathrm{KL}} / D_{\mathrm{MT}}$ [\%]")
-    axR.axvline(1.0, color="black", linestyle="-.", linewidth=1.2, alpha=0.65, label=r"$R_c = \xi$")
+    # (B) Information Transmission Efficiency Decomposition: eta = eta_geom * eta_mech
+    plot_efficiency_decomposition(axR, r"(B) Factorization: $\eta = \eta_{\mathrm{geom}} \cdot \eta_{\mathrm{mech}}$")
 
-    axR_twin = axR.twinx()
-    axR_twin.plot(df_dpi["rc_over_xi"], conv_eff_pct_ref, "o--", color="#1f77b4",
-                  linewidth=2.1, markersize=7.8, markeredgecolor="k", markeredgewidth=0.6,
-                  label=r"Channel efficiency $D_{\mathrm{KL}} / D_{\mathrm{KL}}^{\mathrm{conv}}$ [\%] (ref. $0.63\,\mu\mathrm{m}=100\%$)")
-
-    for _, r in df_dpi.iterrows():
-        axR.annotate(f"{r['diameter_um']:.2g} $\\mu\\mathrm{{m}}$",
-                     xy=(r["rc_over_xi"], r["info_efficiency_D_KL_over_D_MT"] * 100.0),
-                     xytext=(0, 8), textcoords="offset points", ha="center", fontsize=8.8, color="#882255", fontweight="bold")
-
-    axR.set_xscale("log")
-    axR.set_xlim(0.04, 3.2)
-    axR.set_ylim(0.0, 7.5)
-    axR_twin.set_ylim(0.0, 112.0)
-    axR.set_xlabel(r"Dimensionless Cargo Radius $R_c / \xi$", fontsize=13)
-    axR.set_ylabel(r"Raw Info Efficiency $D_{\mathrm{KL}} / D_{\mathrm{MT}}$ [\%]", fontsize=12.5, color="#882255")
-    axR_twin.set_ylabel(r"Channel Efficiency $D_{\mathrm{KL}} / D_{\mathrm{KL}}^{\mathrm{conv}}$ [\%]", fontsize=12.5, color="#1f77b4")
-    axR.set_title(r"(B) Efficiency of Reading MT Orientation Information", fontsize=13, fontweight="bold")
-    axR.grid(True, which="both", linestyle=":", alpha=0.5)
-
-    lines_r = axR.get_lines() + axR_twin.get_lines()
-    labels_r = [l.get_label() for l in lines_r]
-    axR.legend(lines_r, labels_r, loc="upper right", fontsize=8.8, framealpha=0.92)
-
-    fig.suptitle(r"Experimental Test of the Data Processing Inequality: $D_{\mathrm{KL}}(R_c/\xi) \leq D_{\mathrm{MT}}(R_c/\xi)$",
+    fig.suptitle(r"Experimental Test of the Data Processing Inequality: $D_{\mathrm{KL}}(x) \leq D_{\mathrm{MT}}(x)$",
                  fontsize=14.8, fontweight="bold", y=0.99)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     vcd.save_figure(fig, "data_processing_inequality_vs_rc_xi", OUT_DIRS)
     plt.close(fig)
 
-    print("Saved Data Processing Inequality figure and summary CSV successfully!")
+    # --- Dedicated Figure: eta = eta_geom * eta_mech & Run/Tumble breakdown ---
+    fig2, (ax1, ax2) = plt.subplots(1, 2, figsize=(14.6, 5.7))
+
+    plot_efficiency_decomposition(ax1, r"(A) Factorization: $\eta = \eta_{\mathrm{geom}} \cdot \eta_{\mathrm{mech}}$ vs. $x = R_c/\xi$")
+
+    # Panel B: Run / All / Tumble comparison (0.63 & 1.18 um) + large cargos (all in Ratio)
+    bar_items = []
+    for b in ["beads06um", "beads1um"]:
+        r_u = df_dpi[df_dpi["bead_name"] == b].iloc[0]
+        dlbl = fmt_diam(r_u["diameter_um"])
+        if not df_state.empty:
+            r_run = df_state[(df_state["bead_name"] == b) & (df_state["state_label"] == "Run")].iloc[0]
+            bar_items.append((f"{dlbl} $\\mu$m\nRun", r_run["eta_info"], r_run["eta_info_ci_low"], r_run["eta_info_ci_high"], "#1f77b4"))
+        bar_items.append((f"{dlbl} $\\mu$m\nAll", r_u["info_efficiency_D_KL_over_D_MT"], r_u["eta_info_ci_low"], r_u["eta_info_ci_high"], "#882255"))
+        if not df_state.empty:
+            r_tum = df_state[(df_state["bead_name"] == b) & (df_state["state_label"] == "Tumble")].iloc[0]
+            bar_items.append((f"{dlbl} $\\mu$m\nTumble", r_tum["eta_info"], r_tum["eta_info_ci_low"], r_tum["eta_info_ci_high"], "#7fb3d5"))
+    for b in ["beads3um", "beads7um", "beads5um", "beads20um"]:
+        r_u = df_dpi[df_dpi["bead_name"] == b].iloc[0]
+        dlbl = fmt_diam(r_u["diameter_um"])
+        bar_items.append((f"{dlbl} $\\mu$m\nAll", r_u["info_efficiency_D_KL_over_D_MT"], r_u["eta_info_ci_low"], r_u["eta_info_ci_high"], "#882255"))
+
+    xpos = np.arange(len(bar_items))
+    vals = np.array([x[1] for x in bar_items])
+    lo_e = np.maximum(0.0, vals - np.array([x[2] for x in bar_items]))
+    hi_e = np.maximum(0.0, np.array([x[3] for x in bar_items]) - vals)
+    cols_b = [x[4] for x in bar_items]
+    ax2.bar(xpos, vals, width=0.64, color=cols_b, edgecolor="black", linewidth=0.7, alpha=0.90, zorder=3)
+    ax2.errorbar(xpos, vals, yerr=[lo_e, hi_e], fmt="none", ecolor="black", elinewidth=1.2, capsize=3.0, zorder=4)
+    for xi_p, v_p, hi_v in zip(xpos, vals, hi_e):
+        ax2.text(xi_p, v_p + hi_v + 0.008, f"{v_p:.3f}",
+                 ha="center", va="bottom", fontsize=7.8, fontweight="bold")
+    ax2.set_xticks(xpos)
+    ax2.set_xticklabels([x[0] for x in bar_items], fontsize=8.0)
+    ax2.set_ylim(0.0, max(0.55, float((vals + hi_e).max()) * 1.15))
+    ax2.set_ylabel(r"Information Transfer Efficiency $\eta = D_{\mathrm{KL}} / D_{\mathrm{MT}}$ (Ratio)", fontsize=12.0)
+    ax2.set_title(r"(B) State-Resolved $\eta = D_{\mathrm{KL}} / D_{\mathrm{MT}}$: Run / All / Tumble (95% CI)", fontsize=12.2, fontweight="bold")
+    ax2.grid(axis="y", linestyle=":", alpha=0.5)
+    ax2.legend(
+        handles=[
+            Patch(facecolor="#1f77b4", edgecolor="black", alpha=0.90, label=r"Run (GMM)"),
+            Patch(facecolor="#882255", edgecolor="black", alpha=0.90, label=r"All (same $\eta$ as Panel A)"),
+            Patch(facecolor="#7fb3d5", edgecolor="black", alpha=0.90, label=r"Tumble (GMM)"),
+        ],
+        loc="upper right", fontsize=8.6, framealpha=0.94,
+    )
+
+    fig2.suptitle(r"Orientation Information Transfer Efficiency $\eta \equiv D_{\mathrm{KL}} / D_{\mathrm{MT}} = \eta_{\mathrm{geom}} \cdot \eta_{\mathrm{mech}}$",
+                  fontsize=14.2, fontweight="bold", y=0.98)
+    fig2.tight_layout(rect=[0, 0, 1, 0.94])
+    vcd.save_figure(fig2, "info_efficiency_eta_dkl_over_dmt", OUT_DIRS)
+    plt.close(fig2)
+
+    print("Saved Data Processing Inequality & eta = D_KL/D_MT figures and summary CSVs successfully!")
 
 
 if __name__ == "__main__":

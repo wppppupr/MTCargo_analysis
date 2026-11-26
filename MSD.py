@@ -744,17 +744,17 @@ def main():
             alpha=0.35,
             zorder=2
         )
-
+/home/sasaki/MTCargo_analysis/.pixi/envs/default/bin/python3.11
         # 3. 主線: アンサンブル平均 Mean (実線 + マーカー)
         ax1.plot(lags, mean_v, marker=marker, linestyle='-', linewidth=2.0, markersize=7.5,
                  label=f'{d_um:.2f} \u03bcm ($N={n_filt}$)', color=color, zorder=4)
 
     # ガイド線
     t_g1, t_g2 = 80.0, 200.0
-    ax1.plot([t_g1, t_g2], [3.0 * (t_g1/100.0)**1.0, 3.0 * (t_g2/100.0)**1.0], color='#333333', linestyle='--')
-    ax1.text(130, 2.3, r'$\propto \Delta t^{1.0}$', fontsize=12)
-    ax1.plot([t_g1, t_g2], [30.0 * (t_g1/100.0)**2.0, 30.0 * (t_g2/100.0)**2.0], color='#333333', linestyle='--')
-    ax1.text(70, 80, r'$\propto \Delta t^{2.0}$', fontsize=12)
+    ax1.plot([t_g1, t_g2], [0.3 * (t_g1/100.0)**1.0, 0.3 * (t_g2/100.0)**1.0], color='#333333', linestyle='--')
+    ax1.text(130, 0.23, r'$\propto \Delta t^{1.0}$', fontsize=18)
+    ax1.plot([t_g1, t_g2], [1000.0 * (t_g1/100.0)**2.0, 1000.0 * (t_g2/100.0)**2.0], color='#333333', linestyle='--')
+    ax1.text(70, 3000, r'$\propto \Delta t^{2.0}$', fontsize=18)
 
     ax1.legend(fontsize=10.0, loc='upper left', framealpha=0.88, markerscale=0.8, handlelength=1.4, borderpad=0.35, labelspacing=0.28)
     ax1.set(
@@ -763,8 +763,7 @@ def main():
         xscale='log',
         yscale='log',
         xlabel='Lag time $\\Delta t$ [s]',
-        ylabel='MSD $\\langle \\Delta \\boldsymbol{r}^2 \\rangle$ [$\\mu\\mathrm{m}^2$]',
-        title='Ensemble Mean MSD with Bootstrap Error Bars (Filtered: $\\alpha > 0.5$)'
+        ylabel='MSD $\\langle \\Delta \\boldsymbol{r}^2 \\rangle$ [$\\mu\\mathrm{m}^2$]'
     )
     save_figure_to_all(fig1, "MSD", out_dirs)
 
