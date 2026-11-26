@@ -33,7 +33,7 @@ from matplotlib.lines import Line2D
 
 warnings.filterwarnings("ignore")
 
-CURRENT_DIR = Path(__file__).resolve().parent
+CURRENT_DIR = Path(__file__).resolve().parent.parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
@@ -41,7 +41,12 @@ from libs.experiment_cutoff import is_excluded_experiment, is_excluded_particle
 
 ROOT_DIR = Path("/mnt/NAS-Ebanaru/sasaki/MTsingleBeads")
 INST_CACHE = CURRENT_DIR / "scratch" / "contrast_inst_cache.pkl"
-DPI_CSV = CURRENT_DIR / "figure" / "per_point_v_dot_u" / "data_processing_inequality_summary.csv"
+_DPI_CANDIDATES = [
+    CURRENT_DIR / "figure" / "per_point_v_dot_u" / "data_processing_inequality_summary.csv",
+    Path("/Volumes/data/Sasaki/MTsingleBeads/figure/per_point_v_dot_u/data_processing_inequality_summary.csv"),
+    Path("/mnt/NAS-Ebanaru/sasaki/MTsingleBeads/figure/per_point_v_dot_u/data_processing_inequality_summary.csv"),
+]
+DPI_CSV = next((p for p in _DPI_CANDIDATES if p.exists()), _DPI_CANDIDATES[0])
 
 OUT_DIRS = [CURRENT_DIR / "figure" / "msd"]
 if ROOT_DIR.exists() and ROOT_DIR != CURRENT_DIR:
@@ -356,6 +361,35 @@ def main():
 
     df_sum = pd.DataFrame(summary_rows)
     save_csv_multi(df_sum, "msd_kl_relaxation_reconstruction_summary.csv")
+
+    curve_rows = []
+    for idx_b, b in enumerate(ORDER_BEADS):
+        r = data[b]
+        r2_k = float(df_sum.loc[idx_b, "R2_log_kl_tau_v"])
+        r2_f = float(df_sum.loc[idx_b, "R2_log_kl_tau_u"])
+        for i_lag, lag_val in enumerate(lags_s):
+            curve_rows.append({
+                "bead_name": b,
+                "diameter_um": float(r["diameter_um"]),
+                "rc_over_xi": float(r["rc_over_xi"]),
+                "n_cargos": int(r["n_cargos"]),
+                "lag_s": float(lag_val),
+                "msd_obs": float(r["msd_obs"][i_lag]),
+                "msd_ci_lo": float(r["msd_ci_lo"][i_lag]),
+                "msd_ci_hi": float(r["msd_ci_hi"][i_lag]),
+                "msd_kl": float(r["msd_kl"][i_lag]),
+                "msd_kl_flow": float(r["msd_kl_flow"][i_lag]),
+                "msd_ou": float(r["msd_ou"][i_lag]),
+                "msd_brown": float(r["msd_brown"][i_lag]),
+                "tau_v_slow_s": float(r["tau_v_slow_s"]),
+                "tau_u_lag_s": float(r["tau_u_lag_s"]),
+                "d_kl": float(r["d_kl"]),
+                "c_univ_kl_flow": float(best_c),
+                "r2_log_kl_tau_v": r2_k,
+                "r2_log_kl_tau_u": r2_f,
+            })
+    df_curves = pd.DataFrame(curve_rows)
+    save_csv_multi(df_curves, "msd_kl_relaxation_curves.csv")
 
     print(f"Universal constant c (KL + tau_u^Lag): {best_c:.3f}")
     print(f"GLOBAL R^2_log10 across all 6 sizes x 75 lags (N=450):")
