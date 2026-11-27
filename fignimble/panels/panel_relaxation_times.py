@@ -1,7 +1,7 @@
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from style import ACTIVE_PALETTE
+from style import COLOR_MT, COLOR_CARGO, COLOR_TOTAL
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 CSV_CANDIDATES = [
@@ -25,11 +25,11 @@ def draw(fig):
     x = df["rc_over_xi"].to_numpy(dtype=float)
 
     candidates = [
-        ("tau_u_lag_s", ACTIVE_PALETTE[0], "o", "-", r"$\tau_{\bar{\mathbf{u}}}^{\mathrm{Lag}}$ (flow)"),
-        ("tau_v_slow_s", ACTIVE_PALETTE[-1], "s", "--", r"$\tau_{\mathbf{v}}^{\mathrm{slow}}$ (cargo)"),
-        ("tau_gk_s", ACTIVE_PALETTE[2], "^", "-.", r"$\tau_{\mathrm{GK}}$ (memory)"),
-        ("tau_1e_s", ACTIVE_PALETTE[0], "o", "-", r"$\tau_{1/e}$"),
-        ("tau_slow_fit_s", ACTIVE_PALETTE[-1], "s", "--", r"$\tau_{\mathrm{slow}}$"),
+        ("tau_u_lag_s", COLOR_MT, "o", "-", r"$\tau_{\bar{\mathbf{u}}}^{\mathrm{Lag}}$ (flow)"),
+        ("tau_v_slow_s", COLOR_CARGO, "s", "--", r"$\tau_{\mathbf{v}}^{\mathrm{slow}}$ (cargo)"),
+        ("tau_gk_s", COLOR_TOTAL, "^", "-.", r"$\tau_{\mathrm{GK}}$ (memory)"),
+        ("tau_1e_s", COLOR_MT, "o", "-", r"$\tau_{1/e}$"),
+        ("tau_slow_fit_s", COLOR_CARGO, "s", "--", r"$\tau_{\mathrm{slow}}$"),
     ]
 
     plotted = False

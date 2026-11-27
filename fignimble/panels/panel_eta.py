@@ -1,7 +1,7 @@
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from style import ACTIVE_PALETTE
+from style import COLOR_TOTAL, COLOR_MT, COLOR_CARGO
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 CSV_CANDIDATES = [
@@ -26,9 +26,9 @@ def draw(fig):
     x = df["rc_over_xi"].to_numpy(dtype=float)
 
     series = [
-        ("info_efficiency_D_KL_over_D_MT", "eta_info_ci_low", "eta_info_ci_high", ACTIVE_PALETTE[0], "s", "-", r"$\eta = D_{\mathrm{KL}} / D_{\mathrm{MT}}$"),
-        ("eta_geom", "eta_geom_ci_low", "eta_geom_ci_high", ACTIVE_PALETTE[2], "D", "-.", r"$\eta_{\mathrm{geom}}$"),
-        ("eta_mech", "eta_mech_ci_low", "eta_mech_ci_high", ACTIVE_PALETTE[-1], "o", "--", r"$\eta_{\mathrm{mech}}$"),
+        ("info_efficiency_D_KL_over_D_MT", "eta_info_ci_low", "eta_info_ci_high", COLOR_TOTAL, "s", "-", r"$\eta = D_{\mathrm{KL}} / D_{\mathrm{MT}}$"),
+        ("eta_geom", "eta_geom_ci_low", "eta_geom_ci_high", COLOR_MT, "D", "-.", r"$\eta_{\mathrm{geom}}$"),
+        ("eta_mech", "eta_mech_ci_low", "eta_mech_ci_high", COLOR_CARGO, "o", "--", r"$\eta_{\mathrm{mech}}$"),
     ]
 
     ax.axhline(1.0, color="#666666", linestyle=":", alpha=0.7, zorder=1)
@@ -40,8 +40,9 @@ def draw(fig):
         y = df[col_val].to_numpy(dtype=float)
         y_lo = df[col_lo].to_numpy(dtype=float)
         y_hi = df[col_hi].to_numpy(dtype=float)
-        ax.fill_between(x, np.clip(y_lo, 0.0, None), y_hi, color=color, alpha=0.18, edgecolor="none", zorder=2)
-        ax.plot(x, y, marker=marker, linestyle=ls, markersize=3.0, color=color, label=label, zorder=4)
+        yerr = [np.clip(y - y_lo, 0.0, None), np.clip(y_hi - y, 0.0, None)]
+        ax.errorbar(x, y, yerr=yerr, marker=marker, linestyle=ls, markersize=3.5,
+                    color=color, ecolor=color, capsize=2.2, label=label, zorder=4)
 
     ax.set_xscale("log")
     ax.set_xlim(0.045, 3.2)

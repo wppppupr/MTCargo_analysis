@@ -60,7 +60,7 @@ def draw(fig):
 
     ax.set_xscale("linear")
     ax.set_yscale("log")
-    ax.set_xlim(0, 50)
+    ax.set_xlim(0, 40)
     ax.set_ylim(1e-4, 1)
     ax.set_xlabel(r"Displacement $|\Delta \boldsymbol{r}|$ [$\mu\mathrm{m}$]")
     ax.set_ylabel(r"PDF $P(|\Delta \boldsymbol{r}|)$ [$\mu\mathrm{m}^{-1}$]")

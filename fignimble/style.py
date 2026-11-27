@@ -9,16 +9,34 @@ except ImportError:
 TOL_MUTED = ["#332288", "#88CCEE", "#44AA99", "#117733", "#999933", "#DDCC77", "#CC6677", "#882255", "#AA4499"]
 OKABE_ITO = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#000000"]
 MY_SET = ["#0072B2", "#56B4E9", "#009E73", "#999933", "#E59F00", "#D55E00"]
+COOL_SEQ = ["#081D58", "#253494", "#225EA8", "#1D91C0", "#41B6C4", "#7FCDBB"]
+CIVIDIS = ["#00224e", "#2e416d", "#5c616e", "#838179", "#afa471", "#dfca57"]
+CIVIDIS_R = list(reversed(CIVIDIS))
 
 PALETTES = {
     "tol_muted": TOL_MUTED,
     "okabe-ito": OKABE_ITO,
     "my_set": MY_SET,
+    "cool_seq": COOL_SEQ,
+    "cividis": CIVIDIS,
+    "cividis_r": CIVIDIS_R,
 }
 
-# Switch palette here: "tol_muted" or "okabe-ito"
-PALETTE_NAME = "my_set"
+# Switch palette here: "cividis_r", "cividis", "cool_seq", "my_set", "tol_muted", or "okabe-ito"
+PALETTE_NAME = "cividis_r"
 ACTIVE_PALETTE = PALETTES[PALETTE_NAME]
+
+# Semantic colors matching microscopy (MT = green, Cargo = wine-magenta)
+COLOR_MT = "#117733"        # Microtubule / flow / geometry (matches GFP MTs & DPI D_MT)
+COLOR_CARGO = "#882255"     # Cargo / mechanics / observed D_KL (matches cargo bead & DPI D_KL)
+COLOR_TOTAL = "#111827"     # Combined / total / 1st / polar (charcoal black)
+
+# Mode / order decomposition colors (disjoint from cividis, MT-green, and cargo-magenta)
+COLOR_POLAR = "#6D28D9"     # 1st polar component D_KL^(1) (royal purple)
+COLOR_NEMATIC = "#EA580C"   # 2nd / nematic mode (vermilion orange)
+COLOR_RESIDUAL = "#64748B"  # Higher-order residual (cool slate gray)
+
+METRIC_PALETTE = [COLOR_TOTAL, COLOR_NEMATIC, COLOR_POLAR, COLOR_RESIDUAL]
 
 BEAD_STYLE_BY_NAME = {
     "beads06um": (ACTIVE_PALETTE[0], "o"),

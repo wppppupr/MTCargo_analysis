@@ -1,7 +1,7 @@
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from style import ACTIVE_PALETTE
+from style import METRIC_PALETTE
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 CSV_CANDIDATES = [
@@ -27,8 +27,8 @@ def draw(fig):
     df = pd.read_csv(csv_path).sort_values("rc_over_xi")
     x = df["rc_over_xi"].to_numpy(dtype=float)
 
-    c1 = ACTIVE_PALETTE[0]
-    c2 = ACTIVE_PALETTE[-1]
+    c1 = METRIC_PALETTE[0]
+    c2 = METRIC_PALETTE[1]
 
     m1 = df["m1_cos_theta"].to_numpy(dtype=float)
     m1_lo = df["m1_ci_low"].to_numpy(dtype=float)
@@ -44,11 +44,13 @@ def draw(fig):
     ax1.axvline(x_lock, color="#888888", linestyle=":", alpha=0.7, zorder=1)
     ax1.axvline(x_bulk, color="#888888", linestyle="-.", alpha=0.7, zorder=1)
 
-    ax1.fill_between(x, m1_lo, m1_hi, color=c1, alpha=0.18, edgecolor="none", zorder=2)
-    ax1.plot(x, m1, marker="o", linestyle="-", markersize=3.0, color=c1, zorder=4)
+    m1_err = [np.clip(m1 - m1_lo, 0.0, None), np.clip(m1_hi - m1, 0.0, None)]
+    m2_err = [np.clip(m2 - m2_lo, 0.0, None), np.clip(m2_hi - m2, 0.0, None)]
 
-    ax2.fill_between(x, m2_lo, m2_hi, color=c2, alpha=0.18, edgecolor="none", zorder=2)
-    ax2.plot(x, m2, marker="s", linestyle="--", markersize=3.0, color=c2, zorder=4)
+    ax1.errorbar(x, m1, yerr=m1_err, marker="o", linestyle="-", markersize=3.5,
+                 color=c1, ecolor=c1, capsize=2.2, zorder=4)
+    ax2.errorbar(x, m2, yerr=m2_err, marker="s", linestyle="--", markersize=3.5,
+                 color=c2, ecolor=c2, capsize=2.2, zorder=4)
 
     ax1.set_xscale("log")
     ax1.set_xlim(0.045, 3.2)

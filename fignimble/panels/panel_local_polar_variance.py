@@ -14,6 +14,26 @@ CSV_CANDIDATES = [
     ROOT / "local_polar_variance_summary.csv",
     Path("/Volumes/data/Sasaki/MTsingleBeads/figure/local_polar_variance/local_polar_variance_summary.csv"),
 ]
+XI_CSV_CANDIDATES = [
+    ROOT / "figure" / "bg_angular_correlation" / "bg_angular_correlation_length_summary.csv",
+    ROOT / "figure" / "bg_angular_correlation_length_summary.csv",
+    Path("/Volumes/data/Sasaki/MTsingleBeads/figure/bg_angular_correlation/bg_angular_correlation_length_summary.csv"),
+]
+
+
+def _load_xi_map() -> dict[str, float]:
+    xi_path = next((p for p in XI_CSV_CANDIDATES if p.exists()), None)
+    if xi_path is None:
+        return {}
+    df_xi = pd.read_csv(xi_path)
+    if "bead_name" not in df_xi.columns or "xi_bg_mean_um" not in df_xi.columns:
+        return {}
+    xi_map: dict[str, float] = {}
+    for _, row in df_xi.iterrows():
+        val = pd.to_numeric(row["xi_bg_mean_um"], errors="coerce")
+        if pd.notna(val) and float(val) > 0:
+            xi_map[str(row["bead_name"])] = float(val)
+    return xi_map
 
 
 def draw(fig):
@@ -27,10 +47,12 @@ def draw(fig):
         return
 
     df = pd.read_csv(csv_path)
+    xi_map = _load_xi_map()
     for bead_name, sub in df.groupby("bead_name", sort=False):
         sub = sub.sort_values("radius_um")
         d_um = float(sub["diameter_um"].iloc[0]) if "diameter_um" in sub.columns else 1.0
-        xi = float(sub["xi_um"].iloc[0]) if "xi_um" in sub.columns else 5.0
+        xi_col = pd.to_numeric(sub["xi_um"].iloc[0], errors="coerce") if "xi_um" in sub.columns else float("nan")
+        xi = float(xi_col) if pd.notna(xi_col) and float(xi_col) > 0 else xi_map.get(str(bead_name), 5.0)
         color, marker = get_bead_style(d_um=d_um, bead_name=bead_name)
 
         r_norm = sub["radius_um"].to_numpy(dtype=float) / xi
