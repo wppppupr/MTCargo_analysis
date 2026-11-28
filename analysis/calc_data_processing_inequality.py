@@ -18,14 +18,17 @@ verify_data_processing_inequality.py
    - local_polar_bg.zarr から得られた背景極性秩序度 Phi_bg(R_c)、および
      plot_bg_angular_correlation.py の指数相関モデル C_bg(r) = exp(-r/xi) に基づく理論曲線
      Phi_theory(R_c/xi) = calc_disk_polar_order(R_c, xi) から 1次モード上限 D_MT^(1) も算出。
-2. 畳み込みチャネル上限 D_KL^conv(R_c / xi) = D_KL(P_0 * P_MT || U):
-   - 最小粒子応答 P_0 (0.63 um) を通した巡回畳み込みによるタイトな上限も算出。
+2. 相対フーリエ畳み込みベンチマーク D_KL^conv(R_c / xi):
+   - 最小粒子応答 P_0 (0.63 um) に含まれる 0.63 um 足元の広がり P_MT(R_0) との
+     二重畳み込みを防ぐため、フーリエ空間で相対伝達関数 H_k = F_k[P_MT(R_c)] / F_k[P_MT(R_0)]
+     （|H_k| <= 1 に制限）を用いて P_conv = F^{-1}[F[P_0] * H] を構成し、
+     Parseval 重みでシャッフルバイアス補正した D_KL^conv を算出（R_0 = 0.63 um で eta_mech = 1）。
 3. 実測貨物情報量 D_KL(R_c / xi) (kl_divergence_decomposition_summary.csv) と比較し、
-   DPI 階層 D_KL <= D_KL^conv <= D_MT および情報伝達効率 eta_info = D_KL / D_MT を評価する。
+   DPI 階層 D_KL <= D_MT および情報伝達効率 eta_info = D_KL / D_MT = eta_geom * eta_mech を評価する。
 
 出力先:
-  - figure/per_point_v_dot_u/
-  - /mnt/NAS-Ebanaru/sasaki/MTsingleBeads/figure/per_point_v_dot_u/
+  - <repo>/figure/per_point_v_dot_u/
+  - <NAS>/figure/per_point_v_dot_u/
 """
 
 import time
@@ -49,15 +52,43 @@ import verify_cos_decomposition as vcd
 warnings.filterwarnings("ignore")
 
 CURRENT_DIR = Path(__file__).resolve().parent
-ROOT_DIR = vcd.ROOT_DIR
-OUT_DIRS = [
-    CURRENT_DIR / "figure" / "per_point_v_dot_u",
+REPO_ROOT = CURRENT_DIR.parent
+ROOT_DIR = next(
+    (p for p in [
+        Path("/mnt/NAS-Ebanaru/sasaki/MTsingleBeads"),
+        Path("/Volumes/data/Sasaki/MTsingleBeads"),
+        vcd.ROOT_DIR,
+    ] if p.exists()),
+    REPO_ROOT,
+)
+OUT_DIRS = list(dict.fromkeys([
+    REPO_ROOT / "figure" / "per_point_v_dot_u",
     ROOT_DIR / "figure" / "per_point_v_dot_u",
-]
-KL_CSV = CURRENT_DIR / "figure" / "per_point_v_dot_u" / "kl_divergence_decomposition_summary.csv"
-GMM_KL_CSV = CURRENT_DIR / "figure" / "gmm_1d" / "gmm_run_tumble_gvm_kl_summary.csv"
-PT_CACHE = CURRENT_DIR / "scratch" / "per_point_v_dot_u_hist_cache.pkl"
-MT_B36_CACHE = CURRENT_DIR / "scratch" / "mt_disk_angle_hist_B36_cache.pkl"
+]))
+
+
+def _first_existing(candidates: list[Path]) -> Path:
+    return next((p for p in candidates if p.exists()), candidates[0])
+
+
+KL_CSV = _first_existing([
+    REPO_ROOT / "figure" / "per_point_v_dot_u" / "kl_divergence_decomposition_summary.csv",
+    CURRENT_DIR / "figure" / "per_point_v_dot_u" / "kl_divergence_decomposition_summary.csv",
+    ROOT_DIR / "figure" / "per_point_v_dot_u" / "kl_divergence_decomposition_summary.csv",
+])
+GMM_KL_CSV = _first_existing([
+    REPO_ROOT / "figure" / "gmm_1d" / "gmm_run_tumble_gvm_kl_summary.csv",
+    ROOT_DIR / "figure" / "per_point_v_dot_u" / "gmm_run_tumble_gvm_kl_summary.csv",
+    ROOT_DIR / "figure" / "gmm_1d" / "gmm_run_tumble_gvm_kl_summary.csv",
+])
+PT_CACHE = _first_existing([
+    REPO_ROOT / "scratch" / "per_point_v_dot_u_hist_cache.pkl",
+    CURRENT_DIR / "scratch" / "per_point_v_dot_u_hist_cache.pkl",
+])
+MT_B36_CACHE = _first_existing([
+    REPO_ROOT / "scratch" / "mt_disk_angle_hist_B36_cache.pkl",
+    CURRENT_DIR / "scratch" / "mt_disk_angle_hist_B36_cache.pkl",
+])
 
 B_BINS = 36
 BINS_TH = np.linspace(-np.pi, np.pi, B_BINS + 1)
@@ -208,25 +239,38 @@ def load_or_extract_mt_b36(force: bool = False) -> dict:
     return mt_dict
 
 
-def circular_convolve_b36(p0: np.ndarray, p_mt: np.ndarray) -> np.ndarray:
+def relative_circular_convolve_b36(
+    p0_pt: np.ndarray, p0_mt: np.ndarray, p_mt: np.ndarray
+) -> tuple[np.ndarray, float]:
     """
-    B = 36 ビン（偶数）の確率密度配列 p0, p_mt の円形畳み込み:
-    np.interp でゼロ中心グリッドに厳密に位置合わせして畳み込む。
+    Method A: フーリエ空間での相対巡回畳み込み（B = 36 ビン）。
+    最小粒径 R_0 (0.63 um) での実測分布 P_0(R_0) に含まれる P_MT(R_0) との二重畳み込みを
+    打ち消すため、共通の周期グリッド上で相対伝達関数 H_k = F_k[P_MT(R_c)] / F_k[P_MT(R_0)]
+    （|H_k| <= 1 の平滑化フィルタに制限）を構成して P_conv = F^{-1}[F[P_0] * H] を求める。
+    戻り値は (p_conv, Parseval 重みによるシャッフルバイアス減衰係数)。
     """
-    # P(theta) on 36 bins: theta_j = -pi + (j + 0.5)*DTH -> shift by -pi (i.e. +pi/2 bins) via fft phase shift
-    # 中心 0 の位置は (N-1)/2 = 17.5 にあるため、exp(+i * k * (-pi + 0.5*dth)) の位相補正または N=72 補間を使用
-    n_fine = 73
-    th_fine = np.linspace(-np.pi, np.pi, n_fine, endpoint=False) + np.pi / n_fine
-    c_fine = (n_fine - 1) // 2
-    p0_f = np.interp(th_fine, TH_CENTERS, p0, period=2.0 * np.pi)
-    pm_f = np.interp(th_fine, TH_CENTERS, p_mt, period=2.0 * np.pi)
-    dth_f = 2.0 * np.pi / n_fine
-    p0_f /= np.sum(p0_f) * dth_f
-    pm_f /= np.sum(pm_f) * dth_f
-    p_conv_f = np.fft.irfft(np.fft.rfft(p0_f) * np.fft.rfft(np.roll(pm_f, -c_fine)), n=n_fine) * dth_f
-    p_conv = np.interp(TH_CENTERS, th_fine, np.maximum(p_conv_f, 0.0), period=2.0 * np.pi)
+    f0_pt = np.fft.rfft(p0_pt)
+    f0_mt = np.fft.rfft(p0_mt)
+    f_mt = np.fft.rfft(p_mt)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        H = np.where(np.abs(f0_mt) > 1e-12, f_mt / f0_mt, 0.0)
+    H[0] = 1.0 + 0.0j
+    mag = np.abs(H)
+    H = np.where(mag > 1.0, H / mag, H)
+
+    p_conv = np.fft.irfft(f0_pt * H, n=B_BINS)
+    p_conv = np.maximum(p_conv, 0.0)
     p_conv /= np.sum(p_conv) * DTH
-    return p_conv
+
+    w_parseval = np.zeros(len(H), dtype=float)
+    if B_BINS % 2 == 0:
+        w_parseval[1:-1] = 2.0
+        w_parseval[-1] = 1.0
+    else:
+        w_parseval[1:] = 2.0
+    noise_factor = float(np.sum(w_parseval * (np.abs(H) ** 2)) / (B_BINS - 1))
+    return p_conv, noise_factor
 
 
 def main():
@@ -241,11 +285,14 @@ def main():
     df_kl = pd.read_csv(KL_CSV)
     mt_dict = load_or_extract_mt_b36(force=args.force)
 
-    # 0.63 um 粒子の P_0(theta_pt) (B=36)
+    # 0.63 um 粒子の P_0(theta_pt) と基準背景 P_MT(R_0) (B=36)
     with open(PT_CACHE, "rb") as f:
         df_pt = pd.DataFrame(pickle.load(f))
     h0_pt = np.vstack(df_pt[df_pt["bead_name"] == "beads06um"]["hist_th"].values).sum(axis=0).astype(float)
     p0_pt = h0_pt / (h0_pt.sum() * DTH)
+    h0_mt = mt_dict["beads06um"]["hist_mt"].astype(float)
+    p0_mt = h0_mt / (h0_mt.sum() * DTH)
+    d_shuf_0 = float(df_kl.loc[df_kl["bead_name"] == "beads06um", "D_KL_shuf"].iloc[0])
 
     B_BOOT = 1000
     rng = np.random.default_rng(42)
@@ -268,9 +315,10 @@ def main():
         phi_zarr_mean = float(np.mean(exp_phi_zarr)) if len(exp_phi_zarr) > 0 else np.nan
         d_mt_zarr_1 = vm_kl_from_m1(phi_zarr_mean) if np.isfinite(phi_zarr_mean) else np.nan
 
-        # 畳み込みチャネル上限 D_KL^conv = D_KL(P_0 * P_MT || U)
-        p_conv = circular_convolve_b36(p0_pt, p_mt)
-        d_conv = float(np.sum(p_conv[p_conv > 0] * DTH * np.log(2.0 * np.pi * p_conv[p_conv > 0])))
+        # 相対フーリエ畳み込みベンチマーク D_KL^conv (Method A + Parseval バイアス補正)
+        p_conv, noise_factor = relative_circular_convolve_b36(p0_pt, p0_mt, p_mt)
+        d_conv_raw = float(np.sum(p_conv[p_conv > 0] * DTH * np.log(2.0 * np.pi * p_conv[p_conv > 0])))
+        d_conv = max(1e-9, d_conv_raw - d_shuf_0 * noise_factor)
 
         # 理論曲線点 (C_bg(r) = exp(-r/xi) -> Phi_theory(R_c/xi))
         phi_th = vcd.calc_disk_polar_order(r["rc_over_xi"], 1.0)
@@ -306,8 +354,12 @@ def main():
                 d_mt_b = d_mt_tot
             boot_dkl.append(d_b)
             boot_eta.append(d_b / d_mt_b)
-            boot_eta_geom.append(d_conv / d_mt_b)
-            boot_eta_mech.append(d_b / d_conv if d_conv > 0 else np.nan)
+            if b == "beads06um":
+                boot_eta_geom.append(d_b / d_mt_b)
+                boot_eta_mech.append(1.0)
+            else:
+                boot_eta_geom.append(d_conv / d_mt_b)
+                boot_eta_mech.append(d_b / d_conv if d_conv > 0 else np.nan)
 
         rows.append({
             "bead_name": b,
@@ -439,10 +491,9 @@ def main():
     axL.plot(rc_grid, d_mt_theory_curve, color="#117733", linestyle=":", linewidth=1.7, alpha=0.85,
              label=r"Theory $D_{\mathrm{MT}}^{(1)}$ from $C_{\mathrm{bg}}(r)=e^{-r/\xi}$", zorder=2)
 
-    # 0.63 um を基準核 P_0 とし、R_c > 0.63 um (1.18 um 以降) に対するチャネル上限予測線を描画
-    df_conv_pred = df_dpi.iloc[1:]
-    axL.plot(df_conv_pred["rc_over_xi"], df_conv_pred["D_KL_conv_bound"], "D-.", color="#555555", linewidth=2.0, markersize=7.0,
-             label=r"$D_{\mathrm{KL}}^{\mathrm{conv}} = D_{\mathrm{KL}}(P_0 * P_{\mathrm{MT}})$ ($R_c > 0.63\,\mu\mathrm{m}$)", zorder=4)
+    # 0.63 um を基準核 P_0 とする相対畳み込みベンチマークを全粒径に対して描画
+    axL.plot(df_dpi["rc_over_xi"], df_dpi["D_KL_conv_bound"], "D-.", color="#555555", linewidth=2.0, markersize=7.0,
+             label=r"$D_{\mathrm{KL}}^{\mathrm{conv}}$ (relative conv. from $0.63\,\mu\mathrm{m}$)", zorder=4)
 
     axL.plot(df_dpi["rc_over_xi"], df_dpi["D_KL_obs"], "s-", color="#882255", linewidth=2.5, markersize=8.8,
              markeredgecolor="k", markeredgewidth=0.8,

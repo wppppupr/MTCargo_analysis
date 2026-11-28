@@ -604,3 +604,96 @@ $$D_{\mathrm{KL}}(P \parallel P_{\mathrm{iso}}) = \frac{\Delta\mathcal{F}_{\math
 > **「向きをランダムにかき乱す揺らぎ（ノイズ）のエネルギーを $1$ としたときに、貨物がどれだけ整列のエネルギー（配向秩序）を保てているかを表す指標」**
 
 と説明するのが最もシンプルで、物理系・非物理系のどちらにも誤解なく伝わります。
+
+Analyzed test.md:L400-606
+Analyzed panel_kl_divergence.py:L1-54
+Ran search KL divergence definitions
+Analyzed test.md:L1-400
+Analyzed main_text_draft.md:L1-297
+Ran grep for D_MT and D_KL^conv
+Analyzed calc_data_processing_inequality.py:L1-597
+Analyzed panel_dpi.py:L1-57
+Ran list analysis scripts
+Analyzing data_processing_inequality_summary.csv:L1-100
+Analyzing data_processing_inequality_summary.csv:L1-100
+
+本解析（[calc_data_processing_inequality.py](file:///Users/sasakinozomu/code/MTCargo_analysis/analysis/calc_data_processing_inequality.py) および [main_text_draft.md](file:///Volumes/data-1/sasaki/MTC/main_text_draft.md#L252-L284)）における $D_{\mathrm{MT}}$ と $D_{\mathrm{KL}}^{\mathrm{conv}}$ は、**データ処理不等式（DPI）の階層**
+
+$$
+D_{\mathrm{KL}} \;\le\; D_{\mathrm{KL}}^{\mathrm{conv}} \;\le\; D_{\mathrm{MT}}
+$$
+
+を評価し、貨物の配向情報伝達効率を分解するために導入された指標です。それぞれの求め方と物理的意味を整理します。
+
+---
+
+### 1. $D_{\mathrm{MT}}$（背景微小管の配向情報量）
+
+#### 求め方
+実装：[calc_data_processing_inequality.py](file:///Users/sasakinozomu/code/MTCargo_analysis/analysis/calc_data_processing_inequality.py#L97-L191), [L257-L266](file:///Users/sasakinozomu/code/MTCargo_analysis/analysis/calc_data_processing_inequality.py#L257-L266)
+
+1. **半径 $R_c$ の円盤サンプリング**  
+   背景微小管のオプティカルフロー速度場 $\mathbf{u}(\mathbf{r}, t)$ 上に、貨物と同じ半径 $R_c$ の円盤を空間・フレームにわたって配置します（$R_c < 0.8\,\mu\mathrm{m}$ はフル解像度 `GFP_flows.h5`、それ以上は4倍ダウンサンプル `mt_flow_cache_s4_f5.h5`）。
+2. **円盤内平均流に対する角度偏差 $\delta\theta_k$ の算出**  
+   各円盤内の有効ベクトルから平均流方向 $\theta_{\mathrm{bulk}} = \operatorname{atan2}(\langle u_y \rangle_{\mathrm{disk}},\, \langle u_x \rangle_{\mathrm{disk}})$ を求め、各点の微小管方向 $\theta_k$ との差を $[-\pi, \pi)$ に折り返します。
+   $$
+   \delta\theta_k = \operatorname{wrap}(\theta_k - \theta_{\mathrm{bulk}}) \in [-\pi, \pi)
+   $$
+3. **分布 $P_{\mathrm{MT}}(\delta\theta)$ の作成と KL ダイバージェンス計算**  
+   全円盤から集めた $\delta\theta_k$ を $B = 36$ ビン（幅 $10^\circ$）の離散確率分布 $p_{\mathrm{MT}, j}$ にまとめ、一様分布 $p_{\mathrm{iso}, j} = 1/B$（連続表現で $P_{\mathrm{iso}} = \frac{1}{2\pi}$）との KL ダイバージェンスを計算します。
+   $$
+   D_{\mathrm{MT}} = D_{\mathrm{KL}}(P_{\mathrm{MT}} \parallel P_{\mathrm{iso}}) = \sum_{j=1}^{B} p_{\mathrm{MT}, j} \ln(B\,p_{\mathrm{MT}, j})
+   $$
+   （※[panel_dpi.py](file:///Users/sasakinozomu/code/MTCargo_analysis/fignimble/panels/panel_dpi.py#L36-L37) に併記される $D_{\mathrm{MT}}^{(1)}$ は、背景の局所ポーラー秩序度 $m_1 = \Phi_{\mathrm{bg}}(R_c)$ をもつフォン・ミーゼス分布の 1 次モード版 $D_{\mathrm{MT}}^{(1)} = \kappa m_1 - \ln I_0(\kappa)$ です。）
+
+#### 意味
+* **「貨物底面の足元にある微小管そのものが、平均流方向のまわりにどれだけ強く揃っているか」**を表す情報量（配向自由エネルギー）です。
+* 情報理論的には、微小管流が貨物へ**供給している利用可能な配向情報量の上限（入力）**にあたります。貨物は足元の微小管からしか方向情報を得られないため、データ処理不等式により実測の貨物情報量 $D_{\mathrm{KL}}$ は原理的に $D_{\mathrm{MT}}$ を超えられません（$D_{\mathrm{KL}} \le D_{\mathrm{MT}}$）。
+
+---
+
+### 2. $D_{\mathrm{KL}}^{\mathrm{conv}}$（畳み込みチャネル上限）
+
+#### 求め方
+実装：[calc_data_processing_inequality.py](file:///Users/sasakinozomu/code/MTCargo_analysis/analysis/calc_data_processing_inequality.py#L211-L229), [L245-L248](file:///Users/sasakinozomu/code/MTCargo_analysis/analysis/calc_data_processing_inequality.py#L245-L248), [L271-L273](file:///Users/sasakinozomu/code/MTCargo_analysis/analysis/calc_data_processing_inequality.py#L271-L273)
+
+1. **基準となる単一応答核 $P_0(\theta)$ の取得**  
+   最小粒径 $0.63\,\mu\mathrm{m}$（`beads06um`）の実測相対角分布（$B=36$ ビン）を、「微小管の流れを貨物が読み取る際の固有ノイズを含む基準応答核 $P_0(\theta)$」とみなします。
+2. **背景分布 $P_{\mathrm{MT}}$ との円周上の巡回畳み込み（Circular Convolution）**  
+   各サイズ $R_c$ の背景微小管分布 $P_{\mathrm{MT}}(\delta\theta)$ と $P_0$ を円周 $[-\pi, \pi)$ 上で畳み込みます。
+   $$
+   P_{\mathrm{conv}}(\theta) = (P_0 * P_{\mathrm{MT}})(\theta) = \int_{-\pi}^{\pi} P_0(\theta - \phi)\,P_{\mathrm{MT}}(\phi)\,d\phi
+   $$
+   （※コードの `circular_convolve_b36` では、偶数ビン $B=36$ で $\theta=0$ がビン境界になる位相ズレを防ぐため、奇数グリッド $N=73$ に周期補間してから FFT で巡回畳み込みし、元の $36$ ビンへ戻しています。）
+3. **KL ダイバージェンスの計算**  
+   得られた合成分布 $P_{\mathrm{conv}}$ と一様分布 $P_{\mathrm{iso}} = \frac{1}{2\pi}$ の間の KL ダイバージェンスを算出します。
+   $$
+   D_{\mathrm{KL}}^{\mathrm{conv}} = D_{\mathrm{KL}}(P_0 * P_{\mathrm{MT}} \parallel P_{\mathrm{iso}}) = \int_{-\pi}^{\pi} P_{\mathrm{conv}}(\theta)\ln\big(2\pi P_{\mathrm{conv}}(\theta)\big)\,d\theta
+   $$
+
+> **補足**: $0.63\,\mu\mathrm{m}$ 自身の $P_0$ に $P_{\mathrm{MT}}(0.63\,\mu\mathrm{m})$ を再度畳み込むと微小な角度広がりが二重計上されるため、[panel_dpi.py](file:///Users/sasakinozomu/code/MTCargo_analysis/fignimble/panels/panel_dpi.py#L39-L41) や図中では $R_c > 0.63\,\mu\mathrm{m}$（$1.18\,\mu\mathrm{m}$ 以降）に対する予測上限として描画しています。
+
+#### 意味
+* **「足元の微小管がどれだけバラついても、貨物はつねに最小粒子（$0.63\,\mu\mathrm{m}$）と同じ追従精度 $P_0$ を保ったまま平均流方向に従える（＝足元の角度バラつきが線形にぼやけるだけ）」**という理想的な線形通信路モデルの上限値です。
+* $D_{\mathrm{MT}}$ は微小管自体の秩序度（$1\text{--}2\,\mathrm{nats}$）なので、キネシン結合の確率性や回転拡散による「貨物の固有ノイズ」を含みません。$P_0$ を畳み込んだ $D_{\mathrm{KL}}^{\mathrm{conv}}$ を使うことで、固有ノイズを織り込んだ**よりタイトな比較基準**が得られます。
+* そのため、実測値 $D_{\mathrm{KL}}$ が $D_{\mathrm{KL}}^{\mathrm{conv}}$ を下回る度合いは、単なる幾何学的な角度ボケを超えた**非線形な力学的結合の破れ**（複数レール間の綱引きによる失速、立体障害・ピン止め・スリップ）の直接の証拠になります。
+
+---
+
+### 3. 2つを組み合わせた効率分解のまとめ
+
+$D_{\mathrm{KL}}^{\mathrm{conv}}$ を仲介することで、全体の情報伝達効率 $\eta_{\mathrm{info}} = D_{\mathrm{KL}} / D_{\mathrm{MT}}$ を次の 2 つの物理効率の積に綺麗に分解できます（[main_text_draft.md](file:///Volumes/data-1/sasaki/MTC/main_text_draft.md#L252)）。
+
+$$
+\eta_{\mathrm{info}} = \frac{D_{\mathrm{KL}}}{D_{\mathrm{MT}}}
+= \underbrace{\left(\frac{D_{\mathrm{KL}}^{\mathrm{conv}}}{D_{\mathrm{MT}}}\right)}_{\eta_{\mathrm{geom}}:\;\text{幾何学的伝達効率}}
+\times
+\underbrace{\left(\frac{D_{\mathrm{KL}}}{D_{\mathrm{KL}}^{\mathrm{conv}}}\right)}_{\eta_{\mathrm{mech}}:\;\text{非線形・力学的追従効率}}
+$$
+
+| 指標 | 式 | 意味 |
+| :--- | :--- | :--- |
+| $D_{\mathrm{MT}}$ | $D_{\mathrm{KL}}(P_{\mathrm{MT}} \parallel P_{\mathrm{iso}})$ | 足元の微小管がもつ全配向情報量（入力上限） |
+| $D_{\mathrm{KL}}^{\mathrm{conv}}$ | $D_{\mathrm{KL}}(P_0 * P_{\mathrm{MT}} \parallel P_{\mathrm{iso}})$ | 最小粒子と同じ線形追従を仮定したときの期待上限 |
+| $\eta_{\mathrm{geom}}$ | $D_{\mathrm{KL}}^{\mathrm{conv}} / D_{\mathrm{MT}}$ | 固有ノイズと足元の線形な角度ボケを生き残る割合 |
+| $\eta_{\mathrm{mech}}$ | $D_{\mathrm{KL}} / D_{\mathrm{KL}}^{\mathrm{conv}}$ | 線形モデルからの目減り（綱引き失速・スリップ・ピン止めの寄与） |

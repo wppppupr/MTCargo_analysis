@@ -51,4 +51,4 @@ def draw(fig):
     ax.set_xlabel(r"Dimensionless Cargo Radius $R_c / \xi$")
     ax.set_ylabel("KL Divergence [nats]")
     #ax.grid(True, which="both", linestyle="--", alpha=0.35)
-    ax.legend(loc="upper right", framealpha=0.88, markerscale=0.85, handlelength=1.4, facecolor="black")
+    ax.legend(loc="upper right", framealpha=0.88, markerscale=0.85, handlelength=1.4, facecolor="white")

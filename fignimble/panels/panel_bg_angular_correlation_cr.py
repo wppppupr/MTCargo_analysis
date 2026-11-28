@@ -58,5 +58,5 @@ def draw(fig):
     ax.set_ylim(-0.05, 1.05)
     ax.set_xlabel(r"Distance $r$ [$\mu\mathrm{m}$]")
     ax.set_ylabel(r"Orientation correlation $C_{\mathrm{bg}}(r)$")
-    #ax.legend(loc="upper right", framealpha=0.88, markerscale=0.85, handlelength=1.4)
+    ax.legend(loc="upper right", framealpha=0.88, markerscale=0.85, handlelength=1.4)
     #ax.grid(True, linestyle="--", alpha=0.35)

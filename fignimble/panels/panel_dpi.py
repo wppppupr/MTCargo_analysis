@@ -36,8 +36,7 @@ def draw(fig):
     ax.plot(df_dpi["rc_over_xi"], df_dpi["D_MT_1_zarr"], "^--", color="#44AA99", markersize=4.0,
             markeredgecolor="k", label=r"$D_{\mathrm{MT}}^{(1)}$ (from $\Phi_{\mathrm{bg}}$)", zorder=3)
 
-    df_conv = df_dpi.iloc[1:]
-    ax.plot(df_conv["rc_over_xi"], df_conv["D_KL_conv_bound"], "D-.", color="#555555", markersize=3.8,
+    ax.plot(df_dpi["rc_over_xi"], df_dpi["D_KL_conv_bound"], "D-.", color="#555555", markersize=3.8,
             label=r"$D_{\mathrm{KL}}^{\mathrm{conv}}$", zorder=4)
     ax.plot(df_dpi["rc_over_xi"], df_dpi["D_KL_obs"], "s-", color="#882255", markersize=4.5,
             markeredgecolor="k", label=r"$D_{\mathrm{KL}}$ (Observed cargo)", zorder=6)
@@ -54,4 +53,4 @@ def draw(fig):
     ax.set_xlabel(r"Dimensionless Cargo Radius $x = R_c / \xi$")
     ax.set_ylabel("KL Divergence [nats]")
     #ax.grid(True, which="both", linestyle=":", alpha=0.5)
-    ax.legend(loc="lower left", framealpha=0.92)
+    #ax.legend(loc="lower left", framealpha=0.92)
